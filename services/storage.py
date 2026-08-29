@@ -8,6 +8,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from config.curriculum import get_stream_abbreviation
+
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CONFIG_FILE = DATA_DIR / "guild_config.json"
 DATABASE_FILE = DATA_DIR / "school.db"
@@ -202,7 +204,8 @@ def sync_configuration_to_database(guild_id: int, config: dict[str, Any]) -> Non
         for level in config.get("levels", []):
             for stream in level.get("streams", []):
                 stream_name = stream["name"]
-                role_name = f"Filière - {level['name']} - {stream_name}"
+                code = stream.get("abbreviation") or get_stream_abbreviation(level["name"], stream_name)
+                role_name = f"Filière - {code}"
                 conn.execute(
                     "INSERT OR IGNORE INTO streams(guild_id,academic_year_id,level_name,stream_name,role_name) VALUES(?,?,?,?,?)",
                     (guild_id, year_id, level["name"], stream_name, role_name),
