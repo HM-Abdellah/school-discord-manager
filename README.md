@@ -2,12 +2,12 @@
 
 An open-source Discord bot for generating and managing a structured school server.
 
-The project is designed around a Moroccan secondary-school structure with:
+The project is designed around a configurable Moroccan secondary-school structure with:
 
 - Tronc Commun
 - 1ère Année Bac
 - 2ème Année Bac
-- Configurable streams (filières)
+- Selectable streams (filières)
 - Configurable number of classes per stream
 - Subject forums with educational tags
 - Private class areas
@@ -26,7 +26,9 @@ An administrator runs:
 /setup
 ```
 
-Then selects the levels, the streams available at the school, and the number of classes for each stream. The configuration is saved locally and can be built with:
+The wizard lets the administrator choose the level, select only the streams available at the school, and choose the number of classes for every selected stream.
+
+The configuration is then saved locally and can be built with:
 
 ```text
 /build
@@ -71,13 +73,16 @@ Create a local `.env` file from `.env.example`:
 
 ```env
 DISCORD_TOKEN=YOUR_REAL_DISCORD_BOT_TOKEN
+DISCORD_GUILD_ID=YOUR_TEST_SERVER_ID
 ```
 
 `.env` is ignored by Git through `.gitignore`.
 
+`DISCORD_GUILD_ID` is optional. During development, setting it makes slash-command synchronization happen on that server immediately. Leave it empty when you want global synchronization.
+
 ## 🛠️ Local installation
 
-Python 3.8+ is required. Python 3.13 is supported by the project dependencies.
+Python 3.8+ is required. The project is intended to run with current supported Python 3 versions, including Python 3.13.
 
 ### 1. Clone the repository
 
@@ -107,7 +112,7 @@ python -m pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-Open `.env` and set your own Discord bot token.
+Open `.env` and set your own Discord bot token. Do not commit the `.env` file.
 
 ### 5. Discord Developer Portal
 
@@ -116,9 +121,9 @@ Enable these privileged gateway intents for the bot:
 - Server Members Intent
 - Message Content Intent
 
-Invite the bot to your test server with the permissions required to create and manage the configured channels and roles. For initial development, Administrator is the simplest option.
+Invite the bot to your test server with the permissions required to create and manage the configured roles and channels. For initial development, Administrator is the simplest option.
 
-Forum channels require the appropriate Discord server/community configuration.
+Forum channels require the Discord server configuration needed for community/forum functionality.
 
 ### 6. Run
 
@@ -130,24 +135,25 @@ python bot.py
 
 ### `/setup`
 
-Interactive setup wizard. Select:
+Interactive setup wizard:
 
-1. A school level
-2. The streams available at your school
-3. The number of classes for each selected stream
-4. Confirm the configuration
+1. Select a school level.
+2. Select the streams available in your school.
+3. Choose the number of classes for each selected stream.
+4. Review the configuration.
+5. Confirm and build the server.
 
 ### `/build`
 
-Builds the saved configuration on the current server. Existing matching resources are reused when possible.
+Builds or reconciles the saved configuration on the current server. Existing matching resources are reused when possible.
 
 ### `/status`
 
-Shows the saved configuration and estimated number of classes and subject forums.
+Shows the saved configuration and estimated class/forum counts.
 
 ### `/assignstudent`
 
-Assigns a student to a class role.
+Assigns a student to one of the generated class roles and removes any previous School Discord Manager class role from that student.
 
 ### `/assignteacher`
 
@@ -155,18 +161,17 @@ Assigns the `Professeur` role to a member.
 
 ### `/reportabsence`
 
-Publishes a teacher-absence announcement in the configured school announcements area.
+Publishes a teacher-absence announcement in the configured institution channel.
 
 ## 📚 Curriculum catalogue
 
 The stream and subject catalogue is stored in `config/curriculum.py`.
 
-The catalogue defines **what exists** academically. It intentionally does not define the number of classes: class counts are selected through `/setup`.
+The catalogue defines **what exists academically**. It intentionally does not define the number of classes: class counts are selected through `/setup`.
 
 ## 🧭 Roadmap
 
 - Persistent database instead of JSON storage
-- Better student onboarding
 - Teacher-to-class assignment
 - Automatic absence notifications to affected classes
 - Timetable management
