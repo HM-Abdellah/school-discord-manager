@@ -10,7 +10,6 @@ from config.curriculum import (
     FORUM_MAX_TAGS,
     GENERAL_CHANNELS,
     PROFESSOR_CHANNELS,
-    get_stream_code,
     get_stream_subjects,
     get_subject_tag,
 )
@@ -50,7 +49,7 @@ class BuildStats:
 
 
 class ServerBuilder:
-    """Create one shared academic area per stream; classes are not Discord resources."""
+    """Create one shared academic area per selected stream; classes are not Discord resources."""
 
     def __init__(self, guild: discord.Guild) -> None:
         self.guild = guild
@@ -221,53 +220,52 @@ class ServerBuilder:
 
         for stream in streams:
             stream_name = stream["name"]
-            code = stream.get("code") or get_stream_code(level_name, stream_name)
             subjects = list(stream.get("subjects", [])) or get_stream_subjects(level_name, stream_name)
 
-            category = await self._get_or_create_category(f"🎓・{code}", level_overwrites)
+            category = await self._get_or_create_category(f"🎓・{stream_name}", level_overwrites)
 
             await self._get_or_create_text(
                 category,
                 "📌-informations",
-                topic=f"Informations et organisation de la filière {code} — {stream_name}.",
+                topic=f"Informations et organisation de la filière {stream_name}.",
                 overwrites=announcement_overwrites,
             )
             await self._get_or_create_text(
                 category,
                 "🗓️-emploi-du-temps",
-                topic=f"Emplois du temps de tous les groupes/classes de {code}. Chaque classe peut avoir son propre horaire.",
+                topic=f"Emplois du temps de tous les groupes/classes de {stream_name}. Chaque classe peut avoir son propre horaire.",
                 overwrites=announcement_overwrites,
             )
             await self._get_or_create_text(
                 category,
                 "📝-examens",
-                topic=f"Dates, horaires et consignes des examens pour {code}. Les informations peuvent différer selon les classes.",
+                topic=f"Dates, horaires et consignes des examens pour {stream_name}. Les informations peuvent différer selon les classes.",
                 overwrites=announcement_overwrites,
             )
             await self._get_or_create_forum(
                 category,
                 "📚-cours",
-                f"Cours et ressources pédagogiques partagés pour toute la filière {code}.",
+                f"Cours et ressources pédagogiques partagés pour toute la filière {stream_name}.",
                 level_overwrites,
                 subjects,
             )
             await self._get_or_create_forum(
                 category,
                 "💬-questions",
-                f"Questions et discussions pédagogiques de toute la filière {code}.",
+                f"Questions et discussions pédagogiques de toute la filière {stream_name}.",
                 level_overwrites,
                 subjects,
             )
             await self._get_or_create_forum(
                 category,
                 "📝-devoirs",
-                f"Devoirs, contrôles et exercices pour toute la filière {code}.",
+                f"Devoirs, contrôles et exercices pour toute la filière {stream_name}.",
                 level_overwrites,
                 subjects,
             )
             await self._get_or_create_voice(
                 voice_category,
-                f"🔊-{_safe_name(code)}-à-distance",
+                f"🔊-{_safe_name(stream_name)}-à-distance",
                 public_voice_overwrites(
                     self.guild.default_role,
                     roles[ROLE_ADMIN],
