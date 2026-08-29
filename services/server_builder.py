@@ -7,7 +7,6 @@ import re
 import discord
 
 from config.curriculum import (
-    EXAM_CHANNELS,
     FORUM_MAX_TAGS,
     GENERAL_CHANNELS,
     PROFESSOR_CHANNELS,
@@ -25,7 +24,6 @@ from services.permissions import (
     level_area_overwrites,
     level_announcement_overwrites,
 )
-
 
 CATEGORY_GENERAL = "🏢・INFORMATIONS & ADMINISTRATION"
 CATEGORY_PROFESSORS = "👨‍🏫・ESPACE PROFESSEURS"
@@ -62,9 +60,10 @@ class ServerBuilder:
         roles = await self._ensure_main_roles()
         await self._ensure_general_area(roles)
         await self._ensure_professor_area(roles)
+        voice_category = await self._get_or_create_category(CATEGORY_VOICE)
 
         for level in selected.get("levels", []):
-            await self._build_level(level, roles)
+            await self._build_level(level, roles, voice_category)
 
         await self._cleanup_legacy_subject_channels()
         return self.stats
@@ -145,7 +144,7 @@ class ServerBuilder:
             await channel.edit(overwrites=overwrites, reason="School manager reconciliation")
             return channel
         channel = await category.create_voice_channel(
-            name=name, overwrites=overwrites, reason="School manager virtual classroom"
+            name=name, overwrites=overwrites, reason="School manager shared remote class"
         )
         self.stats.voice_channels_created += 1
         return channel
@@ -210,7 +209,7 @@ class ServerBuilder:
         )
         await self._get_or_create_voice(category, PROFESSOR_CHANNELS["meeting"], overwrites)
 
-    async def _build_level(self, level, roles):
+    async def _build_level(self, level, roles, voice_category):
         level_name = level["name"]
         streams = level.get("streams", [])
         level_overwrites = level_area_overwrites(
@@ -225,11 +224,7 @@ class ServerBuilder:
             code = stream.get("code") or get_stream_code(level_name, stream_name)
             subjects = list(stream.get("subjects", [])) or get_stream_subjects(level_name, stream_name)
 
-            # Every stream gets its own shared category. There are NO class roles/channels.
-            category = await self._get_or_create_category(
-                f"🎓・{code}",
-                level_overwrites,
-            )
+            category = await self._get_or_create_category(f"🎓・{code}", level_overwrites)
 
             await self._get_or_create_text(
                 category,
@@ -240,19 +235,13 @@ class ServerBuilder:
             await self._get_or_create_text(
                 category,
                 "🗓️-emploi-du-temps",
-                topic=(
-                    f"Emplois du temps de tous les groupes/classes de {code}. "
-                    "Chaque classe peut avoir son propre horaire."
-                ),
+                topic=f"Emplois du temps de tous les groupes/classes de {code}. Chaque classe peut avoir son propre horaire.",
                 overwrites=announcement_overwrites,
             )
             await self._get_or_create_text(
                 category,
                 "📝-examens",
-                topic=(
-                    f"Dates, horaires et consignes des examens pour {code}. "
-                    "Les informations peuvent différer selon les classes."
-                ),
+                topic=f"Dates, horaires et consignes des examens pour {code}. Les informations peuvent différer selon les classes.",
                 overwrites=announcement_overwrites,
             )
             await self._get_or_create_forum(
@@ -276,7 +265,16 @@ class ServerBuilder:
                 level_overwrites,
                 subjects,
             )
-
+            await self._get_or_create_voice(
+                voice_category,
+                f"🔊-{_safe_name(code)}-à-distance",
+                public_voice_overwrites(
+                    self.guild.default_role,
+                    roles[ROLE_ADMIN],
+                    roles[ROLE_PROFESSOR],
+                    [roles[ROLE_STUDENT]],
+                ),
+            )
             self.stats.streams_processed += 1
 
         self.stats.levels_processed += 1
