@@ -6,7 +6,13 @@ import re
 
 import discord
 
-from config.curriculum import GENERAL_CHANNELS, PROFESSOR_CHANNELS, get_stream_subjects
+from config.curriculum import (
+    GENERAL_CHANNELS,
+    PROFESSOR_CHANNELS,
+    get_stream_subjects,
+    get_subject_display_name,
+    get_subject_internal_code,
+)
 from services.permissions import (
     ROLE_ADMIN,
     ROLE_PROFESSOR,
@@ -57,7 +63,8 @@ def _safe_name(value: str, max_length: int = 90) -> str:
 
 
 def _subject_channel_name(subject: str) -> str:
-    return f"📚-{_safe_name(subject)}"
+    """Use the requested short Discord display name for subjects."""
+    return f"📚-{_safe_name(get_subject_display_name(subject))}"
 
 
 def _level_prefix(level_name: str) -> str:
@@ -74,7 +81,13 @@ def _stream_role_name(level_name: str, stream_name: str) -> str:
 
 
 def _subject_teacher_role_name(level_name: str, stream_name: str, subject: str) -> str:
-    return f"{SUBJECT_TEACHER_ROLE_PREFIX}{level_name} - {stream_name} - {subject}"
+    # Keep internal role names comfortably below Discord's 100-character limit.
+    level_code = {"Tronc Commun": "TC", "1ère Année Bac": "1BAC", "2ème Année Bac": "2BAC"}.get(
+        level_name, _safe_name(level_name, 16)
+    )
+    stream_code = _safe_name(stream_name, 28)
+    subject_code = get_subject_internal_code(subject)
+    return f"{SUBJECT_TEACHER_ROLE_PREFIX}{level_code}-{stream_code}-{subject_code}"[:100]
 
 
 class BuildStats:
@@ -197,12 +210,21 @@ class ServerBuilder:
 
             await self._get_or_create_text(category, "📌-informations", topic=f"Informations et organisation de la filière {stream_name} — {level_name}.", overwrites=announcement_overwrites)
             await self._get_or_create_text(category, "🗓️-emploi-du-temps", topic=f"Emplois du temps de tous les groupes/classes de {stream_name} en {level_name}. Seule l'administration modifie ce salon.", overwrites=announcement_overwrites)
-            await self._get_or_create_text(category, "📝-examens", topic=f"Dates, horaires et consignes des examens pour {stream_name} — {level_name}. Seule l'administration publie les informations officielles.", overwrites=announcement_overwrites)
+            await self._get_or_create_text(category, "📝-examens", topic=f"Dates, horaires et consignes des examens pour {stream_name} — {level_name}. Les professeurs et l'administration peuvent publier les informations officielles.", overwrites=announcement_overwrites)
 
             for subject in subjects:
                 subject_teacher_role = await self._ensure_subject_teacher_role(level_name, stream_name, subject)
                 overwrites = subject_channel_overwrites(self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], stream_role, subject_teacher_role)
-                await self._get_or_create_text(category, _subject_channel_name(subject), topic=f"Cours, devoirs, exercices, examens blancs et ressources de {subject} pour toute la filière {stream_name} ({level_name}). Les enseignants affectés à cette matière peuvent publier; les paramètres du salon restent réservés à l'administration.", overwrites=overwrites)
+                await self._get_or_create_text(
+                    category,
+                    _subject_channel_name(subject),
+                    topic=(
+                        f"Cours, devoirs, exercices, examens blancs et ressources de {get_subject_display_name(subject)} "
+                        f"pour toute la filière {stream_name} ({level_name}). "
+                        "Seuls les enseignants affectés à cette matière peuvent publier; la gestion du salon reste réservée à l'administration."
+                    ),
+                    overwrites=overwrites,
+                )
 
             await self._get_or_create_voice(voice_category, f"🔊-{_safe_name(stream_name)}-à-distance", public_voice_overwrites(self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], roles[ROLE_STUDENT], stream_role))
             self.stats.streams_processed += 1
