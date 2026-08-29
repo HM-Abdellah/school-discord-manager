@@ -15,6 +15,7 @@ from services.storage import create_academic_year, get_guild_config, list_academ
 
 MAIN_ROLE_NAMES = {ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT}
 LEGACY_ROLE_NAMES = {"Professeur", "Professeur (F)"}
+LEGACY_SUBJECT_ROLE_PREFIXES = ("Professeur Matière - ", "Professeur Matiere - ")
 LEVEL_ABBREVIATIONS = {"Tronc Commun": "TC", "1ère Année Bac": "1BAC", "2ème Année Bac": "2BAC"}
 
 
@@ -67,13 +68,7 @@ class ServerCommands(commands.Cog):
         except Exception as exc:
             await interaction.followup.send(f"❌ Erreur : `{type(exc).__name__}: {exc}`", ephemeral=True)
             return
-        await interaction.followup.send(
-            "✅ **Structure mise à jour sans formatage.**\n\n"
-            f"• Niveaux : {stats.levels_processed}\n• Filières : {stats.streams_processed}\n"
-            f"• Rôles créés : {stats.roles_created}\n• Catégories : {stats.categories_created}\n"
-            f"• Texte : {stats.text_channels_created}\n• Vocaux : {stats.voice_channels_created}",
-            ephemeral=True,
-        )
+        await interaction.followup.send("✅ **Structure mise à jour sans formatage.**\n\n" f"• Niveaux : {stats.levels_processed}\n• Filières : {stats.streams_processed}\n• Rôles créés : {stats.roles_created}\n• Catégories : {stats.categories_created}\n• Texte : {stats.text_channels_created}\n• Vocaux : {stats.voice_channels_created}", ephemeral=True)
 
     @app_commands.command(name="addstream", description="Ajouter une filière sans toucher au reste du serveur.")
     @app_commands.describe(level="Niveau", stream="Filière à ajouter")
@@ -128,7 +123,6 @@ class ServerCommands(commands.Cog):
         config["levels"] = [item for item in config.get("levels", []) if item.get("streams")]
         save_guild_config(interaction.guild.id, config)
         await interaction.response.send_message(f"🗑️ Suppression de **{code}** en cours...", ephemeral=True)
-
         level_category = discord.utils.get(interaction.guild.categories, name=_level_category_name(level))
         if level_category is not None:
             header = _stream_header_name(stream, code)
@@ -194,10 +188,13 @@ class ServerCommands(commands.Cog):
             await interaction.response.send_message("ℹ️ Aucune configuration. Utilise `/setup`.", ephemeral=True)
             return
         lines = ["📋 **Configuration enregistrée**", f"📅 Année : **{config.get('academic_year', 'non définie')}**", ""]
+        total = 0
         for level in config.get("levels", []):
             lines.append(f"**{level['name']}**")
             for stream in level.get("streams", []):
+                total += 1
                 lines.append(f"• **{stream.get('abbreviation', stream['name'])}** — {stream['name']}")
+        lines.extend(["", f"**Total filières :** {total}", "**Discord :** une catégorie par niveau, filières regroupées visuellement, channels par matière."])
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
     @app_commands.command(name="resetserver", description="FORMATER complètement le serveur : supprimer les salons et la structure School Manager.")
@@ -229,7 +226,7 @@ class ServerCommands(commands.Cog):
             for role in list(guild.roles):
                 if role.is_default() or role.managed:
                     continue
-                if role.name in MAIN_ROLE_NAMES or role.name in LEGACY_ROLE_NAMES or role.name.startswith(STREAM_ROLE_PREFIX):
+                if role.name in MAIN_ROLE_NAMES or role.name in LEGACY_ROLE_NAMES or role.name.startswith(LEGACY_SUBJECT_ROLE_PREFIXES):
                     try:
                         await role.delete(reason="School Discord Manager FULL SERVER RESET")
                         deleted_roles += 1
