@@ -26,6 +26,29 @@ CATEGORY_GENERAL = "🏢・INFORMATIONS & ADMINISTRATION"
 CATEGORY_PROFESSORS = "👨‍🏫・ESPACE PROFESSEURS"
 CATEGORY_VOICE = "🔊・SALLES VIRTUELLES"
 
+LEVEL_PREFIXES = {
+    "Tronc Commun": "📘・TC",
+    "1ère Année Bac": "1️⃣・1BAC",
+    "2ème Année Bac": "2️⃣・2BAC",
+}
+
+STREAM_EMOJIS = {
+    "Sciences": "🔬",
+    "Technologies": "⚙️",
+    "Lettres et Sciences Humaines": "📩",
+    "Sciences Mathématiques": "📐",
+    "Sciences Expérimentales": "🧪",
+    "Sciences et Technologies Électriques": "⚡",
+    "Sciences et Technologies Mécaniques": "🔧",
+    "Sciences Économiques et Gestion": "💼",
+    "Sciences Économiques": "💼",
+    "Sciences de Gestion Comptable (SGC)": "📊",
+    "Sciences de la Vie et de la Terre (SVT)": "🌱",
+    "Sciences Agronomiques": "🌾",
+    "Lettres": "✉️",
+    "Sciences Humaines": "🧠",
+}
+
 
 def _safe_name(value: str, max_length: int = 90) -> str:
     value = value.lower().replace("’", "'").replace(" ", "-")
@@ -36,6 +59,15 @@ def _safe_name(value: str, max_length: int = 90) -> str:
 
 def _subject_channel_name(subject: str) -> str:
     return f"📚-{_safe_name(subject)}"
+
+
+def _level_prefix(level_name: str) -> str:
+    return LEVEL_PREFIXES.get(level_name, f"📚・{_safe_name(level_name).upper()}")
+
+
+def _stream_category_name(level_name: str, stream_name: str) -> str:
+    emoji = STREAM_EMOJIS.get(stream_name, "🎓")
+    return f"{_level_prefix(level_name)}・{emoji}・{stream_name}"
 
 
 class BuildStats:
@@ -189,24 +221,26 @@ class ServerBuilder:
         for stream in streams:
             stream_name = stream["name"]
             subjects = list(stream.get("subjects", [])) or get_stream_subjects(level_name, stream_name)
-            category = await self._get_or_create_category(f"🎓・{stream_name}", level_overwrites)
+            category = await self._get_or_create_category(
+                _stream_category_name(level_name, stream_name), level_overwrites
+            )
 
             await self._get_or_create_text(
                 category,
                 "📌-informations",
-                topic=f"Informations et organisation de la filière {stream_name}.",
+                topic=f"Informations et organisation de la filière {stream_name} — {level_name}.",
                 overwrites=announcement_overwrites,
             )
             await self._get_or_create_text(
                 category,
                 "🗓️-emploi-du-temps",
-                topic=f"Emplois du temps de tous les groupes/classes de {stream_name}.",
+                topic=f"Emplois du temps de tous les groupes/classes de {stream_name} en {level_name}.",
                 overwrites=announcement_overwrites,
             )
             await self._get_or_create_text(
                 category,
                 "📝-examens",
-                topic=f"Dates, horaires et consignes des examens pour {stream_name}.",
+                topic=f"Dates, horaires et consignes des examens pour {stream_name} — {level_name}.",
                 overwrites=announcement_overwrites,
             )
 
@@ -216,7 +250,7 @@ class ServerBuilder:
                     _subject_channel_name(subject),
                     topic=(
                         f"Cours, devoirs, exercices, examens blancs et ressources de {subject} "
-                        f"pour toute la filière {stream_name}."
+                        f"pour toute la filière {stream_name} ({level_name})."
                     ),
                     overwrites=level_overwrites,
                 )
