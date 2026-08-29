@@ -40,11 +40,8 @@ def _migrate_legacy_enrollments(conn: sqlite3.Connection) -> None:
     if not _table_exists(conn, "enrollments"):
         return
     columns = _table_columns(conn, "enrollments")
-    if "stream_id" in columns:
+    if "stream_id" in columns or "class_id" not in columns:
         return
-    if "class_id" not in columns:
-        return
-
     conn.execute("ALTER TABLE enrollments RENAME TO enrollments_legacy")
     conn.execute("""
         CREATE TABLE enrollments (
@@ -93,11 +90,6 @@ def initialize_database() -> None:
         );
         """)
         _migrate_legacy_enrollments(conn)
-        conn.executescript("""
-        CREATE INDEX IF NOT EXISTS idx_students_guild_discord ON students(guild_id, discord_id);
-        CREATE INDEX IF NOT EXISTS idx_streams_guild_year ON streams(guild_id, academic_year_id);
-        CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id);
-        """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS enrollments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,6 +101,11 @@ def initialize_database() -> None:
                 FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
                 FOREIGN KEY(stream_id) REFERENCES streams(id) ON DELETE CASCADE
             )
+        """)
+        conn.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_students_guild_discord ON students(guild_id, discord_id);
+        CREATE INDEX IF NOT EXISTS idx_streams_guild_year ON streams(guild_id, academic_year_id);
+        CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id);
         """)
 
 
