@@ -31,8 +31,7 @@ ECONOMICS = [
     "Économie générale et Statistiques", "Droit", "Informatique de gestion",
 ]
 
-# Official/complete subject names remain the internal canonical values.
-# These shorter names are used only for Discord channel/role display.
+# Canonical subject names are kept complete internally. These are display-only names for Discord.
 SUBJECT_DISPLAY_NAMES = {
     "Mathématiques": "Math",
     "Physique et Chimie": "PC",
@@ -43,16 +42,17 @@ SUBJECT_DISPLAY_NAMES = {
     "Histoire Géographie": "الاجتماعيات",
     "Education Islamique": "التربية الإسلامية",
     "Philosophie": "الفلسفة",
-    "Sciences de l'ingénieur": "Sc. Ingénieur",
-    "Informatique": "Informatique",
+    "Sciences de l'ingénieur": "SI",
+    "Informatique": "Info",
     "Économie et Organisation Administrative des Entreprises": "Économie & Organisation",
     "Comptabilité et Mathématiques financières": "Comptabilité & Maths Fi.",
     "Économie générale et Statistiques": "Économie & Stats",
     "Droit": "Droit",
-    "Informatique de gestion": "Info. Gestion",
+    "Informatique de gestion": "Info Gestion",
     "Sciences Végétales et Animales (SVA)": "SVA",
 }
 
+# Internal ASCII-safe short codes used only when a Discord role name needs to be compact.
 SUBJECT_INTERNAL_CODES = {
     "Mathématiques": "Math",
     "Physique et Chimie": "PC",
@@ -65,12 +65,36 @@ SUBJECT_INTERNAL_CODES = {
     "Philosophie": "Philo",
     "Sciences de l'ingénieur": "SI",
     "Informatique": "Info",
-    "Économie et Organisation Administrative des Entreprises": "Economie-Organisation",
-    "Comptabilité et Mathématiques financières": "Comptabilite-MathsFi",
-    "Économie générale et Statistiques": "Economie-Stats",
+    "Économie et Organisation Administrative des Entreprises": "ECO-Organisation",
+    "Comptabilité et Mathématiques financières": "Compta-MathsFi",
+    "Économie générale et Statistiques": "ECO-Stats",
     "Droit": "Droit",
-    "Informatique de gestion": "Info-Gestion",
+    "Informatique de gestion": "InfoGestion",
     "Sciences Végétales et Animales (SVA)": "SVA",
+}
+
+# User-provided stream abbreviations. The full stream name remains the canonical name.
+STREAM_ABBREVIATIONS = {
+    "Tronc Commun Scientifique": "TCS",
+    "Tronc Commun Lettres": "TCL",
+    "Tronc Commun Technologique": "TCT",
+    "Tronc Commun Originel": "TCA",
+    "1ère Année Bac Sciences Expérimentales": "1BACSE",
+    "1ère Année Bac Sciences Mathématiques": "1BACSM",
+    "1ère Année Bac Lettres et Sciences Humaines": "1BACSH",
+    "1ère Année Bac Sciences Économiques et Gestion": "1BACECO",
+    "1ère Année Bac Sciences et Technologies Électriques": "1BACSTE",
+    "1ère Année Bac Sciences et Technologies Mécaniques": "1BACSTM",
+    "1ère Année Bac Arts Appliqués": "1BACAA",
+    "2ème Année Bac Sciences Physiques": "2BACPC",
+    "2ème Année Bac Sciences de la Vie et de la Terre": "2BACSVT",
+    "2ème Année Bac Sciences Mathématiques A": "2BACSMA",
+    "2ème Année Bac Sciences Mathématiques B": "2BACSMB",
+    "2ème Année Bac Lettres": "2BACL",
+    "2ème Année Bac Sciences Humaines": "2BACSH",
+    "2ème Année Bac Sciences Économiques": "2BACSE",
+    "2ème Année Bac Sciences de Gestion Comptable": "2BACSGC",
+    "2ème Année Bac Arts Appliqués": "2BACAA",
 }
 
 CURRICULUM = {
@@ -78,36 +102,36 @@ CURRICULUM = {
         "Tronc Commun": {
             "abbreviation": "TC",
             "filieres": {
-                "Sciences": {"matieres": GENERAL_SCIENCES + ["Informatique"]},
-                "Technologies": {"matieres": TECHNOLOGY},
-                "Lettres et Sciences Humaines": {"matieres": LETTERS_SCIENCES_HUMAINES},
+                "Tronc Commun Scientifique": {"abbreviation": "TCS", "matieres": GENERAL_SCIENCES + ["Informatique"]},
+                "Tronc Commun Lettres": {"abbreviation": "TCL", "matieres": LETTERS_SCIENCES_HUMAINES},
+                "Tronc Commun Technologique": {"abbreviation": "TCT", "matieres": TECHNOLOGY},
+                "Tronc Commun Originel": {"abbreviation": "TCA", "matieres": LETTERS},
             },
         },
         "1ère Année Bac": {
             "abbreviation": "1BAC",
             "filieres": {
-                "Sciences Mathématiques": {"matieres": GENERAL_SCIENCES},
-                "Sciences Expérimentales": {"matieres": GENERAL_SCIENCES},
-                "Sciences et Technologies Électriques": {"matieres": TECH_BAC},
-                "Sciences et Technologies Mécaniques": {"matieres": TECH_BAC},
-                "Sciences Économiques et Gestion": {"matieres": ECONOMICS},
-                "Lettres et Sciences Humaines": {"matieres": LETTERS_SCIENCES_HUMAINES},
+                "1ère Année Bac Sciences Expérimentales": {"abbreviation": "1BACSE", "matieres": GENERAL_SCIENCES},
+                "1ère Année Bac Sciences Mathématiques": {"abbreviation": "1BACSM", "matieres": GENERAL_SCIENCES},
+                "1ère Année Bac Lettres et Sciences Humaines": {"abbreviation": "1BACSH", "matieres": LETTERS_SCIENCES_HUMAINES},
+                "1ère Année Bac Sciences Économiques et Gestion": {"abbreviation": "1BACECO", "matieres": ECONOMICS},
+                "1ère Année Bac Sciences et Technologies Électriques": {"abbreviation": "1BACSTE", "matieres": TECH_BAC},
+                "1ère Année Bac Sciences et Technologies Mécaniques": {"abbreviation": "1BACSTM", "matieres": TECH_BAC},
+                "1ère Année Bac Arts Appliqués": {"abbreviation": "1BACAA", "matieres": LETTERS},
             },
         },
         "2ème Année Bac": {
             "abbreviation": "2BAC",
             "filieres": {
-                "Sciences Mathématiques A": {"matieres": GENERAL_SCIENCES_NO_HISTORY},
-                "Sciences Mathématiques B": {"matieres": TECH_BAC},
-                "Sciences Physiques": {"matieres": GENERAL_SCIENCES_NO_HISTORY},
-                "Sciences de la Vie et de la Terre (SVT)": {"matieres": GENERAL_SCIENCES_NO_HISTORY},
-                "Sciences Agronomiques": {"matieres": GENERAL_SCIENCES + ["Sciences Végétales et Animales (SVA)"]},
-                "Sciences et Technologies Électriques": {"matieres": TECH_BAC},
-                "Sciences et Technologies Mécaniques": {"matieres": TECH_BAC},
-                "Sciences Économiques": {"matieres": ECONOMICS},
-                "Sciences de Gestion Comptable (SGC)": {"matieres": ECONOMICS},
-                "Lettres": {"matieres": LETTERS},
-                "Sciences Humaines": {"matieres": LETTERS},
+                "2ème Année Bac Sciences Physiques": {"abbreviation": "2BACPC", "matieres": GENERAL_SCIENCES_NO_HISTORY},
+                "2ème Année Bac Sciences de la Vie et de la Terre": {"abbreviation": "2BACSVT", "matieres": GENERAL_SCIENCES_NO_HISTORY},
+                "2ème Année Bac Sciences Mathématiques A": {"abbreviation": "2BACSMA", "matieres": GENERAL_SCIENCES_NO_HISTORY},
+                "2ème Année Bac Sciences Mathématiques B": {"abbreviation": "2BACSMB", "matieres": TECH_BAC},
+                "2ème Année Bac Lettres": {"abbreviation": "2BACL", "matieres": LETTERS},
+                "2ème Année Bac Sciences Humaines": {"abbreviation": "2BACSH", "matieres": LETTERS},
+                "2ème Année Bac Sciences Économiques": {"abbreviation": "2BACSE", "matieres": ECONOMICS},
+                "2ème Année Bac Sciences de Gestion Comptable": {"abbreviation": "2BACSGC", "matieres": ECONOMICS},
+                "2ème Année Bac Arts Appliqués": {"abbreviation": "2BACAA", "matieres": LETTERS},
             },
         },
     }
@@ -131,10 +155,7 @@ EXAM_CHANNELS = {
     "2ème Année Bac": "🇲🇦-préparation-national",
 }
 
-SUBJECT_TAGS = {
-    subject: display for subject, display in SUBJECT_DISPLAY_NAMES.items()
-}
-
+SUBJECT_TAGS = dict(SUBJECT_DISPLAY_NAMES)
 FORUM_MAX_TAGS = 20
 
 
@@ -152,6 +173,10 @@ def get_streams(level_name: str) -> list[str]:
 
 def get_stream(stream_name: str, level_name: str) -> dict:
     return get_level(level_name)["filieres"][stream_name]
+
+
+def get_stream_abbreviation(level_name: str, stream_name: str) -> str:
+    return get_stream(stream_name, level_name).get("abbreviation") or STREAM_ABBREVIATIONS.get(stream_name, stream_name[:20])
 
 
 def get_stream_subjects(level_name: str, stream_name: str) -> list[str]:
