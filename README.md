@@ -2,11 +2,9 @@
 
 A Discord bot for generating and managing a clean, role-driven school server for Moroccan secondary education.
 
-## ✨ New compact architecture
+## ✨ Compact Discord architecture
 
-The server no longer creates a channel for every class and every subject. That design grows too quickly and can hit Discord's 500-channel server cap. citeturn359286search0
-
-The new structure is:
+The server does **not** create a channel for every class or every subject. Subjects are Forum tags and classes are roles, keeping the Discord structure small and readable.
 
 ```text
 🏢 INFORMATIONS & ADMINISTRATION
@@ -23,9 +21,9 @@ The new structure is:
 📚 1ÈRE ANNÉE BAC
 ├── 📢 annonces
 ├── 🗓️ organisation
-├── 📚 cours-1bac          ← Forum
-├── 💬 questions-1bac      ← Forum
-├── 📝 devoirs-1bac        ← Forum
+├── 📚 cours-1bac          ← Forum + subject tags
+├── 💬 questions-1bac      ← Forum + subject tags
+├── 📝 devoirs-1bac        ← Forum + subject tags
 └── 🇲🇦 préparation-régional
 
 🔊 SALLES VIRTUELLES
@@ -34,13 +32,47 @@ The new structure is:
 └── 🔊 2BAC-classe
 ```
 
-### How subjects are organized
+## 📅 Academic years and student history
 
-Subjects are **Forum tags**, not channels. Discord Forum channels support organized posts and tags, with a current limit of 20 tags per Forum channel. citeturn359286search11turn359286search1
+School data is separated from Discord channels. The bot now creates a local SQLite database at `data/school.db` containing:
 
-Classes are **roles**, not channels. A student is assigned one class role with `/assignstudent`; the role controls access to the appropriate level area.
+- Academic years (`2025/2026`, `2026/2027`, `2027/2028`, ...)
+- Students and their Discord IDs
+- Classes for each academic year
+- Enrollments with start/end dates
+- Transfer history when a student changes class
+- `left_school` status when a student leaves the institution
 
-This keeps the server small even when a school has many classes.
+A student is **not deleted** when leaving. Their previous years, classes and enrollment history remain available.
+
+### Year workflow
+
+At the start of a new school year:
+
+```text
+/newyear 2027/2028
+/setup
+/build
+```
+
+`/newyear` makes the selected year active. `/setup` then uses that active year instead of hard-coding the current year. Previous years remain in the database.
+
+### Student workflow
+
+```text
+/assignstudent
+```
+assigns the student's Discord role and creates/updates the current enrollment. If the student changes class, the previous enrollment is closed and a new one is created.
+
+```text
+/studenthistory
+```
+shows the student's academic history.
+
+```text
+/leavschool
+```
+marks the student as having left the institution without deleting their history.
 
 ## ⚙️ Setup
 
@@ -53,34 +85,22 @@ Run:
 The wizard lets an administrator:
 
 1. Select the levels present in the school.
-2. Select the available filières for each level.
-3. Choose the number of classes per filière (using the curriculum's predefined class names as defaults).
-4. Review the configuration.
+2. Select the available filières.
+3. Choose the real number of classes per filière.
+4. Review the configuration and active academic year.
 5. Build the server.
 
-The configuration is saved locally and can later be rebuilt with:
-
-```text
-/build
-```
-
-Use:
-
-```text
-/status
-```
-
-to inspect the saved configuration and the compact architecture.
+Class names are generated as `Classe 1`, `Classe 2`, etc. so the school can configure any realistic number of classes without changing the curriculum catalogue.
 
 ## 📚 Curriculum
 
-The complete academic catalogue lives in `config/curriculum.py` under:
+The academic catalogue lives in `config/curriculum.py` under:
 
 ```python
 CURRICULUM["niveaux"]
 ```
 
-It contains the level, filière, class names and subjects. The catalogue does **not** duplicate BIOF variants as separate subjects; regular subject names are used once.
+It contains the level, filière, classes and subjects supplied by the school structure. It does not create Discord channels for each subject.
 
 ## 📁 Project structure
 
@@ -106,8 +126,11 @@ school-discord-manager/
 │   ├── server_builder.py
 │   └── storage.py
 └── data/
-    └── (generated local JSON files)
+    ├── guild_config.json
+    └── school.db
 ```
+
+`data/` remains local and should not be committed with real school data.
 
 ## 🔐 Token security
 
@@ -128,42 +151,44 @@ cd school-discord-manager
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-```
-
-Then configure `.env` and run:
-
-```bash
 python bot.py
 ```
 
-Forum channels require Community to be enabled on the Discord server. citeturn359286search11
-
 ## 🤖 Commands
 
-`/setup` — configure the school's levels, filières and classes.
-
-`/build` — build/reconcile the saved compact server structure.
-
-`/status` — inspect the saved configuration.
-
-`/assignstudent` — assign a student to a generated class role.
-
-`/assignteacher` — assign the `Professeur` role.
-
-`/reportabsence` — publish a teacher absence announcement.
+- `/setup` — configure levels, filières and class counts for the active academic year.
+- `/build` — build/reconcile the compact Discord structure.
+- `/status` — inspect the saved school configuration.
+- `/newyear 2027/2028` — create and activate a new academic year.
+- `/years` — list saved academic years and show the active year.
+- `/assignstudent` — assign a student to a class and record enrollment history.
+- `/studenthistory` — view a student's academic history.
+- `/leavschool` — mark a student as having left without deleting their history.
+- `/assignteacher` — assign the `Professeur` role.
+- `/reportabsence` — publish a teacher absence announcement.
 
 ## 🧪 First test
 
-For the cleanest test, create a **new empty Discord server** and invite the current bot there. The old test server may already be at Discord's channel cap because it contains the legacy per-class/per-subject structure.
+For the cleanest Discord test, use a **new empty Discord server**. The old test server may already contain the legacy channels and may have reached Discord's channel cap.
 
-After starting the bot:
+After `git pull origin main`:
 
 ```text
+python bot.py
 /setup
-→ choose your levels
+→ choose levels
 → choose filières
-→ choose classes
+→ choose class counts
 → Construire le serveur
 ```
 
-The important result to check is that you get a small number of level Forums and class roles instead of a long list of subject channels.
+Then test the lifecycle:
+
+```text
+/assignstudent
+/studenthistory
+/newyear 2027/2028
+/years
+```
+
+The important result is a compact Discord server plus a local database that can survive class changes and future academic years.
