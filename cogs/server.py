@@ -10,7 +10,7 @@ from discord.ext import commands
 
 from services.server_builder import ServerBuilder
 from services.storage import create_academic_year, get_guild_config, list_academic_years, reset_guild_data
-from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_STUDENT, STREAM_ROLE_PREFIX
+from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_STUDENT, STREAM_ROLE_PREFIX, SUBJECT_TEACHER_ROLE_PREFIX
 
 
 MAIN_ROLE_NAMES = {ROLE_ADMIN, ROLE_PROFESSOR, ROLE_STUDENT}
@@ -160,7 +160,11 @@ class ServerCommands(commands.Cog):
             for role in list(guild.roles):
                 if role.is_default() or role.managed:
                     continue
-                if role.name in MAIN_ROLE_NAMES or role.name.startswith(STREAM_ROLE_PREFIX):
+                if (
+                    role.name in MAIN_ROLE_NAMES
+                    or role.name.startswith(STREAM_ROLE_PREFIX)
+                    or role.name.startswith(SUBJECT_TEACHER_ROLE_PREFIX)
+                ):
                     try:
                         await role.delete(reason="School Discord Manager FULL SERVER RESET")
                         deleted_roles += 1
