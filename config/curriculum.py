@@ -2,46 +2,33 @@
 
 from __future__ import annotations
 
-
-# Shared subject groups keep the catalogue readable and prevent accidental BIOF duplication.
 GENERAL_SCIENCES = [
     "Mathématiques", "Physique et Chimie", "Sciences de la Vie et de la Terre (SVT)",
-    "Arabe", "Français", "Anglais", "Histoire Géographie", "Education Islamique",
-    "Philosophie",
+    "Arabe", "Français", "Anglais", "Histoire Géographie", "Education Islamique", "Philosophie",
 ]
-
 GENERAL_SCIENCES_NO_HISTORY = [
     "Mathématiques", "Physique et Chimie", "Sciences de la Vie et de la Terre (SVT)",
     "Arabe", "Français", "Anglais", "Education Islamique", "Philosophie",
 ]
-
 TECHNOLOGY = [
-    "Mathématiques", "Physique et Chimie", "Sciences de l'ingénieur", "Arabe",
-    "Français", "Anglais", "Histoire Géographie", "Education Islamique",
-    "Philosophie", "Informatique",
+    "Mathématiques", "Physique et Chimie", "Sciences de l'ingénieur", "Arabe", "Français",
+    "Anglais", "Histoire Géographie", "Education Islamique", "Philosophie", "Informatique",
 ]
-
 TECH_BAC = [
-    "Mathématiques", "Physique et Chimie", "Sciences de l'ingénieur", "Arabe",
-    "Français", "Anglais", "Education Islamique", "Philosophie",
+    "Mathématiques", "Physique et Chimie", "Sciences de l'ingénieur", "Arabe", "Français",
+    "Anglais", "Education Islamique", "Philosophie",
 ]
-
 LETTERS = [
-    "Mathématiques", "Arabe", "Français", "Anglais", "Histoire Géographie",
-    "Education Islamique", "Philosophie",
+    "Mathématiques", "Arabe", "Français", "Anglais", "Histoire Géographie", "Education Islamique", "Philosophie",
 ]
-
 LETTERS_SCIENCES_HUMAINES = [
-    "Mathématiques", "Sciences de la Vie et de la Terre (SVT)", "Arabe", "Français",
-    "Anglais", "Histoire Géographie", "Education Islamique", "Philosophie",
+    "Mathématiques", "Sciences de la Vie et de la Terre (SVT)", "Arabe", "Français", "Anglais",
+    "Histoire Géographie", "Education Islamique", "Philosophie",
 ]
-
 ECONOMICS = [
-    "Mathématiques", "Arabe", "Français", "Anglais", "Histoire Géographie",
-    "Education Islamique", "Philosophie",
-    "Économie et Organisation Administrative des Entreprises",
-    "Comptabilité et Mathématiques financières", "Économie générale et Statistiques",
-    "Droit", "Informatique de gestion",
+    "Mathématiques", "Arabe", "Français", "Anglais", "Histoire Géographie", "Education Islamique", "Philosophie",
+    "Économie et Organisation Administrative des Entreprises", "Comptabilité et Mathématiques financières",
+    "Économie générale et Statistiques", "Droit", "Informatique de gestion",
 ]
 
 CURRICULUM = {
@@ -49,7 +36,7 @@ CURRICULUM = {
         "Tronc Commun": {
             "abbreviation": "TC",
             "filieres": {
-                "Sciences": {"classes": ["Classe 1", "Classe 2"], "matieres": GENERAL_SCIENCES + ["Informatique"]},
+                "Sciences": {"classes": [f"Classe {i}" for i in range(1, 8)], "matieres": GENERAL_SCIENCES + ["Informatique"]},
                 "Technologies": {"classes": ["Classe 1"], "matieres": TECHNOLOGY},
                 "Lettres et Sciences Humaines": {"classes": ["Classe 1", "Classe 2"], "matieres": LETTERS_SCIENCES_HUMAINES},
             },
@@ -58,11 +45,11 @@ CURRICULUM = {
             "abbreviation": "1BAC",
             "filieres": {
                 "Sciences Mathématiques": {"classes": ["Classe 1"], "matieres": GENERAL_SCIENCES},
-                "Sciences Expérimentales": {"classes": ["Classe 1", "Classe 2", "Classe 3"], "matieres": GENERAL_SCIENCES},
+                "Sciences Expérimentales": {"classes": [f"Classe {i}" for i in range(1, 7)], "matieres": GENERAL_SCIENCES},
                 "Sciences et Technologies Électriques": {"classes": ["Classe 1"], "matieres": TECH_BAC},
                 "Sciences et Technologies Mécaniques": {"classes": ["Classe 1"], "matieres": TECH_BAC},
-                "Sciences Économiques et Gestion": {"classes": ["Classe 1", "Classe 2"], "matieres": ECONOMICS},
-                "Lettres et Sciences Humaines": {"classes": ["Classe 1"], "matieres": LETTERS_SCIENCES_HUMAINES},
+                "Sciences Économiques et Gestion": {"classes": ["Classe 1"], "matieres": ECONOMICS},
+                "Lettres et Sciences Humaines": {"classes": ["Classe 1", "Classe 2"], "matieres": LETTERS_SCIENCES_HUMAINES},
             },
         },
         "2ème Année Bac": {
@@ -70,18 +57,15 @@ CURRICULUM = {
             "filieres": {
                 "Sciences Mathématiques A": {"classes": ["Classe 1"], "matieres": GENERAL_SCIENCES_NO_HISTORY},
                 "Sciences Mathématiques B": {"classes": ["Classe 1"], "matieres": TECH_BAC},
-                "Sciences Physiques": {"classes": ["Classe 1", "Classe 2", "Classe 3"], "matieres": GENERAL_SCIENCES_NO_HISTORY},
+                "Sciences Physiques": {"classes": [f"Classe {i}" for i in range(1, 6)], "matieres": GENERAL_SCIENCES_NO_HISTORY},
                 "Sciences de la Vie et de la Terre (SVT)": {"classes": ["Classe 1"], "matieres": GENERAL_SCIENCES_NO_HISTORY},
-                "Sciences Agronomiques": {
-                    "classes": ["Classe 1"],
-                    "matieres": GENERAL_SCIENCES + ["Sciences Végétales et Animales (SVA)"],
-                },
+                "Sciences Agronomiques": {"classes": ["Classe 1"], "matieres": GENERAL_SCIENCES + ["Sciences Végétales et Animales (SVA)"]},
                 "Sciences et Technologies Électriques": {"classes": ["Classe 1"], "matieres": TECH_BAC},
                 "Sciences et Technologies Mécaniques": {"classes": ["Classe 1"], "matieres": TECH_BAC},
-                "Sciences Économiques": {"classes": ["Classe 1", "Classe 2"], "matieres": ECONOMICS},
+                "Sciences Économiques": {"classes": ["Classe 1"], "matieres": ECONOMICS},
                 "Sciences de Gestion Comptable (SGC)": {"classes": ["Classe 1"], "matieres": ECONOMICS},
-                "Lettres": {"classes": ["Classe 1"], "matieres": LETTERS},
-                "Sciences Humaines": {"classes": ["Classe 1"], "matieres": LETTERS},
+                "Lettres": {"classes": ["Classe 1", "Classe 2"], "matieres": LETTERS},
+                "Sciences Humaines": {"classes": ["Classe 1", "Classe 2"], "matieres": LETTERS},
             },
         },
     }
@@ -105,8 +89,28 @@ EXAM_CHANNELS = {
     "2ème Année Bac": "🇲🇦-préparation-national",
 }
 
+# Short Discord-safe labels. Discord Forum tag names cannot exceed 50 characters.
+SUBJECT_TAGS = {
+    "Mathématiques": "Mathématiques",
+    "Physique et Chimie": "Physique-Chimie",
+    "Sciences de la Vie et de la Terre (SVT)": "SVT",
+    "Sciences de l'ingénieur": "Sc. ingénieur",
+    "Arabe": "Arabe",
+    "Français": "Français",
+    "Anglais": "Anglais",
+    "Histoire Géographie": "Histoire-Géo",
+    "Education Islamique": "Éducation islamique",
+    "Philosophie": "Philosophie",
+    "Informatique": "Informatique",
+    "Économie et Organisation Administrative des Entreprises": "Économie & Organisation",
+    "Comptabilité et Mathématiques financières": "Comptabilité & Maths fi.",
+    "Économie générale et Statistiques": "Économie générale & Stats",
+    "Droit": "Droit",
+    "Informatique de gestion": "Informatique de gestion",
+    "Sciences Végétales et Animales (SVA)": "SVA",
+}
+
 FORUM_MAX_TAGS = 20
-FORUM_GUIDE_TAGS = ("📚 Cours", "❓ Questions", "📝 Exercices", "🧪 Contrôles", "🎓 Examens")
 MAX_CLASSES_PER_STREAM = 20
 
 
@@ -141,3 +145,7 @@ def get_level_subjects(level_name: str) -> list[str]:
             if subject not in subjects:
                 subjects.append(subject)
     return subjects
+
+
+def get_subject_tag(subject: str) -> str:
+    return SUBJECT_TAGS.get(subject, subject[:50])
