@@ -27,8 +27,27 @@ def administrator_overwrite() -> discord.PermissionOverwrite:
     )
 
 
+def professor_general_overwrite() -> discord.PermissionOverwrite:
+    """Teachers can participate in all non-subject school channels without managing them."""
+    return discord.PermissionOverwrite(
+        view_channel=True,
+        send_messages=True,
+        read_message_history=True,
+        create_public_threads=True,
+        create_private_threads=True,
+        send_messages_in_threads=True,
+        manage_channels=False,
+        manage_permissions=False,
+        manage_messages=False,
+        manage_threads=False,
+        connect=True,
+        speak=True,
+        stream=True,
+    )
+
+
 def professor_view_overwrite() -> discord.PermissionOverwrite:
-    """Teachers can view educational areas but cannot write by default."""
+    """Teachers can view a subject channel; writing is granted only by its subject role."""
     return discord.PermissionOverwrite(
         view_channel=True,
         send_messages=False,
@@ -36,18 +55,18 @@ def professor_view_overwrite() -> discord.PermissionOverwrite:
         create_public_threads=False,
         create_private_threads=False,
         send_messages_in_threads=False,
-        connect=True,
-        speak=True,
-        stream=True,
         manage_channels=False,
         manage_permissions=False,
         manage_messages=False,
         manage_threads=False,
+        connect=True,
+        speak=True,
+        stream=True,
     )
 
 
 def professor_subject_overwrite() -> discord.PermissionOverwrite:
-    """A subject-assigned teacher may post in the subject channel, but cannot manage it."""
+    """A teacher assigned to this subject may publish, but cannot manage the channel."""
     return discord.PermissionOverwrite(
         view_channel=True,
         send_messages=True,
@@ -78,42 +97,26 @@ def hidden_overwrite() -> discord.PermissionOverwrite:
     return discord.PermissionOverwrite(view_channel=False)
 
 
-def general_area_overwrites(
-    everyone: discord.Role,
-    admin_role: discord.Role,
-    professor_role: discord.Role,
-    student_role: discord.Role,
-) -> dict[discord.Role, discord.PermissionOverwrite]:
+def general_area_overwrites(everyone, admin_role, professor_role, student_role):
     return {
         everyone: discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True),
         student_role: student_overwrite(can_send=False),
-        professor_role: professor_view_overwrite(),
+        professor_role: professor_general_overwrite(),
         admin_role: administrator_overwrite(),
     }
 
 
-def teacher_area_overwrites(
-    everyone: discord.Role,
-    admin_role: discord.Role,
-    professor_role: discord.Role,
-    student_role: discord.Role,
-) -> dict[discord.Role, discord.PermissionOverwrite]:
+def teacher_area_overwrites(everyone, admin_role, professor_role, student_role):
     return {
         everyone: hidden_overwrite(),
         student_role: hidden_overwrite(),
-        professor_role: professor_view_overwrite(),
+        professor_role: professor_general_overwrite(),
         admin_role: administrator_overwrite(),
     }
 
 
-def stream_area_overwrites(
-    everyone: discord.Role,
-    admin_role: discord.Role,
-    professor_role: discord.Role,
-    student_role: discord.Role,
-    stream_role: discord.Role,
-) -> dict[discord.Role, discord.PermissionOverwrite]:
-    """Allow stream students and all teachers to view the whole stream area."""
+def stream_area_overwrites(everyone, admin_role, professor_role, student_role, stream_role):
+    """Stream students and teachers can view/use the stream area; teacher posting is subject-specific."""
     return {
         everyone: hidden_overwrite(),
         student_role: hidden_overwrite(),
@@ -123,26 +126,16 @@ def stream_area_overwrites(
     }
 
 
-def stream_announcement_overwrites(
-    everyone: discord.Role,
-    admin_role: discord.Role,
-    professor_role: discord.Role,
-    student_role: discord.Role,
-    stream_role: discord.Role,
-) -> dict[discord.Role, discord.PermissionOverwrite]:
+def stream_announcement_overwrites(everyone, admin_role, professor_role, student_role, stream_role):
+    """Information, timetable, and exam channels are writable by teachers and administration."""
     overwrites = stream_area_overwrites(everyone, admin_role, professor_role, student_role, stream_role)
+    overwrites[professor_role] = professor_general_overwrite()
     overwrites[stream_role] = student_overwrite(can_send=False)
     return overwrites
 
 
-def subject_channel_overwrites(
-    everyone: discord.Role,
-    admin_role: discord.Role,
-    professor_role: discord.Role,
-    stream_role: discord.Role,
-    subject_teacher_role: discord.Role,
-) -> dict[discord.Role, discord.PermissionOverwrite]:
-    """Students may participate; all teachers may view; assigned subject teachers may post."""
+def subject_channel_overwrites(everyone, admin_role, professor_role, stream_role, subject_teacher_role):
+    """All teachers can read; only teachers assigned to this subject can publish."""
     return {
         everyone: hidden_overwrite(),
         admin_role: administrator_overwrite(),
@@ -152,13 +145,7 @@ def subject_channel_overwrites(
     }
 
 
-def public_voice_overwrites(
-    everyone: discord.Role,
-    admin_role: discord.Role,
-    professor_role: discord.Role,
-    student_role: discord.Role,
-    stream_role: discord.Role,
-) -> dict[discord.Role, discord.PermissionOverwrite]:
+def public_voice_overwrites(everyone, admin_role, professor_role, student_role, stream_role):
     return {
         everyone: hidden_overwrite(),
         student_role: hidden_overwrite(),
