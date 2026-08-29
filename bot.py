@@ -8,16 +8,13 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
-
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID_RAW = os.getenv("DISCORD_GUILD_ID", "").strip()
 
 if not TOKEN:
-    raise RuntimeError(
-        "DISCORD_TOKEN is missing. Copy .env.example to .env and add your bot token."
-    )
+    raise RuntimeError("DISCORD_TOKEN is missing. Copy .env.example to .env and add your bot token.")
 
 
 class SchoolBot(commands.Bot):
@@ -25,7 +22,7 @@ class SchoolBot(commands.Bot):
 
     EXTENSIONS = (
         "cogs.setup",
-        "cogs.server",
+        "cogs.server_v2",
         "cogs.students",
         "cogs.teachers",
     )
@@ -33,13 +30,9 @@ class SchoolBot(commands.Bot):
     def __init__(self) -> None:
         intents = discord.Intents.default()
         intents.members = True
-        intents.message_content = True
+        intents.message_content = False
 
-        super().__init__(
-            command_prefix="!",
-            intents=intents,
-            help_command=None,
-        )
+        super().__init__(command_prefix="!", intents=intents, help_command=None)
 
     async def setup_hook(self) -> None:
         for extension in self.EXTENSIONS:
@@ -50,7 +43,6 @@ class SchoolBot(commands.Bot):
                 guild_id = int(GUILD_ID_RAW)
             except ValueError as exc:
                 raise RuntimeError("DISCORD_GUILD_ID must be a numeric Discord server ID.") from exc
-
             guild = discord.Object(id=guild_id)
             self.tree.copy_global_to(guild=guild)
             synced = await self.tree.sync(guild=guild)
@@ -66,7 +58,7 @@ class SchoolBot(commands.Bot):
         print(f"Bot      : {self.user}")
         print(f"Bot ID   : {self.user.id}")
         print(f"Servers  : {len(self.guilds)}")
-        print("Commands : /setup /build /status /assignstudent /assignteacher /reportabsence")
+        print("Commands : /setup /build /addstream /removestream /status /newyear /years /assignstudent /assignteacher /assignsubjectteachers /reportabsence /resetserver(owner)")
         print("=" * 72)
 
 
