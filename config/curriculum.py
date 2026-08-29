@@ -52,7 +52,7 @@ SUBJECT_DISPLAY_NAMES = {
     "Sciences Végétales et Animales (SVA)": "SVA",
 }
 
-# Internal ASCII-safe short codes used only when a Discord role name needs to be compact.
+# Compact internal subject codes used by teacher roles and automation.
 SUBJECT_INTERNAL_CODES = {
     "Mathématiques": "Math",
     "Physique et Chimie": "PC",
@@ -73,19 +73,17 @@ SUBJECT_INTERNAL_CODES = {
     "Sciences Végétales et Animales (SVA)": "SVA",
 }
 
-# User-provided stream abbreviations. The full stream name remains the canonical name.
+# Official stream abbreviations supplied for this project.
 STREAM_ABBREVIATIONS = {
     "Tronc Commun Scientifique": "TCS",
     "Tronc Commun Lettres": "TCL",
     "Tronc Commun Technologique": "TCT",
-    "Tronc Commun Originel": "TCA",
     "1ère Année Bac Sciences Expérimentales": "1BACSE",
     "1ère Année Bac Sciences Mathématiques": "1BACSM",
     "1ère Année Bac Lettres et Sciences Humaines": "1BACSH",
     "1ère Année Bac Sciences Économiques et Gestion": "1BACECO",
     "1ère Année Bac Sciences et Technologies Électriques": "1BACSTE",
     "1ère Année Bac Sciences et Technologies Mécaniques": "1BACSTM",
-    "1ère Année Bac Arts Appliqués": "1BACAA",
     "2ème Année Bac Sciences Physiques": "2BACPC",
     "2ème Année Bac Sciences de la Vie et de la Terre": "2BACSVT",
     "2ème Année Bac Sciences Mathématiques A": "2BACSMA",
@@ -94,7 +92,6 @@ STREAM_ABBREVIATIONS = {
     "2ème Année Bac Sciences Humaines": "2BACSH",
     "2ème Année Bac Sciences Économiques": "2BACSE",
     "2ème Année Bac Sciences de Gestion Comptable": "2BACSGC",
-    "2ème Année Bac Arts Appliqués": "2BACAA",
 }
 
 CURRICULUM = {
@@ -105,7 +102,6 @@ CURRICULUM = {
                 "Tronc Commun Scientifique": {"abbreviation": "TCS", "matieres": GENERAL_SCIENCES + ["Informatique"]},
                 "Tronc Commun Lettres": {"abbreviation": "TCL", "matieres": LETTERS_SCIENCES_HUMAINES},
                 "Tronc Commun Technologique": {"abbreviation": "TCT", "matieres": TECHNOLOGY},
-                "Tronc Commun Originel": {"abbreviation": "TCA", "matieres": LETTERS},
             },
         },
         "1ère Année Bac": {
@@ -117,7 +113,6 @@ CURRICULUM = {
                 "1ère Année Bac Sciences Économiques et Gestion": {"abbreviation": "1BACECO", "matieres": ECONOMICS},
                 "1ère Année Bac Sciences et Technologies Électriques": {"abbreviation": "1BACSTE", "matieres": TECH_BAC},
                 "1ère Année Bac Sciences et Technologies Mécaniques": {"abbreviation": "1BACSTM", "matieres": TECH_BAC},
-                "1ère Année Bac Arts Appliqués": {"abbreviation": "1BACAA", "matieres": LETTERS},
             },
         },
         "2ème Année Bac": {
@@ -131,7 +126,6 @@ CURRICULUM = {
                 "2ème Année Bac Sciences Humaines": {"abbreviation": "2BACSH", "matieres": LETTERS},
                 "2ème Année Bac Sciences Économiques": {"abbreviation": "2BACSE", "matieres": ECONOMICS},
                 "2ème Année Bac Sciences de Gestion Comptable": {"abbreviation": "2BACSGC", "matieres": ECONOMICS},
-                "2ème Année Bac Arts Appliqués": {"abbreviation": "2BACAA", "matieres": LETTERS},
             },
         },
     }
