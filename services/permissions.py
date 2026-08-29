@@ -1,4 +1,4 @@
-"""Centralized Discord permission-overwrite builders."""
+"""Centralized permission helpers for the scalable school server structure."""
 
 from __future__ import annotations
 
@@ -15,9 +15,9 @@ def administrator_overwrite() -> discord.PermissionOverwrite:
         view_channel=True,
         send_messages=True,
         read_message_history=True,
-        manage_messages=True,
         manage_channels=True,
         manage_permissions=True,
+        manage_messages=True,
         manage_threads=True,
         connect=True,
         speak=True,
@@ -54,9 +54,7 @@ def student_overwrite(*, can_send: bool = True) -> discord.PermissionOverwrite:
 
 
 def hidden_overwrite() -> discord.PermissionOverwrite:
-    return discord.PermissionOverwrite(
-        view_channel=False,
-    )
+    return discord.PermissionOverwrite(view_channel=False)
 
 
 def general_area_overwrites(
@@ -91,72 +89,55 @@ def teacher_area_overwrites(
     }
 
 
-def class_area_overwrites(
+def level_area_overwrites(
     everyone: discord.Role,
     admin_role: discord.Role,
     professor_role: discord.Role,
-    student_role: discord.Role,
-    class_role: discord.Role,
+    class_roles: list[discord.Role],
 ) -> dict[discord.Role, discord.PermissionOverwrite]:
-    return {
+    """Expose one level area to its class roles without creating class channels."""
+    overwrites: dict[discord.Role, discord.PermissionOverwrite] = {
         everyone: hidden_overwrite(),
-        student_role: hidden_overwrite(),
-        class_role: student_overwrite(can_send=True),
         professor_role: professor_overwrite(),
         admin_role: administrator_overwrite(),
     }
-
-
-def read_only_class_overwrites(
-    everyone: discord.Role,
-    admin_role: discord.Role,
-    professor_role: discord.Role,
-    student_role: discord.Role,
-    class_role: discord.Role,
-) -> dict[discord.Role, discord.PermissionOverwrite]:
-    overwrites = class_area_overwrites(
-        everyone,
-        admin_role,
-        professor_role,
-        student_role,
-        class_role,
-    )
-    overwrites[class_role] = student_overwrite(can_send=False)
+    for class_role in class_roles:
+        overwrites[class_role] = student_overwrite(can_send=True)
     return overwrites
 
 
-def virtual_classroom_overwrites(
+def level_announcement_overwrites(
     everyone: discord.Role,
     admin_role: discord.Role,
     professor_role: discord.Role,
-    student_role: discord.Role,
-    class_role: discord.Role,
+    class_roles: list[discord.Role],
 ) -> dict[discord.Role, discord.PermissionOverwrite]:
-    return {
-        everyone: discord.PermissionOverwrite(
-            view_channel=False,
-            connect=False,
-        ),
-        student_role: discord.PermissionOverwrite(
-            view_channel=False,
-            connect=False,
-        ),
-        class_role: discord.PermissionOverwrite(
-            view_channel=True,
-            connect=True,
-            speak=True,
-            stream=True,
-        ),
+    overwrites = level_area_overwrites(everyone, admin_role, professor_role, class_roles)
+    for role in class_roles:
+        overwrites[role] = student_overwrite(can_send=False)
+    return overwrites
+
+
+def public_voice_overwrites(
+    everyone: discord.Role,
+    admin_role: discord.Role,
+    professor_role: discord.Role,
+    class_roles: list[discord.Role],
+) -> dict[discord.Role, discord.PermissionOverwrite]:
+    overwrites: dict[discord.Role, discord.PermissionOverwrite] = {
+        everyone: hidden_overwrite(),
         professor_role: discord.PermissionOverwrite(
-            view_channel=True,
-            connect=True,
-            speak=True,
-            stream=True,
+            view_channel=True, connect=True, speak=True, stream=True
         ),
         admin_role: discord.PermissionOverwrite(
+            view_channel=True, connect=True, speak=True, stream=True
+        ),
+    }
+    for class_role in class_roles:
+        overwrites[class_role] = discord.PermissionOverwrite(
             view_channel=True,
             connect=True,
             speak=True,
             stream=True,
-        ),
-    }
+        )
+    return overwrites
