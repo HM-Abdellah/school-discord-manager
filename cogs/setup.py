@@ -9,7 +9,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config.curriculum import get_level, get_levels, get_stream_subjects, get_streams
+from config.curriculum import (
+    get_level,
+    get_levels,
+    get_stream_abbreviation,
+    get_stream_subjects,
+    get_streams,
+)
 from services.server_builder import ServerBuilder
 from services.storage import get_active_academic_year, save_guild_config
 
@@ -93,8 +99,8 @@ class LevelView(SetupBaseView):
                 f"## 📚 {level_name}\n\n"
                 f"Niveau **{self.current_level_index + 1}/{len(self.selected_level_names)}**\n\n"
                 "Sélectionne uniquement les **filières présentes dans ton établissement**.\n"
-                "⚠️ Les codes/abréviations ne sont pas utilisés pour le moment.\n"
-                "Chaque filière sélectionnée aura un espace Discord partagé pour toutes ses classes/groupes."
+                "Les codes courts seront utilisés uniquement pour les noms Discord internes/catégories.\n"
+                "Chaque filière sélectionnée aura un espace Discord partagé pour tous ses classes/groupes."
             ),
             view=StreamView(self.owner_id, self.selected_level_names, self.current_level_index, self.completed_levels),
         )
@@ -107,7 +113,7 @@ class StreamSelect(discord.ui.Select):
             discord.SelectOption(
                 label=name,
                 value=name,
-                description=f"{len(get_stream_subjects(view.current_level, name))} matières partagées",
+                description=f"{get_stream_abbreviation(view.current_level, name)} • {len(get_stream_subjects(view.current_level, name))} matières",
             )
             for name in get_streams(view.current_level)
         ]
@@ -135,6 +141,7 @@ class StreamView(SetupBaseView):
         streams = [
             {
                 "name": stream_name,
+                "abbreviation": get_stream_abbreviation(self.current_level, stream_name),
                 "subjects": get_stream_subjects(self.current_level, stream_name),
             }
             for stream_name in selected_streams
@@ -181,21 +188,22 @@ class SummaryView(SetupBaseView):
             "",
             "**Organisation :** une catégorie par filière sélectionnée.",
             "**Aucune classe ne sera créée comme rôle ou channel.**",
-            "**Matières :** tags Forum à l'intérieur de chaque filière.",
+            "**Matières :** un channel par matière dans chaque filière.",
             "**Emploi du temps :** un channel par filière pour les horaires de toutes ses classes/groupes.",
-            "**Codes/abréviations :** pas encore utilisés.",
+            "**Codes courts :** utilisés pour les catégories/roles Discord uniquement.",
             "",
         ]
         for level in levels:
             lines.append(f"### 📚 {level['name']}")
             for stream in level.get("streams", []):
-                lines.append(f"• **{stream['name']}** → {len(stream.get('subjects', []))} matières")
+                code = stream.get("abbreviation", stream["name"])
+                lines.append(f"• **{code}** — {stream['name']} → {len(stream.get('subjects', []))} matières")
             lines.append("")
         lines.extend([
             "━━━━━━━━━━━━━━━━━━━━━━━━━━",
             f"**Niveaux :** {len(levels)}",
             f"**Filières sélectionnées :** {stream_count}",
-            "**Par filière :** informations · emploi du temps · examens · cours · questions · devoirs",
+            "**Par filière :** informations · emploi du temps · examens · channels par matière · à-distance",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━",
         ])
         return "\n".join(lines)
@@ -251,7 +259,7 @@ class Setup(commands.Cog):
         await interaction.response.send_message(
             f"## 🏫 School Discord Manager\n\n"
             "Sélectionne les niveaux présents, puis uniquement les filières présentes dans ton établissement.\n"
-            "Les noms complets des filières seront utilisés dans le serveur pour le moment.\n\n"
+            "Les noms complets restent utilisés dans la configuration interne; les codes courts servent seulement à garder Discord propre et compact.\n\n"
             f"📅 Année active : **{current_year_for(interaction.guild.id)}**",
             view=LevelView(interaction.user.id),
             ephemeral=True,
