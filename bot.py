@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
+GUILD_ID_RAW = os.getenv("DISCORD_GUILD_ID", "").strip()
 
 if not TOKEN:
     raise RuntimeError(
@@ -44,8 +45,19 @@ class SchoolBot(commands.Bot):
         for extension in self.EXTENSIONS:
             await self.load_extension(extension)
 
-        synced = await self.tree.sync()
-        print(f"✅ Synced {len(synced)} application command(s).")
+        if GUILD_ID_RAW:
+            try:
+                guild_id = int(GUILD_ID_RAW)
+            except ValueError as exc:
+                raise RuntimeError("DISCORD_GUILD_ID must be a numeric Discord server ID.") from exc
+
+            guild = discord.Object(id=guild_id)
+            self.tree.copy_global_to(guild=guild)
+            synced = await self.tree.sync(guild=guild)
+            print(f"✅ Synced {len(synced)} application command(s) to development guild {guild_id}.")
+        else:
+            synced = await self.tree.sync()
+            print(f"✅ Synced {len(synced)} application command(s) globally.")
 
     async def on_ready(self) -> None:
         print("=" * 72)
