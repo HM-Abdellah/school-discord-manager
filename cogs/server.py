@@ -8,7 +8,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from services.server_builder import ServerBuilder, CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE, LEVEL_MARKERS
+from services.server_builder import ServerBuilder
 from services.storage import create_academic_year, get_guild_config, list_academic_years, reset_guild_data
 from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_STUDENT
 
@@ -108,9 +108,11 @@ class ServerCommands(commands.Cog):
 
     @app_commands.command(
         name="resetserver",
-        description="Réinitialiser la structure School Discord Manager pour les tests.",
+        description="FORMATER complètement le serveur : supprimer tous les channels et la structure du bot.",
     )
-    @app_commands.describe(confirm="Écris RESET pour confirmer la suppression des ressources gérées par le bot")
+    @app_commands.describe(
+        confirm="Écris RESET pour confirmer. TOUS les salons seront supprimés (texte, vocal, forum, catégories)."
+    )
     @app_commands.checks.has_permissions(administrator=True)
     async def reset_server(self, interaction: discord.Interaction, confirm: str) -> None:
         if interaction.guild is None:
@@ -124,47 +126,57 @@ class ServerCommands(commands.Cog):
             return
 
         await interaction.response.send_message(
-            "🧹 **Réinitialisation en cours...**\nJe supprime uniquement les ressources identifiables comme School Discord Manager.",
+            "🧨 **FORMATAGE COMPLET EN COURS...**\n"
+            "Tous les salons vont être supprimés : texte, vocal, forum et catégories.\n"
+            "Les rôles créés par le School Discord Manager seront également supprimés.",
             ephemeral=True,
         )
 
         guild = interaction.guild
         deleted_channels = 0
+        deleted_categories = 0
         deleted_roles = 0
 
-        manager_categories = {
-            CATEGORY_GENERAL,
-            CATEGORY_PROFESSORS,
-            CATEGORY_VOICE,
-            *LEVEL_MARKERS.values(),
-        }
-
         try:
-            # Delete whole manager categories. Their child channels are deleted by Discord with them.
-            for channel in list(guild.categories):
-                if channel.name in manager_categories:
-                    child_count = len(channel.channels)
-                    await channel.delete(reason="School Discord Manager test reset")
-                    deleted_channels += child_count
-                    deleted_channels += 1
+            # 1) Delete every category. Discord deletes all child channels with the category.
+            # This intentionally does NOT filter by names: RESET is a real full server format.
+            for category in list(guild.categories):
+                child_count = len(category.channels)
+                await category.delete(reason="School Discord Manager FULL SERVER RESET")
+                deleted_channels += child_count
+                deleted_categories += 1
 
-            # Delete class roles created by the manager, but never touch @everyone/main roles.
-            for role in list(guild.roles):
-                if role.is_default() or role.name in MAIN_ROLE_NAMES:
+            # 2) Delete every remaining channel that is not inside a category.
+            for channel in list(guild.channels):
+                if isinstance(channel, discord.CategoryChannel):
                     continue
-                if role.name.startswith(CLASS_ROLE_PREFIX):
+                try:
+                    await channel.delete(reason="School Discord Manager FULL SERVER RESET")
+                    deleted_channels += 1
+                except discord.NotFound:
+                    # It may already have been deleted together with its category.
+                    pass
+
+            # 3) Remove manager-created roles so the next /setup starts clean.
+            for role in list(guild.roles):
+                if role.is_default() or role.managed:
+                    continue
+                if role.name in MAIN_ROLE_NAMES or role.name.startswith(CLASS_ROLE_PREFIX):
                     try:
-                        await role.delete(reason="School Discord Manager test reset")
+                        await role.delete(reason="School Discord Manager FULL SERVER RESET")
                         deleted_roles += 1
-                    except discord.Forbidden:
+                    except (discord.Forbidden, discord.HTTPException):
                         continue
 
+            # 4) Wipe local configuration/data for this guild.
             reset_guild_data(guild.id)
+
         except discord.Forbidden:
             await interaction.edit_original_response(
                 content=(
-                    "❌ Discord a refusé une suppression. Vérifie que le bot peut gérer "
-                    "les channels et les rôles qu'il a créés."
+                    "❌ Discord a refusé une suppression.\n"
+                    "Vérifie que le bot possède **Manage Channels** et **Manage Roles**, "
+                    "et que son rôle est assez haut dans la hiérarchie."
                 )
             )
             return
@@ -177,12 +189,15 @@ class ServerCommands(commands.Cog):
 
         await interaction.edit_original_response(
             content=(
-                "# ✅ Serveur prêt pour un nouveau test\n\n"
-                f"• Channels School Manager supprimés : **{deleted_channels}**\n"
-                f"• Rôles de classes supprimés : **{deleted_roles}**\n"
+                "# ✅ FORMATAGE TERMINÉ\n\n"
+                f"• Catégories supprimées : **{deleted_categories}**\n"
+                f"• Salons supprimés : **{deleted_channels}**\n"
+                f"• Rôles School Manager supprimés : **{deleted_roles}**\n"
                 "• Configuration locale supprimée\n"
-                "• Données SQLite du serveur de test supprimées\n\n"
-                "Tu peux maintenant relancer `/setup` dans ce même serveur."
+                "• Données SQLite du serveur supprimées\n\n"
+                "⚠️ Le serveur est maintenant vide de salons.\n"
+                "Pour relancer `/setup`, crée d'abord manuellement **un salon texte temporaire** "
+                "(par exemple `#setup`) puis lance `/setup`."
             )
         )
 
