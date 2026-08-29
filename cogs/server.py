@@ -45,7 +45,7 @@ class ServerCommands(commands.Cog):
             return
         await interaction.followup.send(
             "✅ **Structure mise à jour.**\n\n"
-            f"• Niveaux : {stats.levels_processed}\n• Classes : {stats.classes_processed}\n"
+            f"• Niveaux : {stats.levels_processed}\n• Filières : {stats.streams_processed}\n"
             f"• Rôles créés : {stats.roles_created}\n• Catégories : {stats.categories_created}\n"
             f"• Texte : {stats.text_channels_created}\n• Forums : {stats.forums_created}\n• Vocaux : {stats.voice_channels_created}",
             ephemeral=True,
@@ -64,7 +64,7 @@ class ServerCommands(commands.Cog):
         create_academic_year(interaction.guild.id, year, activate=True)
         await interaction.response.send_message(
             f"✅ **{year}** est maintenant l'année scolaire active.\n"
-            "Configure ses niveaux/classes avec `/setup`, puis `/build`.",
+            "Configure ses niveaux/filières avec `/setup`, puis `/build`.",
             ephemeral=True,
         )
 
@@ -93,17 +93,26 @@ class ServerCommands(commands.Cog):
         if not config:
             await interaction.response.send_message("ℹ️ Aucune configuration. Utilise `/setup`.", ephemeral=True)
             return
-        lines = ["📋 **Configuration enregistrée**", f"📅 Année : **{config.get('academic_year', 'non définie')}**", ""]
-        total_classes = 0
+
+        lines = [
+            "📋 **Configuration enregistrée**",
+            f"📅 Année : **{config.get('academic_year', 'non définie')}**",
+            "",
+            "**Organisation :** une catégorie par filière, sans rôles/channels de classes.",
+        ]
+        total_streams = 0
         for level in config.get("levels", []):
+            lines.append("")
             lines.append(f"**{level['name']}**")
             for stream in level.get("streams", []):
-                count = int(stream.get("class_count", 0))
-                total_classes += count
-                lines.append(f"• {stream['name']} — {count} classe(s) — {len(stream.get('subjects', []))} matière(s) en tags")
-            lines.append("")
-        lines.append(f"**Total classes :** {total_classes}")
-        lines.append("**Structure :** Forums pédagogiques + rôles de classes, sans channel par matière.")
+                total_streams += 1
+                lines.append(
+                    f"• **{stream.get('code', stream['name'])}** — {stream['name']} — "
+                    f"{len(stream.get('subjects', []))} matière(s) en tags"
+                )
+        lines.append("")
+        lines.append(f"**Total filières :** {total_streams}")
+        lines.append("**Par filière :** informations + emploi du temps + examens + cours + questions + devoirs.")
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
     @app_commands.command(
@@ -119,10 +128,7 @@ class ServerCommands(commands.Cog):
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
         if confirm.strip().upper() != "RESET":
-            await interaction.response.send_message(
-                "❌ Pour confirmer, utilise exactement `RESET`.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message("❌ Pour confirmer, utilise exactement `RESET`.", ephemeral=True)
             return
 
         await interaction.response.send_message(
@@ -138,15 +144,12 @@ class ServerCommands(commands.Cog):
         deleted_roles = 0
 
         try:
-            # 1) Delete every category. Discord deletes all child channels with the category.
-            # This intentionally does NOT filter by names: RESET is a real full server format.
             for category in list(guild.categories):
                 child_count = len(category.channels)
                 await category.delete(reason="School Discord Manager FULL SERVER RESET")
                 deleted_channels += child_count
                 deleted_categories += 1
 
-            # 2) Delete every remaining channel that is not inside a category.
             for channel in list(guild.channels):
                 if isinstance(channel, discord.CategoryChannel):
                     continue
@@ -154,10 +157,8 @@ class ServerCommands(commands.Cog):
                     await channel.delete(reason="School Discord Manager FULL SERVER RESET")
                     deleted_channels += 1
                 except discord.NotFound:
-                    # It may already have been deleted together with its category.
                     pass
 
-            # 3) Remove manager-created roles so the next /setup starts clean.
             for role in list(guild.roles):
                 if role.is_default() or role.managed:
                     continue
@@ -168,7 +169,6 @@ class ServerCommands(commands.Cog):
                     except (discord.Forbidden, discord.HTTPException):
                         continue
 
-            # 4) Wipe local configuration/data for this guild.
             reset_guild_data(guild.id)
 
         except discord.Forbidden:
@@ -196,8 +196,7 @@ class ServerCommands(commands.Cog):
                 "• Configuration locale supprimée\n"
                 "• Données SQLite du serveur supprimées\n\n"
                 "⚠️ Le serveur est maintenant vide de salons.\n"
-                "Pour relancer `/setup`, crée d'abord manuellement **un salon texte temporaire** "
-                "(par exemple `#setup`) puis lance `/setup`."
+                "Pour relancer `/setup`, crée d'abord manuellement **un salon texte temporaire** (par exemple `#setup`)."
             )
         )
 
