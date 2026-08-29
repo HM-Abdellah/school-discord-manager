@@ -10,11 +10,10 @@ from discord.ext import commands
 
 from services.server_builder import ServerBuilder
 from services.storage import create_academic_year, get_guild_config, list_academic_years, reset_guild_data
-from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_STUDENT
+from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_STUDENT, STREAM_ROLE_PREFIX
 
 
 MAIN_ROLE_NAMES = {ROLE_ADMIN, ROLE_PROFESSOR, ROLE_STUDENT}
-CLASS_ROLE_PREFIX = "Élève - "
 
 
 class ServerCommands(commands.Cog):
@@ -107,12 +106,11 @@ class ServerCommands(commands.Cog):
             for stream in level.get("streams", []):
                 total_streams += 1
                 lines.append(
-                    f"• **{stream.get('code', stream['name'])}** — {stream['name']} — "
-                    f"{len(stream.get('subjects', []))} matière(s) en tags"
+                    f"• {stream['name']} — {len(stream.get('subjects', []))} matière(s)"
                 )
         lines.append("")
         lines.append(f"**Total filières :** {total_streams}")
-        lines.append("**Par filière :** informations + emploi du temps + examens + cours + questions + devoirs.")
+        lines.append("**Par filière :** informations + emploi du temps + examens + channels par matière + à-distance.")
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
     @app_commands.command(
@@ -162,7 +160,7 @@ class ServerCommands(commands.Cog):
             for role in list(guild.roles):
                 if role.is_default() or role.managed:
                     continue
-                if role.name in MAIN_ROLE_NAMES or role.name.startswith(CLASS_ROLE_PREFIX):
+                if role.name in MAIN_ROLE_NAMES or role.name.startswith(STREAM_ROLE_PREFIX):
                     try:
                         await role.delete(reason="School Discord Manager FULL SERVER RESET")
                         deleted_roles += 1
