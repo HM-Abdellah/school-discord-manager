@@ -9,13 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config.curriculum import (
-    get_level,
-    get_levels,
-    get_stream_abbreviation,
-    get_stream_subjects,
-    get_streams,
-)
+from config.curriculum import get_level, get_levels, get_stream_abbreviation, get_stream_subjects, get_streams
 from services.server_builder import ServerBuilder
 from services.storage import get_active_academic_year, save_guild_config
 
@@ -65,8 +59,8 @@ class LevelSelect(discord.ui.Select):
             discord.SelectOption(
                 label=name,
                 value=name,
-                description=f"{len(get_streams(name))} filière(s)",
-                emoji=("📚" if name == "Tronc Commun" else "1️⃣" if "1ère" in name else "2️⃣"),
+                description=f"{len(get_streams(name))} filière(s) disponibles",
+                emoji=("📘" if name == "Tronc Commun" else "1️⃣" if "1ère" in name else "2️⃣"),
             )
             for name in get_levels()
         ]
@@ -99,8 +93,8 @@ class LevelView(SetupBaseView):
                 f"## 📚 {level_name}\n\n"
                 f"Niveau **{self.current_level_index + 1}/{len(self.selected_level_names)}**\n\n"
                 "Sélectionne uniquement les **filières présentes dans ton établissement**.\n"
-                "Les codes courts seront utilisés uniquement pour les noms Discord internes/catégories.\n"
-                "Chaque filière sélectionnée aura un espace Discord partagé pour tous ses classes/groupes."
+                "Les codes courts servent uniquement à garder Discord compact.\n"
+                "Le serveur sera organisé par niveau, puis les filières seront regroupées visuellement."
             ),
             view=StreamView(self.owner_id, self.selected_level_names, self.current_level_index, self.completed_levels),
         )
@@ -148,7 +142,6 @@ class StreamView(SetupBaseView):
         ]
         completed = list(self.completed_levels)
         completed.append({"name": self.current_level, "abbreviation": level["abbreviation"], "streams": streams})
-
         next_index = self.level_index + 1
         if next_index < len(self.selected_level_names):
             next_level = self.selected_level_names[next_index]
@@ -157,7 +150,6 @@ class StreamView(SetupBaseView):
                 view=StreamView(self.owner_id, self.selected_level_names, next_index, completed),
             )
             return
-
         guild_id = interaction.guild.id if interaction.guild else 0
         config = {"academic_year": current_year_for(guild_id), "levels": completed}
         summary = SummaryView(self.owner_id, config)
@@ -186,11 +178,12 @@ class SummaryView(SetupBaseView):
             "",
             f"📅 Année scolaire : **{self.config.get('academic_year', 'non définie')}**",
             "",
-            "**Organisation :** une catégorie par filière sélectionnée.",
+            "**Organisation :** une catégorie Discord par niveau.",
+            "**Filières :** regroupées visuellement à l'intérieur de leur niveau.",
             "**Aucune classe ne sera créée comme rôle ou channel.**",
-            "**Matières :** un channel par matière dans chaque filière.",
-            "**Emploi du temps :** un channel par filière pour les horaires de toutes ses classes/groupes.",
-            "**Codes courts :** utilisés pour les catégories/roles Discord uniquement.",
+            "**Matières :** un channel par matière et par filière.",
+            "**Emploi du temps :** un channel par filière pour toutes ses classes/groupes.",
+            "**Codes courts :** utilisés pour garder les noms Discord compacts.",
             "",
         ]
         for level in levels:
@@ -203,7 +196,7 @@ class SummaryView(SetupBaseView):
             "━━━━━━━━━━━━━━━━━━━━━━━━━━",
             f"**Niveaux :** {len(levels)}",
             f"**Filières sélectionnées :** {stream_count}",
-            "**Par filière :** informations · emploi du temps · examens · channels par matière · à-distance",
+            "**Par filière :** header · informations · emploi du temps · examens · channels par matière · à-distance",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━",
         ])
         return "\n".join(lines)
@@ -225,7 +218,6 @@ class SummaryView(SetupBaseView):
         except Exception as exc:
             await interaction.edit_original_response(content=f"❌ Erreur : `{type(exc).__name__}: {exc}`")
             return
-
         await interaction.edit_original_response(
             content=(
                 "# ✅ Serveur construit avec succès\n\n"
@@ -234,7 +226,6 @@ class SummaryView(SetupBaseView):
                 f"• Rôles créés : **{stats.roles_created}**\n"
                 f"• Catégories : **{stats.categories_created}**\n"
                 f"• Texte : **{stats.text_channels_created}**\n"
-                f"• Forums : **{stats.forums_created}**\n"
                 f"• Vocaux : **{stats.voice_channels_created}**"
             )
         )
@@ -259,7 +250,7 @@ class Setup(commands.Cog):
         await interaction.response.send_message(
             f"## 🏫 School Discord Manager\n\n"
             "Sélectionne les niveaux présents, puis uniquement les filières présentes dans ton établissement.\n"
-            "Les noms complets restent utilisés dans la configuration interne; les codes courts servent seulement à garder Discord propre et compact.\n\n"
+            "Les noms complets restent utilisés dans la configuration interne; les codes courts servent à garder Discord compact.\n\n"
             f"📅 Année active : **{current_year_for(interaction.guild.id)}**",
             view=LevelView(interaction.user.id),
             ephemeral=True,
