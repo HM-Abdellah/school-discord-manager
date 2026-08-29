@@ -8,8 +8,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from services.server_builder import ServerBuilder
-from services.storage import create_academic_year, get_guild_config, list_academic_years
+from services.server_builder import ServerBuilder, CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE, LEVEL_MARKERS
+from services.storage import create_academic_year, get_guild_config, list_academic_years, reset_guild_data
+from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_STUDENT
+
+
+MAIN_ROLE_NAMES = {ROLE_ADMIN, ROLE_PROFESSOR, ROLE_STUDENT}
+CLASS_ROLE_PREFIX = "Élève - "
 
 
 class ServerCommands(commands.Cog):
@@ -100,6 +105,86 @@ class ServerCommands(commands.Cog):
         lines.append(f"**Total classes :** {total_classes}")
         lines.append("**Structure :** Forums pédagogiques + rôles de classes, sans channel par matière.")
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+    @app_commands.command(
+        name="resetserver",
+        description="Réinitialiser la structure School Discord Manager pour les tests.",
+    )
+    @app_commands.describe(confirm="Écris RESET pour confirmer la suppression des ressources gérées par le bot")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def reset_server(self, interaction: discord.Interaction, confirm: str) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
+        if confirm.strip().upper() != "RESET":
+            await interaction.response.send_message(
+                "❌ Pour confirmer, utilise exactement `RESET`.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            "🧹 **Réinitialisation en cours...**\nJe supprime uniquement les ressources identifiables comme School Discord Manager.",
+            ephemeral=True,
+        )
+
+        guild = interaction.guild
+        deleted_channels = 0
+        deleted_roles = 0
+
+        manager_categories = {
+            CATEGORY_GENERAL,
+            CATEGORY_PROFESSORS,
+            CATEGORY_VOICE,
+            *LEVEL_MARKERS.values(),
+        }
+
+        try:
+            # Delete whole manager categories. Their child channels are deleted by Discord with them.
+            for channel in list(guild.categories):
+                if channel.name in manager_categories:
+                    child_count = len(channel.channels)
+                    await channel.delete(reason="School Discord Manager test reset")
+                    deleted_channels += child_count
+                    deleted_channels += 1
+
+            # Delete class roles created by the manager, but never touch @everyone/main roles.
+            for role in list(guild.roles):
+                if role.is_default() or role.name in MAIN_ROLE_NAMES:
+                    continue
+                if role.name.startswith(CLASS_ROLE_PREFIX):
+                    try:
+                        await role.delete(reason="School Discord Manager test reset")
+                        deleted_roles += 1
+                    except discord.Forbidden:
+                        continue
+
+            reset_guild_data(guild.id)
+        except discord.Forbidden:
+            await interaction.edit_original_response(
+                content=(
+                    "❌ Discord a refusé une suppression. Vérifie que le bot peut gérer "
+                    "les channels et les rôles qu'il a créés."
+                )
+            )
+            return
+        except discord.HTTPException as exc:
+            await interaction.edit_original_response(content=f"❌ Discord API : `{exc}`")
+            return
+        except Exception as exc:
+            await interaction.edit_original_response(content=f"❌ Erreur : `{type(exc).__name__}: {exc}`")
+            return
+
+        await interaction.edit_original_response(
+            content=(
+                "# ✅ Serveur prêt pour un nouveau test\n\n"
+                f"• Channels School Manager supprimés : **{deleted_channels}**\n"
+                f"• Rôles de classes supprimés : **{deleted_roles}**\n"
+                "• Configuration locale supprimée\n"
+                "• Données SQLite du serveur de test supprimées\n\n"
+                "Tu peux maintenant relancer `/setup` dans ce même serveur."
+            )
+        )
 
 
 async def setup(bot: commands.Bot) -> None:
