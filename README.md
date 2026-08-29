@@ -2,146 +2,108 @@
 
 A Discord bot for generating and managing a clean, role-driven school server for Moroccan secondary education.
 
-## ✨ Compact Discord architecture
+## ✨ Current Discord architecture
 
-The server does **not** create a channel for every class or every subject. Subjects are Forum tags and classes are roles, keeping the Discord structure small and readable.
-
-```text
-🏢 INFORMATIONS & ADMINISTRATION
-├── 📢 actualités
-├── 👨‍🏫 absences-professeurs
-├── 📊 résultats-et-annonces
-├── 🎓 opportunités-post-bac
-└── 🏆 concours-et-activités
-
-👨‍🏫 ESPACE PROFESSEURS
-├── 💬 discussion-professeurs
-└── 🔊 réunion-professeurs
-
-📚 1ÈRE ANNÉE BAC
-├── 📢 annonces
-├── 🗓️ organisation
-├── 📚 cours-1bac          ← Forum + subject tags
-├── 💬 questions-1bac      ← Forum + subject tags
-├── 📝 devoirs-1bac        ← Forum + subject tags
-└── 🇲🇦 préparation-régional
-
-🔊 SALLES VIRTUELLES
-├── 🔊 TC-classe
-├── 🔊 1BAC-classe
-└── 🔊 2BAC-classe
-```
-
-## 📅 Academic years and student history
-
-School data is separated from Discord channels. The bot now creates a local SQLite database at `data/school.db` containing:
-
-- Academic years (`2025/2026`, `2026/2027`, `2027/2028`, ...)
-- Students and their Discord IDs
-- Classes for each academic year
-- Enrollments with start/end dates
-- Transfer history when a student changes class
-- `left_school` status when a student leaves the institution
-
-A student is **not deleted** when leaving. Their previous years, classes and enrollment history remain available.
-
-### Year workflow
-
-At the start of a new school year:
+The bot builds one **category per level**. Streams are grouped visually inside that level with locked, non-joinable voice headers; Discord does not support nested categories. Each stream has its own announcement/timetable/exam channels and subject channels.
 
 ```text
-/newyear 2027/2028
-/setup
-/build
+📘・TRONC COMMUN
+├── 🔹・🔬・TCS        ← locked visual stream header
+├── 📌-TCS・informations
+├── 🗓️-TCS・emploi-du-temps
+├── 📝-TCS・examens
+├── 📚-TCS・math
+├── 📚-TCS・pc
+└── ...
+
+1️⃣・1BAC
+├── 🔹・🧪・1BACSE
+├── 📌-1BACSE・informations
+├── 🗓️-1BACSE・emploi-du-temps
+├── 📝-1BACSE・examens
+├── 📚-1BACSE・math
+└── ...
+
+2️⃣・2BAC
+└── ...
+
+🔊・SALLES VIRTUELLES
+├── 🔊-TCS-à-distance
+├── 🔊-1bacse-à-distance
+└── 🔊-2bacpc-à-distance
 ```
 
-`/newyear` makes the selected year active. `/setup` then uses that active year instead of hard-coding the current year. Previous years remain in the database.
+No Discord channels or roles are created for individual classes/groups.
 
-### Student workflow
+## 👨‍🏫 Teacher roles
+
+Teachers use compact roles:
 
 ```text
-/assignstudent
-```
-assigns the student's Discord role and creates/updates the current enrollment. If the student changes class, the previous enrollment is closed and a new one is created.
-
-```text
-/studenthistory
-```
-shows the student's academic history.
-
-```text
-/leavschool
-```
-marks the student as having left the institution without deleting their history.
-
-## ⚙️ Setup
-
-Run:
-
-```text
-/setup
+Prof
+Prof (F)
+Filière - 1BACSE
+Matière - 1BACSE - Math
 ```
 
-The wizard lets an administrator:
+A teacher can be assigned to multiple levels, filières and subjects. Subject roles are stream-specific so a teacher assigned to `1BACSE / Math` cannot publish in `1BACSE / PC` or `2BAC / Math` unless separately assigned.
 
-1. Select the levels present in the school.
-2. Select the available filières.
-3. Choose the real number of classes per filière.
-4. Review the configuration and active academic year.
-5. Build the server.
-
-Class names are generated as `Classe 1`, `Classe 2`, etc. so the school can configure any realistic number of classes without changing the curriculum catalogue.
+Teachers can publish in organizational channels such as information, timetable and exams. In subject channels, publishing is restricted to the matching stream-subject role. Teachers cannot manage channels or permissions.
 
 ## 📚 Curriculum
 
-The academic catalogue lives in `config/curriculum.py` under:
+The academic catalogue lives in `config/curriculum.py` under `CURRICULUM["niveaux"]`.
 
-```python
-CURRICULUM["niveaux"]
-```
-
-It contains the level, filière, classes and subjects supplied by the school structure. It does not create Discord channels for each subject.
-
-## 📁 Project structure
+Current active catalogue:
 
 ```text
-school-discord-manager/
-├── bot.py
-├── requirements.txt
-├── .env.example
-├── .gitignore
-├── README.md
-├── config/
-│   ├── __init__.py
-│   └── curriculum.py
-├── cogs/
-│   ├── __init__.py
-│   ├── setup.py
-│   ├── server.py
-│   ├── students.py
-│   └── teachers.py
-├── services/
-│   ├── __init__.py
-│   ├── permissions.py
-│   ├── server_builder.py
-│   └── storage.py
-└── data/
-    ├── guild_config.json
-    └── school.db
+Tronc Commun: TCS, TCL, TCT
+1ère Année Bac: 1BACSE, 1BACSM, 1BACSH, 1BACECO, 1BACSTE, 1BACSTM
+2ème Année Bac: 2BACPC, 2BACSVT, 2BACSMA, 2BACSMB, 2BACL, 2BACSH, 2BACSE, 2BACSGC
 ```
 
-`data/` remains local and should not be committed with real school data.
+`Tronc Commun Originel`, `1ère Année Bac Arts Appliqués`, and `2ème Année Bac Arts Appliqués` are intentionally not active yet.
 
-## 🔐 Token security
+Display names for subjects stay short on Discord (`Math`, `PC`, `SVT`, `العربية`, `الاجتماعيات`, `التربية الإسلامية`, `الفلسفة`, etc.) while the full canonical names remain in the curriculum code.
 
-Never commit your real Discord token to GitHub.
+## 🛠️ Commands
 
-Create `.env` from `.env.example`:
-
-```env
-DISCORD_TOKEN=YOUR_REAL_DISCORD_BOT_TOKEN
-DISCORD_GUILD_ID=YOUR_TEST_SERVER_ID
+```text
+/setup
+/build
+/addstream
+/removestream
+/status
+/newyear 2027/2028
+/years
+/assignstudent
+/studenthistory
+/leave_school
+/assignteacher
+/assignsubjectteachers
+/reportabsence
+/resetserver   ← server owner only
 ```
+
+`/build` is non-destructive: it reconciles the configured structure without formatting the whole server.
+
+`/addstream` adds one configured stream without resetting the server.
+
+`/removestream` removes one configured stream and its managed resources.
+
+`/resetserver` is a development/emergency command reserved for the Discord server owner.
+
+## 📅 Academic years and student history
+
+School data is separated from Discord channels. The bot stores configuration and academic history locally in SQLite at `data/school.db`.
+
+Students keep historical enrollments when transferred or marked as having left the school.
+
+## 🔐 Security
+
+Never commit `.env` or real school data.
+
+The repository ignores `.env`, local JSON configuration and SQLite/database files. The reusable `Administration` role is intentionally not granted Discord's full `Administrator` permission.
 
 ## 🛠️ Local installation
 
@@ -154,41 +116,16 @@ python -m pip install -r requirements.txt
 python bot.py
 ```
 
-## 🤖 Commands
+For development, put your bot token and test server ID in `.env`:
 
-- `/setup` — configure levels, filières and class counts for the active academic year.
-- `/build` — build/reconcile the compact Discord structure.
-- `/status` — inspect the saved school configuration.
-- `/newyear 2027/2028` — create and activate a new academic year.
-- `/years` — list saved academic years and show the active year.
-- `/assignstudent` — assign a student to a class and record enrollment history.
-- `/studenthistory` — view a student's academic history.
-- `/leavschool` — mark a student as having left without deleting their history.
-- `/assignteacher` — assign the `Professeur` role.
-- `/reportabsence` — publish a teacher absence announcement.
+```env
+DISCORD_TOKEN=YOUR_REAL_DISCORD_BOT_TOKEN
+DISCORD_GUILD_ID=YOUR_TEST_SERVER_ID
+```
 
-## 🧪 First test
+After updates:
 
-For the cleanest Discord test, use a **new empty Discord server**. The old test server may already contain the legacy channels and may have reached Discord's channel cap.
-
-After `git pull origin main`:
-
-```text
+```bash
+git pull origin main
 python bot.py
-/setup
-→ choose levels
-→ choose filières
-→ choose class counts
-→ Construire le serveur
 ```
-
-Then test the lifecycle:
-
-```text
-/assignstudent
-/studenthistory
-/newyear 2027/2028
-/years
-```
-
-The important result is a compact Discord server plus a local database that can survive class changes and future academic years.
