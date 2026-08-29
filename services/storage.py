@@ -25,6 +25,42 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    ).fetchone() is not None
+
+
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+
+
+def _migrate_legacy_enrollments(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "enrollments"):
+        return
+    columns = _table_columns(conn, "enrollments")
+    if "stream_id" in columns:
+        return
+    if "class_id" not in columns:
+        return
+
+    conn.execute("ALTER TABLE enrollments RENAME TO enrollments_legacy")
+    conn.execute("""
+        CREATE TABLE enrollments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER NOT NULL,
+            stream_id INTEGER NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+            FOREIGN KEY(stream_id) REFERENCES streams(id) ON DELETE CASCADE
+        )
+    """)
+    conn.execute("DROP TABLE enrollments_legacy")
+
+
 def initialize_database() -> None:
     with _connect() as conn:
         conn.executescript("""
@@ -55,19 +91,24 @@ def initialize_database() -> None:
             created_at TEXT NOT NULL,
             UNIQUE(guild_id, discord_id)
         );
-        CREATE TABLE IF NOT EXISTS enrollments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_id INTEGER NOT NULL,
-            stream_id INTEGER NOT NULL,
-            start_date TEXT NOT NULL,
-            end_date TEXT,
-            status TEXT NOT NULL DEFAULT 'active',
-            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
-            FOREIGN KEY(stream_id) REFERENCES streams(id) ON DELETE CASCADE
-        );
+        """)
+        _migrate_legacy_enrollments(conn)
+        conn.executescript("""
         CREATE INDEX IF NOT EXISTS idx_students_guild_discord ON students(guild_id, discord_id);
         CREATE INDEX IF NOT EXISTS idx_streams_guild_year ON streams(guild_id, academic_year_id);
         CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id);
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS enrollments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_id INTEGER NOT NULL,
+                stream_id INTEGER NOT NULL,
+                start_date TEXT NOT NULL,
+                end_date TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
+                FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+                FOREIGN KEY(stream_id) REFERENCES streams(id) ON DELETE CASCADE
+            )
         """)
 
 
@@ -104,29 +145,12 @@ def delete_guild_config(guild_id: int) -> None:
 
 
 def reset_guild_data(guild_id: int) -> None:
-    """Remove all local academic/configuration records for one guild."""
     delete_guild_config(guild_id)
     initialize_database()
     with _connect() as conn:
         conn.execute("DELETE FROM students WHERE guild_id=?", (guild_id,))
         conn.execute("DELETE FROM streams WHERE guild_id=?", (guild_id,))
-        # Keep legacy tables harmlessly isolated until a migration is introduced.
-        if _table_exists(conn, "enrollments") and _table_has_column(conn, "stream_id"):
-            conn.execute("DELETE FROM enrollments WHERE student_id NOT IN (SELECT id FROM students)")
         conn.execute("DELETE FROM academic_years WHERE guild_id=?", (guild_id,))
-
-
-def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-        (table_name,),
-    ).fetchone()
-    return row is not None
-
-
-def _table_has_column(conn: sqlite3.Connection, column_name: str) -> bool:
-    columns = {row["name"] for row in conn.execute("PRAGMA table_info(enrollments)").fetchall()}
-    return column_name in columns
 
 
 def ensure_academic_year(guild_id: int, name: str, *, active: bool = False) -> int:
