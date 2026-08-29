@@ -6,20 +6,17 @@ import re
 
 import discord
 
-from config.curriculum import (
-    GENERAL_CHANNELS,
-    PROFESSOR_CHANNELS,
-    get_stream_subjects,
-)
+from config.curriculum import GENERAL_CHANNELS, PROFESSOR_CHANNELS, get_stream_subjects
 from services.permissions import (
     ROLE_ADMIN,
     ROLE_PROFESSOR,
     ROLE_STUDENT,
+    STREAM_ROLE_PREFIX,
     general_area_overwrites,
     public_voice_overwrites,
+    stream_announcement_overwrites,
+    stream_area_overwrites,
     teacher_area_overwrites,
-    level_area_overwrites,
-    level_announcement_overwrites,
 )
 
 CATEGORY_GENERAL = "🏢・INFORMATIONS & ADMINISTRATION"
@@ -70,6 +67,14 @@ def _stream_category_name(level_name: str, stream_name: str) -> str:
     return f"{_level_prefix(level_name)}・{emoji}・{stream_name}"
 
 
+def _stream_role_name(level_name: str, stream_name: str) -> str:
+    return f"{STREAM_ROLE_PREFIX}{level_name} - {stream_name}"
+
+
+def _find_stream_role(guild: discord.Guild, level_name: str, stream_name: str) -> discord.Role | None:
+    return discord.utils.get(guild.roles, name=_stream_role_name(level_name, stream_name))
+
+
 class BuildStats:
     def __init__(self) -> None:
         self.roles_created = 0
@@ -82,7 +87,7 @@ class BuildStats:
 
 
 class ServerBuilder:
-    """Create one shared academic category per selected stream and one channel per subject."""
+    """Create one shared academic category and one subject channel set per selected stream."""
 
     def __init__(self, guild: discord.Guild) -> None:
         self.guild = guild
@@ -135,6 +140,20 @@ class ServerBuilder:
                 self.stats.roles_created += 1
             roles[role_name] = role
         return roles
+
+    async def _ensure_stream_role(self, level_name: str, stream_name: str) -> discord.Role:
+        role_name = _stream_role_name(level_name, stream_name)
+        role = discord.utils.get(self.guild.roles, name=role_name)
+        if role is None:
+            role = await self.guild.create_role(
+                name=role_name,
+                permissions=discord.Permissions.none(),
+                colour=discord.Colour.teal(),
+                mentionable=True,
+                reason="School manager stream role",
+            )
+            self.stats.roles_created += 1
+        return role
 
     async def _get_or_create_category(self, name, overwrites=None):
         category = discord.utils.find(
@@ -211,18 +230,29 @@ class ServerBuilder:
     async def _build_level(self, level, roles, voice_category):
         level_name = level["name"]
         streams = level.get("streams", [])
-        level_overwrites = level_area_overwrites(
-            self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], [roles[ROLE_STUDENT]]
-        )
-        announcement_overwrites = level_announcement_overwrites(
-            self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], [roles[ROLE_STUDENT]]
-        )
 
         for stream in streams:
             stream_name = stream["name"]
             subjects = list(stream.get("subjects", [])) or get_stream_subjects(level_name, stream_name)
+            stream_role = await self._ensure_stream_role(level_name, stream_name)
+
+            area_overwrites = stream_area_overwrites(
+                self.guild.default_role,
+                roles[ROLE_ADMIN],
+                roles[ROLE_PROFESSOR],
+                roles[ROLE_STUDENT],
+                stream_role,
+            )
+            announcement_overwrites = stream_announcement_overwrites(
+                self.guild.default_role,
+                roles[ROLE_ADMIN],
+                roles[ROLE_PROFESSOR],
+                roles[ROLE_STUDENT],
+                stream_role,
+            )
+
             category = await self._get_or_create_category(
-                _stream_category_name(level_name, stream_name), level_overwrites
+                _stream_category_name(level_name, stream_name), area_overwrites
             )
 
             await self._get_or_create_text(
@@ -252,7 +282,7 @@ class ServerBuilder:
                         f"Cours, devoirs, exercices, examens blancs et ressources de {subject} "
                         f"pour toute la filière {stream_name} ({level_name})."
                     ),
-                    overwrites=level_overwrites,
+                    overwrites=area_overwrites,
                 )
 
             await self._get_or_create_voice(
@@ -262,7 +292,8 @@ class ServerBuilder:
                     self.guild.default_role,
                     roles[ROLE_ADMIN],
                     roles[ROLE_PROFESSOR],
-                    [roles[ROLE_STUDENT]],
+                    roles[ROLE_STUDENT],
+                    stream_role,
                 ),
             )
             self.stats.streams_processed += 1
