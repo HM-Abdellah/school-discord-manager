@@ -7,8 +7,15 @@ from discord import app_commands
 from discord.ext import commands
 
 from config.curriculum import get_levels, get_stream_abbreviation, get_streams
-from services.permissions import ROLE_STUDENT, STREAM_ROLE_PREFIX
-from services.storage import enroll_student, get_active_academic_year, get_student, get_student_history, mark_student_left, upsert_student
+from services.permissions import ROLE_STUDENT, STREAM_ROLE_PREFIX, management_check
+from services.storage import (
+    enroll_student,
+    get_active_academic_year,
+    get_student,
+    get_student_history,
+    mark_student_left,
+    upsert_student,
+)
 
 
 class StudentCommands(commands.Cog):
@@ -17,7 +24,7 @@ class StudentCommands(commands.Cog):
 
     @app_commands.command(name="assignstudent", description="Affecter un élève à une filière.")
     @app_commands.describe(student="Élève", level="Niveau scolaire", stream="Filière scolaire")
-    @app_commands.checks.has_permissions(administrator=True)
+    @management_check()
     async def assign_student(self, interaction: discord.Interaction, student: discord.Member, level: str, stream: str) -> None:
         if interaction.guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
@@ -26,7 +33,8 @@ class StudentCommands(commands.Cog):
             await interaction.response.send_message("❌ Niveau ou filière invalide.", ephemeral=True)
             return
         student_role = discord.utils.get(interaction.guild.roles, name=ROLE_STUDENT)
-        stream_role = discord.utils.get(interaction.guild.roles, name=f"{STREAM_ROLE_PREFIX}{get_stream_abbreviation(level, stream)}")
+        stream_code = get_stream_abbreviation(level, stream)
+        stream_role = discord.utils.get(interaction.guild.roles, name=f"{STREAM_ROLE_PREFIX}{stream_code}")
         if student_role is None or stream_role is None:
             await interaction.response.send_message("❌ Les rôles scolaires ne sont pas prêts. Lance `/setup` puis construis le serveur.", ephemeral=True)
             return
@@ -44,11 +52,11 @@ class StudentCommands(commands.Cog):
         except discord.Forbidden:
             await interaction.response.send_message("❌ Vérifie que le rôle du bot est assez haut dans la hiérarchie.", ephemeral=True)
             return
-        await interaction.response.send_message(f"✅ {student.mention} est maintenant dans **{get_stream_abbreviation(level, stream)}** ({level}).", ephemeral=True)
+        await interaction.response.send_message(f"✅ {student.mention} est maintenant dans **{stream_code}** ({level}).", ephemeral=True)
 
     @app_commands.command(name="studenthistory", description="Voir l'historique scolaire d'un élève.")
     @app_commands.describe(student="Élève")
-    @app_commands.checks.has_permissions(administrator=True)
+    @management_check()
     async def student_history(self, interaction: discord.Interaction, student: discord.Member) -> None:
         if interaction.guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
@@ -64,7 +72,7 @@ class StudentCommands(commands.Cog):
 
     @app_commands.command(name="leave_school", description="Marquer un élève comme ayant quitté l'établissement.")
     @app_commands.describe(student="Élève")
-    @app_commands.checks.has_permissions(administrator=True)
+    @management_check()
     async def leave_school(self, interaction: discord.Interaction, student: discord.Member) -> None:
         if interaction.guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
