@@ -63,9 +63,12 @@ def initialize_database() -> None:
 
 def load_all() -> dict[str, Any]:
     _ensure_storage()
-    if not CONFIG_FILE.exists(): return {}
-    try: return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError): return {}
+    if not CONFIG_FILE.exists():
+        return {}
+    try:
+        return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
 
 
 def save_all(data: dict[str, Any]) -> None:
@@ -78,20 +81,47 @@ def get_guild_config(guild_id: int) -> dict[str, Any] | None:
 
 
 def save_guild_config(guild_id: int, config: dict[str, Any]) -> None:
-    data = load_all(); data[str(guild_id)] = config; save_all(data); sync_configuration_to_database(guild_id, config)
+    data = load_all()
+    data[str(guild_id)] = config
+    save_all(data)
+    sync_configuration_to_database(guild_id, config)
 
 
 def delete_guild_config(guild_id: int) -> None:
-    data = load_all(); data.pop(str(guild_id), None); save_all(data)
+    data = load_all()
+    data.pop(str(guild_id), None)
+    save_all(data)
+
+
+def reset_guild_data(guild_id: int) -> None:
+    """Remove all local academic/configuration records for one guild."""
+    delete_guild_config(guild_id)
+    initialize_database()
+    with _connect() as conn:
+        conn.execute("DELETE FROM students WHERE guild_id=?", (guild_id,))
+        conn.execute("DELETE FROM classes WHERE guild_id=?", (guild_id,))
+        conn.execute("DELETE FROM academic_years WHERE guild_id=?", (guild_id,))
 
 
 def ensure_academic_year(guild_id: int, name: str, *, active: bool = False) -> int:
-    initialize_database(); today = date.today().isoformat()
+    initialize_database()
+    today = date.today().isoformat()
     with _connect() as conn:
-        if active: conn.execute("UPDATE academic_years SET is_active=0 WHERE guild_id=?", (guild_id,))
-        conn.execute("INSERT OR IGNORE INTO academic_years(guild_id,name,is_active,created_at) VALUES(?,?,?,?)", (guild_id, name, int(active), today))
-        if active: conn.execute("UPDATE academic_years SET is_active=1 WHERE guild_id=? AND name=?", (guild_id, name))
-        row = conn.execute("SELECT id FROM academic_years WHERE guild_id=? AND name=?", (guild_id, name)).fetchone()
+        if active:
+            conn.execute("UPDATE academic_years SET is_active=0 WHERE guild_id=?", (guild_id,))
+        conn.execute(
+            "INSERT OR IGNORE INTO academic_years(guild_id,name,is_active,created_at) VALUES(?,?,?,?)",
+            (guild_id, name, int(active), today),
+        )
+        if active:
+            conn.execute(
+                "UPDATE academic_years SET is_active=1 WHERE guild_id=? AND name=?",
+                (guild_id, name),
+            )
+        row = conn.execute(
+            "SELECT id FROM academic_years WHERE guild_id=? AND name=?",
+            (guild_id, name),
+        ).fetchone()
         return int(row["id"])
 
 
@@ -102,12 +132,19 @@ def create_academic_year(guild_id: int, name: str, *, activate: bool = True) -> 
 def get_active_academic_year(guild_id: int) -> sqlite3.Row | None:
     initialize_database()
     with _connect() as conn:
-        return conn.execute("SELECT * FROM academic_years WHERE guild_id=? AND is_active=1 ORDER BY id DESC LIMIT 1", (guild_id,)).fetchone()
+        return conn.execute(
+            "SELECT * FROM academic_years WHERE guild_id=? AND is_active=1 ORDER BY id DESC LIMIT 1",
+            (guild_id,),
+        ).fetchone()
 
 
 def list_academic_years(guild_id: int) -> list[sqlite3.Row]:
     initialize_database()
-    with _connect() as conn: return conn.execute("SELECT * FROM academic_years WHERE guild_id=? ORDER BY name DESC", (guild_id,)).fetchall()
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT * FROM academic_years WHERE guild_id=? ORDER BY name DESC",
+            (guild_id,),
+        ).fetchall()
 
 
 def sync_configuration_to_database(guild_id: int, config: dict[str, Any]) -> None:
@@ -118,8 +155,10 @@ def sync_configuration_to_database(guild_id: int, config: dict[str, Any]) -> Non
         for level in config.get("levels", []):
             abbreviation = level.get("abbreviation", "")
             for stream in level.get("streams", []):
-                count = int(stream.get("class_count", 0)); names = list(stream.get("classes", []))
-                if len(names) < count: names.extend(f"Classe {i}" for i in range(len(names) + 1, count + 1))
+                count = int(stream.get("class_count", 0))
+                names = list(stream.get("classes", []))
+                if len(names) < count:
+                    names.extend(f"Classe {i}" for i in range(len(names) + 1, count + 1))
                 for class_name in names[:count]:
                     role_name = f"Élève - {abbreviation} - {stream['name']} - {class_name}"
                     conn.execute(
@@ -135,43 +174,93 @@ def sync_configuration_to_database(guild_id: int, config: dict[str, Any]) -> Non
 def upsert_student(guild_id: int, discord_id: int | None, display_name: str) -> int:
     initialize_database()
     with _connect() as conn:
-        row = conn.execute("SELECT id FROM students WHERE guild_id=? AND discord_id=?", (guild_id, discord_id)).fetchone() if discord_id else None
+        row = (
+            conn.execute(
+                "SELECT id FROM students WHERE guild_id=? AND discord_id=?",
+                (guild_id, discord_id),
+            ).fetchone()
+            if discord_id
+            else None
+        )
         if row:
-            conn.execute("UPDATE students SET display_name=? WHERE id=?", (display_name, row["id"])); return int(row["id"])
-        cur = conn.execute("INSERT INTO students(guild_id,discord_id,display_name,created_at) VALUES(?,?,?,?)", (guild_id, discord_id, display_name, date.today().isoformat()))
+            conn.execute("UPDATE students SET display_name=? WHERE id=?", (display_name, row["id"]))
+            return int(row["id"])
+        cur = conn.execute(
+            "INSERT INTO students(guild_id,discord_id,display_name,created_at) VALUES(?,?,?,?)",
+            (guild_id, discord_id, display_name, date.today().isoformat()),
+        )
         return int(cur.lastrowid)
 
 
 def find_class(guild_id: int, academic_year_id: int, role_name: str) -> sqlite3.Row | None:
     initialize_database()
     with _connect() as conn:
-        return conn.execute("SELECT * FROM classes WHERE guild_id=? AND academic_year_id=? AND role_name=? LIMIT 1", (guild_id, academic_year_id, role_name)).fetchone()
+        return conn.execute(
+            "SELECT * FROM classes WHERE guild_id=? AND academic_year_id=? AND role_name=? LIMIT 1",
+            (guild_id, academic_year_id, role_name),
+        ).fetchone()
 
 
 def enroll_student(guild_id: int, student_id: int, class_id: int) -> None:
     today = date.today().isoformat()
     with _connect() as conn:
-        conn.execute("UPDATE enrollments SET end_date=?, status='transferred' WHERE student_id=? AND status='active'", (today, student_id))
-        conn.execute("INSERT INTO enrollments(student_id,class_id,start_date,status) VALUES(?,?,?,'active')", (student_id, class_id, today))
-        conn.execute("UPDATE students SET status='active' WHERE id=? AND guild_id=?", (student_id, guild_id))
+        conn.execute(
+            "UPDATE enrollments SET end_date=?, status='transferred' WHERE student_id=? AND status='active'",
+            (today, student_id),
+        )
+        conn.execute(
+            "INSERT INTO enrollments(student_id,class_id,start_date,status) VALUES(?,?,?,'active')",
+            (student_id, class_id, today),
+        )
+        conn.execute(
+            "UPDATE students SET status='active' WHERE id=? AND guild_id=?",
+            (student_id, guild_id),
+        )
 
 
 def mark_student_left(guild_id: int, student_id: int) -> None:
     today = date.today().isoformat()
     with _connect() as conn:
-        conn.execute("UPDATE enrollments SET end_date=?, status='left_school' WHERE student_id=? AND status='active'", (today, student_id))
-        conn.execute("UPDATE students SET status='left_school' WHERE id=? AND guild_id=?", (student_id, guild_id))
+        conn.execute(
+            "UPDATE enrollments SET end_date=?, status='left_school' WHERE student_id=? AND status='active'",
+            (today, student_id),
+        )
+        conn.execute(
+            "UPDATE students SET status='left_school' WHERE id=? AND guild_id=?",
+            (student_id, guild_id),
+        )
 
 
 def get_student(guild_id: int, discord_id: int) -> sqlite3.Row | None:
     initialize_database()
-    with _connect() as conn: return conn.execute("SELECT * FROM students WHERE guild_id=? AND discord_id=?", (guild_id, discord_id)).fetchone()
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT * FROM students WHERE guild_id=? AND discord_id=?",
+            (guild_id, discord_id),
+        ).fetchone()
 
 
 def get_student_history(guild_id: int, discord_id: int) -> list[sqlite3.Row]:
     initialize_database()
     with _connect() as conn:
-        return conn.execute("""SELECT ay.name AS academic_year,c.level_name,c.stream_name,c.class_name,e.start_date,e.end_date,e.status FROM students s JOIN enrollments e ON e.student_id=s.id JOIN classes c ON c.id=e.class_id JOIN academic_years ay ON ay.id=c.academic_year_id WHERE s.guild_id=? AND s.discord_id=? ORDER BY e.start_date DESC""", (guild_id, discord_id)).fetchall()
+        return conn.execute(
+            """
+            SELECT ay.name AS academic_year,
+                   c.level_name,
+                   c.stream_name,
+                   c.class_name,
+                   e.start_date,
+                   e.end_date,
+                   e.status
+            FROM students s
+            JOIN enrollments e ON e.student_id=s.id
+            JOIN classes c ON c.id=e.class_id
+            JOIN academic_years ay ON ay.id=c.academic_year_id
+            WHERE s.guild_id=? AND s.discord_id=?
+            ORDER BY e.start_date DESC
+            """,
+            (guild_id, discord_id),
+        ).fetchall()
 
 
 initialize_database()
