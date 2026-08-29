@@ -1,9 +1,9 @@
-"""Centralized permission helpers for the scalable school server structure."""
+"""Centralized permission helpers for the school Discord structure."""
 
 from __future__ import annotations
 
 import discord
-
+from discord import app_commands
 
 ROLE_ADMIN = "Administration"
 ROLE_PROFESSOR = "Prof"
@@ -12,11 +12,32 @@ ROLE_STUDENT = "Élève"
 STREAM_ROLE_PREFIX = "Filière - "
 
 
+def management_check() -> app_commands.check:
+    """Allow the guild owner or members with the Administration role."""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        guild = interaction.guild
+        if guild is None:
+            return False
+        if interaction.user.id == guild.owner_id:
+            return True
+        admin_role = discord.utils.get(guild.roles, name=ROLE_ADMIN)
+        return admin_role is not None and admin_role in getattr(interaction.user, "roles", [])
+    return app_commands.check(predicate)
+
+
+def owner_only_check() -> app_commands.check:
+    """Allow only the Discord server owner."""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        return interaction.guild is not None and interaction.user.id == interaction.guild.owner_id
+    return app_commands.check(predicate)
+
+
 def administrator_overwrite() -> discord.PermissionOverwrite:
+    """Administration can manage the school structure, but is not a Discord super-admin."""
     return discord.PermissionOverwrite(
         view_channel=True, send_messages=True, read_message_history=True,
-        manage_channels=True, manage_permissions=True, manage_messages=True,
-        manage_threads=True, connect=True, speak=True, stream=True,
+        manage_channels=True, manage_permissions=True, manage_roles=True,
+        manage_messages=True, manage_threads=True, connect=True, speak=True, stream=True,
     )
 
 
@@ -26,7 +47,7 @@ def professor_general_overwrite() -> discord.PermissionOverwrite:
         create_public_threads=True, create_private_threads=True,
         send_messages_in_threads=True, manage_channels=False,
         manage_permissions=False, manage_messages=False, manage_threads=False,
-        connect=True, speak=True, stream=True,
+        manage_roles=False, connect=True, speak=True, stream=True,
     )
 
 
@@ -58,10 +79,6 @@ def student_overwrite(*, can_send: bool = True) -> discord.PermissionOverwrite:
 
 def hidden_overwrite() -> discord.PermissionOverwrite:
     return discord.PermissionOverwrite(view_channel=False)
-
-
-def teacher_role_overwrites(professor_role, female_professor_role, permission):
-    return {professor_role: permission, female_professor_role: permission}
 
 
 def general_area_overwrites(everyone, admin_role, professor_role, female_professor_role, student_role):
