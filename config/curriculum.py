@@ -1,4 +1,4 @@
-"""Academic curriculum for the stream-based school Discord structure."""
+"""Academic curriculum and display names for the stream-based school Discord structure."""
 
 from __future__ import annotations
 
@@ -30,6 +30,48 @@ ECONOMICS = [
     "Économie et Organisation Administrative des Entreprises", "Comptabilité et Mathématiques financières",
     "Économie générale et Statistiques", "Droit", "Informatique de gestion",
 ]
+
+# Official/complete subject names remain the internal canonical values.
+# These shorter names are used only for Discord channel/role display.
+SUBJECT_DISPLAY_NAMES = {
+    "Mathématiques": "Math",
+    "Physique et Chimie": "PC",
+    "Sciences de la Vie et de la Terre (SVT)": "SVT",
+    "Arabe": "العربية",
+    "Français": "Français",
+    "Anglais": "English",
+    "Histoire Géographie": "الاجتماعيات",
+    "Education Islamique": "التربية الإسلامية",
+    "Philosophie": "الفلسفة",
+    "Sciences de l'ingénieur": "Sc. Ingénieur",
+    "Informatique": "Informatique",
+    "Économie et Organisation Administrative des Entreprises": "Économie & Organisation",
+    "Comptabilité et Mathématiques financières": "Comptabilité & Maths Fi.",
+    "Économie générale et Statistiques": "Économie & Stats",
+    "Droit": "Droit",
+    "Informatique de gestion": "Info. Gestion",
+    "Sciences Végétales et Animales (SVA)": "SVA",
+}
+
+SUBJECT_INTERNAL_CODES = {
+    "Mathématiques": "Math",
+    "Physique et Chimie": "PC",
+    "Sciences de la Vie et de la Terre (SVT)": "SVT",
+    "Arabe": "Arabe",
+    "Français": "Francais",
+    "Anglais": "English",
+    "Histoire Géographie": "Sociales",
+    "Education Islamique": "Islamique",
+    "Philosophie": "Philo",
+    "Sciences de l'ingénieur": "SI",
+    "Informatique": "Info",
+    "Économie et Organisation Administrative des Entreprises": "Economie-Organisation",
+    "Comptabilité et Mathématiques financières": "Comptabilite-MathsFi",
+    "Économie générale et Statistiques": "Economie-Stats",
+    "Droit": "Droit",
+    "Informatique de gestion": "Info-Gestion",
+    "Sciences Végétales et Animales (SVA)": "SVA",
+}
 
 CURRICULUM = {
     "niveaux": {
@@ -90,23 +132,7 @@ EXAM_CHANNELS = {
 }
 
 SUBJECT_TAGS = {
-    "Mathématiques": "Mathématiques",
-    "Physique et Chimie": "Physique-Chimie",
-    "Sciences de la Vie et de la Terre (SVT)": "SVT",
-    "Sciences de l'ingénieur": "Sc. ingénieur",
-    "Arabe": "Arabe",
-    "Français": "Français",
-    "Anglais": "Anglais",
-    "Histoire Géographie": "Histoire-Géo",
-    "Education Islamique": "Éducation islamique",
-    "Philosophie": "Philosophie",
-    "Informatique": "Informatique",
-    "Économie et Organisation Administrative des Entreprises": "Économie & Organisation",
-    "Comptabilité et Mathématiques financières": "Comptabilité & Maths fi.",
-    "Économie générale et Statistiques": "Économie générale & Stats",
-    "Droit": "Droit",
-    "Informatique de gestion": "Informatique de gestion",
-    "Sciences Végétales et Animales (SVA)": "SVA",
+    subject: display for subject, display in SUBJECT_DISPLAY_NAMES.items()
 }
 
 FORUM_MAX_TAGS = 20
@@ -141,5 +167,13 @@ def get_level_subjects(level_name: str) -> list[str]:
     return subjects
 
 
+def get_subject_display_name(subject: str) -> str:
+    return SUBJECT_DISPLAY_NAMES.get(subject, subject)
+
+
+def get_subject_internal_code(subject: str) -> str:
+    return SUBJECT_INTERNAL_CODES.get(subject, subject[:30])
+
+
 def get_subject_tag(subject: str) -> str:
-    return SUBJECT_TAGS.get(subject, subject[:50])
+    return get_subject_display_name(subject)
