@@ -33,13 +33,11 @@ from services.permissions import (
 CATEGORY_GENERAL = "🏢・INFORMATIONS & ADMINISTRATION"
 CATEGORY_PROFESSORS = "👨‍🏫・ESPACE PROFESSEURS"
 CATEGORY_VOICE = "🔊・SALLES VIRTUELLES"
-
 LEVEL_CATEGORY_NAMES = {
     "Tronc Commun": "📘・TRONC COMMUN",
     "1ère Année Bac": "1️⃣・1BAC",
     "2ème Année Bac": "2️⃣・2BAC",
 }
-
 STREAM_EMOJIS = {
     "Tronc Commun Scientifique": "🔬",
     "Tronc Commun Lettres": "📩",
@@ -86,7 +84,6 @@ def _stream_role_name(level_name: str, stream_name: str) -> str:
 def _subject_role_name(level_name: str, stream_name: str, subject: str) -> str:
     stream_code = get_stream_abbreviation(level_name, stream_name)
     subject_code = get_subject_internal_code(subject)
-    # Discord role names have a 100-character limit; these codes are intentionally compact.
     return f"{SUBJECT_ROLE_PREFIX}{stream_code} - {subject_code}"[:100]
 
 
@@ -102,18 +99,59 @@ class BuildStats:
 
 
 class ServerBuilder:
-    """Build one category per level and visually group each selected stream with a locked voice header."""
+    """Build one category per level; stream headers are locked non-chat voice channels."""
 
     def __init__(self, guild: discord.Guild) -> None:
         self.guild = guild
         self.stats = BuildStats()
 
+    @staticmethod
+    def _planned_channel_names(level: dict) -> set[str]:
+        names: set[str] = set()
+        level_name = level["name"]
+        for stream in level.get("streams", []):
+            stream_name = stream["name"]
+            code = stream.get("abbreviation") or get_stream_abbreviation(level_name, stream_name)
+            names.update({
+                _stream_header_name(stream_name, code),
+                f"📌-{code}・informations",
+                f"🗓️-{code}・emploi-du-temps",
+                f"📝-{code}・examens",
+            })
+            names.update(_subject_channel_name(code, subject) for subject in stream.get("subjects", []))
+        return names
+
+    def _validate_capacity(self, selected: dict) -> None:
+        """Discord currently limits each category to 50 channels and the server to 500 channels."""
+        total_new_channels = 0
+        for level in selected.get("levels", []):
+            category_name = _level_category_name(level["name"])
+            category = discord.utils.find(
+                lambda item: isinstance(item, discord.CategoryChannel) and item.name == category_name,
+                self.guild.categories,
+            )
+            existing_names = {channel.name for channel in category.channels} if category else set()
+            planned_names = self._planned_channel_names(level)
+            projected = (len(category.channels) if category else 0) + len(planned_names - existing_names)
+            if projected > 50:
+                raise ValueError(
+                    f"La catégorie `{category_name}` dépasserait la limite Discord de 50 salons ({projected}). "
+                    "Réduis le nombre de filières sélectionnées dans ce niveau."
+                )
+            total_new_channels += len(planned_names - existing_names)
+
+        current_total = len(self.guild.channels)
+        if current_total + total_new_channels > 500:
+            raise ValueError(
+                f"La construction dépasserait la limite Discord de 500 salons ({current_total + total_new_channels})."
+            )
+
     async def build(self, selected: dict) -> BuildStats:
+        self._validate_capacity(selected)
         roles = await self._ensure_main_roles()
         await self._ensure_general_area(roles)
         await self._ensure_professor_area(roles)
         voice_category = await self._get_or_create_category(CATEGORY_VOICE)
-
         for level in selected.get("levels", []):
             await self._build_level(level, roles, voice_category)
         return self.stats
@@ -137,9 +175,7 @@ class ServerBuilder:
                     reason="School manager main role",
                 )
                 self.stats.roles_created += 1
-        
             if role_name == ROLE_ADMIN:
-                # Never grant the Discord Administrator permission to a reusable school role.
                 await role.edit(
                     permissions=discord.Permissions(
                         view_channel=True,
@@ -202,18 +238,13 @@ class ServerBuilder:
         self.stats.categories_created += 1
         return category
 
-    async def _get_or_create_text(self, category, name, *, topic, overwrites, preserve_member_overwrites=False):
+    async def _get_or_create_text(self, category, name, *, topic, overwrites):
         channel = discord.utils.find(
             lambda item: isinstance(item, discord.TextChannel) and item.name == name,
             category.channels,
         )
         if channel:
-            effective = dict(overwrites)
-            if preserve_member_overwrites:
-                for target, permission in channel.overwrites.items():
-                    if isinstance(target, discord.Member):
-                        effective[target] = permission
-            await channel.edit(topic=topic, overwrites=effective, reason="School manager reconciliation")
+            await channel.edit(topic=topic, overwrites=overwrites, reason="School manager reconciliation")
             return channel
         channel = await category.create_text_channel(
             name=name,
@@ -279,23 +310,12 @@ class ServerBuilder:
     async def _build_level(self, level, roles, voice_category):
         level_name = level["name"]
         level_category = await self._get_or_create_category(_level_category_name(level_name))
-
-        # Discord supports categories, not nested categories. Each stream therefore gets a
-        # locked, non-joinable voice header followed by its channels inside the level category.
         for stream in level.get("streams", []):
             stream_name = stream["name"]
             stream_code = stream.get("abbreviation") or get_stream_abbreviation(level_name, stream_name)
             subjects = list(stream.get("subjects", [])) or get_stream_subjects(level_name, stream_name)
             stream_role = await self._ensure_stream_role(level_name, stream_name)
 
-            stream_overwrites = stream_area_overwrites(
-                self.guild.default_role,
-                roles[ROLE_ADMIN],
-                roles[ROLE_PROFESSOR],
-                roles[ROLE_PROFESSOR_FEMALE],
-                roles[ROLE_STUDENT],
-                stream_role,
-            )
             announcements = stream_announcement_overwrites(
                 self.guild.default_role,
                 roles[ROLE_ADMIN],
