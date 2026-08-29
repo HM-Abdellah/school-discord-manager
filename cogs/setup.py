@@ -1,4 +1,4 @@
-"""Interactive setup wizard for the compact school Discord architecture."""
+"""Interactive setup wizard for the stream-based school Discord architecture."""
 
 from __future__ import annotations
 
@@ -9,14 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config.curriculum import (
-    MAX_CLASSES_PER_STREAM,
-    get_level,
-    get_levels,
-    get_stream_class_names,
-    get_stream_subjects,
-    get_streams,
-)
+from config.curriculum import get_level, get_levels, get_stream_code, get_stream_subjects, get_streams
 from services.server_builder import ServerBuilder
 from services.storage import get_active_academic_year, save_guild_config
 
@@ -39,19 +32,11 @@ class SetupBaseView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(
-                "❌ Cette configuration appartient à un autre administrateur.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message("❌ Cette configuration appartient à un autre administrateur.", ephemeral=True)
             return False
         return True
 
-    async def on_error(
-        self,
-        interaction: discord.Interaction,
-        error: Exception,
-        item: discord.ui.Item[Any],
-    ) -> None:
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item[Any]) -> None:
         message = f"❌ Erreur pendant la configuration : `{type(error).__name__}: {error}`"
         try:
             if interaction.response.is_done():
@@ -70,7 +55,6 @@ class SetupBaseView(discord.ui.View):
 class LevelSelect(discord.ui.Select):
     def __init__(self, view: "LevelView") -> None:
         self.parent_view = view
-        levels = get_levels()
         options = [
             discord.SelectOption(
                 label=name,
@@ -78,14 +62,9 @@ class LevelSelect(discord.ui.Select):
                 description=f"{len(get_streams(name))} filière(s)",
                 emoji=("📚" if name == "Tronc Commun" else "1️⃣" if "1ère" in name else "2️⃣"),
             )
-            for name in levels
+            for name in get_levels()
         ]
-        super().__init__(
-            placeholder="Sélectionne les niveaux présents...",
-            min_values=1,
-            max_values=len(options),
-            options=options,
-        )
+        super().__init__(placeholder="Sélectionne les niveaux présents...", min_values=1, max_values=len(options), options=options)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         selected = [name for name in get_levels() if name in self.values]
@@ -93,7 +72,7 @@ class LevelSelect(discord.ui.Select):
             await interaction.response.send_message("❌ Sélectionne au moins un niveau.", ephemeral=True)
             return
         self.parent_view.selected_level_names = selected
-        await self.parent_view.show_current_level(interaction, reset=True)
+        await self.parent_view.show_current_level(interaction)
 
 
 class LevelView(SetupBaseView):
@@ -104,30 +83,20 @@ class LevelView(SetupBaseView):
         self.completed_levels: list[dict[str, Any]] = []
         self.add_item(LevelSelect(self))
 
-    async def show_current_level(self, interaction: discord.Interaction, *, reset: bool = False) -> None:
-        if reset:
-            self.current_level_index = 0
-            self.completed_levels = []
+    async def show_current_level(self, interaction: discord.Interaction) -> None:
         if not self.selected_level_names:
             await interaction.response.send_message("❌ Aucun niveau sélectionné. Relance `/setup`.", ephemeral=True)
-            return
-        if not 0 <= self.current_level_index < len(self.selected_level_names):
-            await interaction.response.send_message("❌ Étape invalide. Relance `/setup`.", ephemeral=True)
             return
         level_name = self.selected_level_names[self.current_level_index]
         await interaction.response.edit_message(
             content=(
                 f"## 📚 {level_name}\n\n"
-                f"Niveau **{self.current_level_index + 1}/{len(self.selected_level_names)}**\n"
-                f"Filières disponibles : **{len(get_streams(level_name))}**\n\n"
-                "Sélectionne les filières présentes dans ton établissement."
+                f"Niveau **{self.current_level_index + 1}/{len(self.selected_level_names)}**\n\n"
+                "Sélectionne les **filières** présentes.\n"
+                "⚠️ Aucune classe ne sera créée comme rôle ou channel.\n"
+                "Chaque filière aura un espace partagé pour tous ses groupes/classes."
             ),
-            view=StreamView(
-                self.owner_id,
-                list(self.selected_level_names),
-                self.current_level_index,
-                list(self.completed_levels),
-            ),
+            view=StreamView(self.owner_id, self.selected_level_names, self.current_level_index, self.completed_levels),
         )
 
 
@@ -136,30 +105,20 @@ class StreamSelect(discord.ui.Select):
         self.parent_view = view
         options = [
             discord.SelectOption(
-                label=name,
+                label=f"{get_stream_code(view.current_level, name)} — {name}",
                 value=name,
-                description=(
-                    f"{len(get_stream_subjects(view.current_level, name))} matières · "
-                    f"{len(get_stream_class_names(view.current_level, name))} recommandées"
-                ),
+                description=f"{len(get_stream_subjects(view.current_level, name))} matières partagées",
             )
             for name in get_streams(view.current_level)
         ]
-        super().__init__(
-            placeholder="Sélectionne les filières...",
-            min_values=1,
-            max_values=len(options),
-            options=options,
-        )
+        super().__init__(placeholder="Sélectionne les filières...", min_values=1, max_values=len(options), options=options)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         selected = [name for name in get_streams(self.parent_view.current_level) if name in self.values]
         if not selected:
             await interaction.response.send_message("❌ Sélectionne au moins une filière.", ephemeral=True)
             return
-        self.parent_view.selected_streams = selected
-        self.parent_view.stream_index = 0
-        await self.parent_view.ask_class_count(interaction)
+        await self.parent_view.finish_level(interaction, selected)
 
 
 class StreamView(SetupBaseView):
@@ -169,102 +128,34 @@ class StreamView(SetupBaseView):
         self.level_index = level_index
         self.completed_levels = list(completed_levels)
         self.current_level = self.selected_level_names[level_index]
-        self.selected_streams: list[str] = []
-        self.stream_index = 0
-        self.stream_counts: list[dict[str, Any]] = []
         self.add_item(StreamSelect(self))
 
-    async def ask_class_count(self, interaction: discord.Interaction) -> None:
-        if not self.selected_streams or not 0 <= self.stream_index < len(self.selected_streams):
-            await interaction.response.send_message("❌ Sélection de filière invalide. Relance `/setup`.", ephemeral=True)
-            return
-        stream_name = self.selected_streams[self.stream_index]
-        subjects = get_stream_subjects(self.current_level, stream_name)
-        recommended = len(get_stream_class_names(self.current_level, stream_name))
-        await interaction.response.edit_message(
-            content=(
-                f"## 📚 {self.current_level}\n\n"
-                f"Filière : **{stream_name}**\n"
-                f"Étape : **{self.stream_index + 1}/{len(self.selected_streams)}**\n"
-                f"Matières : **{len(subjects)}**\n"
-                f"⭐ Nombre recommandé : **{recommended}**\n\n"
-                "Choisis le nombre réel de classes."
-            ),
-            view=ClassCountView(self.owner_id, self, stream_name, recommended),
-        )
-
-    async def save_class_count(self, interaction: discord.Interaction, stream_name: str, class_count: int) -> None:
-        if not 1 <= class_count <= MAX_CLASSES_PER_STREAM:
-            await interaction.response.send_message(
-                f"❌ Le nombre de classes doit être entre 1 et {MAX_CLASSES_PER_STREAM}.", ephemeral=True
-            )
-            return
-        if stream_name not in self.selected_streams:
-            await interaction.response.send_message("❌ Cette filière n'est plus valide. Relance `/setup`.", ephemeral=True)
-            return
-
-        subjects = get_stream_subjects(self.current_level, stream_name)
-        classes = [f"Classe {i}" for i in range(1, class_count + 1)]
-        self.stream_counts.append({"name": stream_name, "class_count": class_count, "classes": classes, "subjects": subjects})
-        self.stream_index += 1
-
-        if self.stream_index < len(self.selected_streams):
-            await self.ask_class_count(interaction)
-            return
-
+    async def finish_level(self, interaction: discord.Interaction, selected_streams: list[str]) -> None:
         level = get_level(self.current_level)
-        completed_levels = list(self.completed_levels)
-        completed_levels.append({"name": self.current_level, "abbreviation": level["abbreviation"], "streams": list(self.stream_counts)})
-        next_level_index = self.level_index + 1
+        streams = [
+            {
+                "name": stream_name,
+                "code": get_stream_code(self.current_level, stream_name),
+                "subjects": get_stream_subjects(self.current_level, stream_name),
+            }
+            for stream_name in selected_streams
+        ]
+        completed = list(self.completed_levels)
+        completed.append({"name": self.current_level, "abbreviation": level["abbreviation"], "streams": streams})
 
-        if next_level_index < len(self.selected_level_names):
-            next_level = self.selected_level_names[next_level_index]
+        next_index = self.level_index + 1
+        if next_index < len(self.selected_level_names):
+            next_level = self.selected_level_names[next_index]
             await interaction.response.edit_message(
-                content=(
-                    f"## ✅ {self.current_level} configuré\n\n"
-                    f"Passage au niveau suivant : **{next_level}**\n"
-                    f"Niveau **{next_level_index + 1}/{len(self.selected_level_names)}**"
-                ),
-                view=StreamView(self.owner_id, self.selected_level_names, next_level_index, completed_levels),
+                content=f"## ✅ {self.current_level} configuré\n\nPassage au niveau suivant : **{next_level}**",
+                view=StreamView(self.owner_id, self.selected_level_names, next_index, completed),
             )
             return
 
         guild_id = interaction.guild.id if interaction.guild else 0
-        config = {"academic_year": current_year_for(guild_id), "levels": completed_levels}
+        config = {"academic_year": current_year_for(guild_id), "levels": completed}
         summary = SummaryView(self.owner_id, config)
         await interaction.response.edit_message(content=summary.format_summary(), view=summary)
-
-
-class ClassCountSelect(discord.ui.Select):
-    def __init__(self, view: "ClassCountView") -> None:
-        self.parent_view = view
-        recommended = max(1, min(view.default_count, MAX_CLASSES_PER_STREAM))
-        options = [
-            discord.SelectOption(
-                label=f"{number}{' ⭐' if number == recommended else ''}",
-                value=str(number),
-                description=("Nombre recommandé" if number == recommended else f"{number} classe(s)"),
-            )
-            for number in range(1, MAX_CLASSES_PER_STREAM + 1)
-        ]
-        super().__init__(placeholder="Nombre de classes...", min_values=1, max_values=1, options=options)
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        try:
-            number = int(self.values[0])
-        except (ValueError, IndexError):
-            await interaction.response.send_message("❌ Nombre de classes invalide.", ephemeral=True)
-            return
-        await self.parent_view.parent.save_class_count(interaction, self.parent_view.stream_name, number)
-
-
-class ClassCountView(SetupBaseView):
-    def __init__(self, owner_id: int, parent: StreamView, stream_name: str, default_count: int) -> None:
-        super().__init__(owner_id)
-        self.parent = parent
-        self.stream_name = stream_name
-        self.default_count = max(1, min(default_count, MAX_CLASSES_PER_STREAM))
-        self.add_item(ClassCountSelect(self))
 
 
 class SummaryView(SetupBaseView):
@@ -277,31 +168,34 @@ class SummaryView(SetupBaseView):
         build.callback = self.build_callback
         restart.callback = self.restart_callback
         cancel.callback = self.cancel_callback
-        self.add_item(build); self.add_item(restart); self.add_item(cancel)
-
-    def calculate(self) -> tuple[int, int, int]:
-        total_classes = sum(int(s["class_count"]) for l in self.config.get("levels", []) for s in l.get("streams", []))
-        levels = len(self.config.get("levels", []))
-        estimated_channels = 13 + (6 * levels)
-        return total_classes, levels, estimated_channels
+        self.add_item(build)
+        self.add_item(restart)
+        self.add_item(cancel)
 
     def format_summary(self) -> str:
-        total_classes, levels, channels = self.calculate()
+        levels = self.config.get("levels", [])
+        stream_count = sum(len(level.get("streams", [])) for level in levels)
         lines = [
-            "## ✅ Configuration prête", "", f"📅 Année scolaire : **{self.config.get('academic_year', 'non définie')}**",
-            "", "Matières = **tags Forum** · Classes = **rôles**.", "",
+            "## ✅ Configuration prête",
+            "",
+            f"📅 Année scolaire : **{self.config.get('academic_year', 'non définie')}**",
+            "",
+            "**Organisation :** une catégorie partagée par filière.",
+            "**Aucune classe ne sera créée comme rôle ou channel.**",
+            "**Matières :** tags Forum à l'intérieur de la filière.",
+            "**Emploi du temps :** un channel par filière pour les horaires de toutes ses classes/groupes.",
+            "",
         ]
-        for level in self.config.get("levels", []):
+        for level in levels:
             lines.append(f"### 📚 {level['name']}")
             for stream in level.get("streams", []):
-                lines.append(f"• **{stream['name']}** → {stream['class_count']} classe(s) → {len(stream.get('subjects', []))} tags matière(s)")
+                lines.append(f"• **{stream['code']}** — {stream['name']} → {len(stream.get('subjects', []))} matières")
             lines.append("")
         lines.extend([
             "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            f"**Niveaux :** {levels}",
-            f"**Classes :** {total_classes}",
-            f"**Channels structurants estimés :** ~{channels}",
-            "**Forums pédagogiques :** 3 par niveau",
+            f"**Niveaux :** {len(levels)}",
+            f"**Filières :** {stream_count}",
+            "**Par filière :** informations · emploi du temps · examens · cours · questions · devoirs",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━",
         ])
         return "\n".join(lines)
@@ -323,12 +217,13 @@ class SummaryView(SetupBaseView):
         except Exception as exc:
             await interaction.edit_original_response(content=f"❌ Erreur : `{type(exc).__name__}: {exc}`")
             return
+
         await interaction.edit_original_response(
             content=(
                 "# ✅ Serveur construit avec succès\n\n"
                 f"• Niveaux : **{stats.levels_processed}**\n"
-                f"• Classes : **{stats.classes_processed}**\n"
-                f"• Rôles : **{stats.roles_created}**\n"
+                f"• Filières : **{stats.streams_processed}**\n"
+                f"• Rôles créés : **{stats.roles_created}**\n"
                 f"• Catégories : **{stats.categories_created}**\n"
                 f"• Texte : **{stats.text_channels_created}**\n"
                 f"• Forums : **{stats.forums_created}**\n"
@@ -350,11 +245,14 @@ class Setup(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    @app_commands.command(name="setup", description="Configurer les niveaux, filières et classes du serveur scolaire.")
+    @app_commands.command(name="setup", description="Configurer les niveaux et filières du serveur scolaire.")
     @app_commands.checks.has_permissions(administrator=True)
     async def setup_command(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_message(
-            f"## 🏫 School Discord Manager\n\nSélectionne les niveaux présents.\nLes matières seront des **tags Forum**.\n\n📅 Année active : **{current_year_for(interaction.guild.id)}**",
+            f"## 🏫 School Discord Manager\n\n"
+            "Sélectionne les niveaux présents.\n"
+            "Chaque filière aura son espace Discord partagé.\n\n"
+            f"📅 Année active : **{current_year_for(interaction.guild.id)}**",
             view=LevelView(interaction.user.id),
             ephemeral=True,
         )
