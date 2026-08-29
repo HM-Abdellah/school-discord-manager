@@ -8,6 +8,7 @@ import discord
 ROLE_ADMIN = "Administration"
 ROLE_PROFESSOR = "Professeur"
 ROLE_STUDENT = "Élève"
+STREAM_ROLE_PREFIX = "Filière - "
 
 
 def administrator_overwrite() -> discord.PermissionOverwrite:
@@ -64,11 +65,7 @@ def general_area_overwrites(
     student_role: discord.Role,
 ) -> dict[discord.Role, discord.PermissionOverwrite]:
     return {
-        everyone: discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=False,
-            read_message_history=True,
-        ),
+        everyone: discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True),
         student_role: student_overwrite(can_send=False),
         professor_role: professor_overwrite(),
         admin_role: administrator_overwrite(),
@@ -89,32 +86,32 @@ def teacher_area_overwrites(
     }
 
 
-def level_area_overwrites(
+def stream_area_overwrites(
     everyone: discord.Role,
     admin_role: discord.Role,
     professor_role: discord.Role,
-    class_roles: list[discord.Role],
+    student_role: discord.Role,
+    stream_role: discord.Role,
 ) -> dict[discord.Role, discord.PermissionOverwrite]:
-    """Expose one level area to its class roles without creating class channels."""
-    overwrites: dict[discord.Role, discord.PermissionOverwrite] = {
+    """Allow only the selected stream role, professors, and administrators into a stream area."""
+    return {
         everyone: hidden_overwrite(),
+        student_role: hidden_overwrite(),
         professor_role: professor_overwrite(),
         admin_role: administrator_overwrite(),
+        stream_role: student_overwrite(can_send=True),
     }
-    for class_role in class_roles:
-        overwrites[class_role] = student_overwrite(can_send=True)
-    return overwrites
 
 
-def level_announcement_overwrites(
+def stream_announcement_overwrites(
     everyone: discord.Role,
     admin_role: discord.Role,
     professor_role: discord.Role,
-    class_roles: list[discord.Role],
+    student_role: discord.Role,
+    stream_role: discord.Role,
 ) -> dict[discord.Role, discord.PermissionOverwrite]:
-    overwrites = level_area_overwrites(everyone, admin_role, professor_role, class_roles)
-    for role in class_roles:
-        overwrites[role] = student_overwrite(can_send=False)
+    overwrites = stream_area_overwrites(everyone, admin_role, professor_role, student_role, stream_role)
+    overwrites[stream_role] = student_overwrite(can_send=False)
     return overwrites
 
 
@@ -122,22 +119,13 @@ def public_voice_overwrites(
     everyone: discord.Role,
     admin_role: discord.Role,
     professor_role: discord.Role,
-    class_roles: list[discord.Role],
+    student_role: discord.Role,
+    stream_role: discord.Role,
 ) -> dict[discord.Role, discord.PermissionOverwrite]:
-    overwrites: dict[discord.Role, discord.PermissionOverwrite] = {
+    return {
         everyone: hidden_overwrite(),
-        professor_role: discord.PermissionOverwrite(
-            view_channel=True, connect=True, speak=True, stream=True
-        ),
-        admin_role: discord.PermissionOverwrite(
-            view_channel=True, connect=True, speak=True, stream=True
-        ),
+        student_role: hidden_overwrite(),
+        professor_role: discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, stream=True),
+        admin_role: discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, stream=True),
+        stream_role: discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, stream=True),
     }
-    for class_role in class_roles:
-        overwrites[class_role] = discord.PermissionOverwrite(
-            view_channel=True,
-            connect=True,
-            speak=True,
-            stream=True,
-        )
-    return overwrites
