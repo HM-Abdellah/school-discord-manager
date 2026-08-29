@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import date
 
@@ -61,11 +62,8 @@ class TeacherCommands(commands.Cog):
             member_id = int(match.group(1))
             if member_id not in ids:
                 ids.append(member_id)
-        members: list[discord.Member] = []
-        for member_id in ids:
-            member = interaction.guild.get_member(member_id)
-            if member is not None:
-                members.append(member)
+        members = [interaction.guild.get_member(member_id) for member_id in ids]
+        members = [member for member in members if member is not None]
         if not members:
             await interaction.response.send_message(
                 "❌ Aucun membre valide détecté. Mentionne plusieurs professeurs dans `teachers`.",
@@ -87,10 +85,7 @@ class TeacherCommands(commands.Cog):
                 )
             overwrites = dict(channel.overwrites)
             overwrites[role] = professor_subject_overwrite()
-            await channel.edit(
-                overwrites=overwrites,
-                reason="School manager subject teacher assignment",
-            )
+            await channel.edit(overwrites=overwrites, reason="School manager subject teacher assignment")
             await asyncio.gather(
                 *(member.add_roles(role, reason=f"Teacher assignment for {channel.name}") for member in members)
             )
