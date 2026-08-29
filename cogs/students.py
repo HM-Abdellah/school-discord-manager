@@ -67,7 +67,14 @@ class StudentCommands(commands.Cog):
         if row is None:
             await interaction.response.send_message("❌ Élève non enregistré.", ephemeral=True); return
         mark_student_left(interaction.guild.id, int(row["id"]))
-        await interaction.response.send_message(f"✅ {student.mention} est marqué **sorti de l'établissement**. Son historique est conservé.", ephemeral=True)
+        school_roles = [r for r in student.roles if r.name.startswith(CLASS_ROLE_PREFIX)]
+        student_role = discord.utils.get(interaction.guild.roles, name=ROLE_STUDENT)
+        try:
+            if school_roles: await student.remove_roles(*school_roles, reason="Student left school")
+            if student_role and student_role in student.roles: await student.remove_roles(student_role, reason="Student left school")
+        except discord.Forbidden:
+            await interaction.response.send_message("⚠️ Historique enregistré, mais impossible de retirer les rôles. Vérifie la hiérarchie des rôles.", ephemeral=True); return
+        await interaction.response.send_message(f"✅ {student.mention} est marqué **sorti de l'établissement**. Ses rôles scolaires ont été retirés et son historique est conservé.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:
