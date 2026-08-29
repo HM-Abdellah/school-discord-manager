@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config.curriculum import get_level, get_levels, get_stream_code, get_stream_subjects, get_streams
+from config.curriculum import get_level, get_levels, get_stream_subjects, get_streams
 from services.server_builder import ServerBuilder
 from services.storage import get_active_academic_year, save_guild_config
 
@@ -92,9 +92,9 @@ class LevelView(SetupBaseView):
             content=(
                 f"## 📚 {level_name}\n\n"
                 f"Niveau **{self.current_level_index + 1}/{len(self.selected_level_names)}**\n\n"
-                "Sélectionne les **filières** présentes.\n"
-                "⚠️ Aucune classe ne sera créée comme rôle ou channel.\n"
-                "Chaque filière aura un espace partagé pour tous ses groupes/classes."
+                "Sélectionne uniquement les **filières présentes dans ton établissement**.\n"
+                "⚠️ Les codes/abréviations ne sont pas utilisés pour le moment.\n"
+                "Chaque filière sélectionnée aura un espace Discord partagé pour toutes ses classes/groupes."
             ),
             view=StreamView(self.owner_id, self.selected_level_names, self.current_level_index, self.completed_levels),
         )
@@ -105,13 +105,13 @@ class StreamSelect(discord.ui.Select):
         self.parent_view = view
         options = [
             discord.SelectOption(
-                label=f"{get_stream_code(view.current_level, name)} — {name}",
+                label=name,
                 value=name,
                 description=f"{len(get_stream_subjects(view.current_level, name))} matières partagées",
             )
             for name in get_streams(view.current_level)
         ]
-        super().__init__(placeholder="Sélectionne les filières...", min_values=1, max_values=len(options), options=options)
+        super().__init__(placeholder="Sélectionne les filières présentes dans ton établissement...", min_values=1, max_values=len(options), options=options)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         selected = [name for name in get_streams(self.parent_view.current_level) if name in self.values]
@@ -135,7 +135,6 @@ class StreamView(SetupBaseView):
         streams = [
             {
                 "name": stream_name,
-                "code": get_stream_code(self.current_level, stream_name),
                 "subjects": get_stream_subjects(self.current_level, stream_name),
             }
             for stream_name in selected_streams
@@ -180,21 +179,22 @@ class SummaryView(SetupBaseView):
             "",
             f"📅 Année scolaire : **{self.config.get('academic_year', 'non définie')}**",
             "",
-            "**Organisation :** une catégorie partagée par filière.",
+            "**Organisation :** une catégorie par filière sélectionnée.",
             "**Aucune classe ne sera créée comme rôle ou channel.**",
-            "**Matières :** tags Forum à l'intérieur de la filière.",
+            "**Matières :** tags Forum à l'intérieur de chaque filière.",
             "**Emploi du temps :** un channel par filière pour les horaires de toutes ses classes/groupes.",
+            "**Codes/abréviations :** pas encore utilisés.",
             "",
         ]
         for level in levels:
             lines.append(f"### 📚 {level['name']}")
             for stream in level.get("streams", []):
-                lines.append(f"• **{stream['code']}** — {stream['name']} → {len(stream.get('subjects', []))} matières")
+                lines.append(f"• **{stream['name']}** → {len(stream.get('subjects', []))} matières")
             lines.append("")
         lines.extend([
             "━━━━━━━━━━━━━━━━━━━━━━━━━━",
             f"**Niveaux :** {len(levels)}",
-            f"**Filières :** {stream_count}",
+            f"**Filières sélectionnées :** {stream_count}",
             "**Par filière :** informations · emploi du temps · examens · cours · questions · devoirs",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━",
         ])
@@ -250,8 +250,8 @@ class Setup(commands.Cog):
     async def setup_command(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_message(
             f"## 🏫 School Discord Manager\n\n"
-            "Sélectionne les niveaux présents.\n"
-            "Chaque filière aura son espace Discord partagé.\n\n"
+            "Sélectionne les niveaux présents, puis uniquement les filières présentes dans ton établissement.\n"
+            "Les noms complets des filières seront utilisés dans le serveur pour le moment.\n\n"
             f"📅 Année active : **{current_year_for(interaction.guild.id)}**",
             view=LevelView(interaction.user.id),
             ephemeral=True,
