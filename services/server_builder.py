@@ -1,8 +1,7 @@
-"""Build a compact, role-driven Discord school structure."""
+"""Build the school Discord server around shared academic streams."""
 
 from __future__ import annotations
 
-import asyncio
 import re
 
 import discord
@@ -12,8 +11,7 @@ from config.curriculum import (
     FORUM_MAX_TAGS,
     GENERAL_CHANNELS,
     PROFESSOR_CHANNELS,
-    get_level_subjects,
-    get_stream_class_names,
+    get_stream_code,
     get_stream_subjects,
     get_subject_tag,
 )
@@ -22,21 +20,16 @@ from services.permissions import (
     ROLE_PROFESSOR,
     ROLE_STUDENT,
     general_area_overwrites,
-    level_announcement_overwrites,
-    level_area_overwrites,
     public_voice_overwrites,
     teacher_area_overwrites,
+    level_area_overwrites,
+    level_announcement_overwrites,
 )
+
 
 CATEGORY_GENERAL = "🏢・INFORMATIONS & ADMINISTRATION"
 CATEGORY_PROFESSORS = "👨‍🏫・ESPACE PROFESSEURS"
 CATEGORY_VOICE = "🔊・SALLES VIRTUELLES"
-
-LEVEL_MARKERS = {
-    "Tronc Commun": "📚・TRONC COMMUN",
-    "1ère Année Bac": "📚・1ÈRE ANNÉE BAC",
-    "2ème Année Bac": "📚・2ÈME ANNÉE BAC",
-}
 
 
 def _safe_name(value: str, max_length: int = 90) -> str:
@@ -55,10 +48,11 @@ class BuildStats:
         self.voice_channels_created = 0
         self.classes_processed = 0
         self.levels_processed = 0
+        self.streams_processed = 0
 
 
 class ServerBuilder:
-    """Create a compact structure: level areas + forums + class roles."""
+    """Create one shared academic area per stream; classes are not Discord resources."""
 
     def __init__(self, guild: discord.Guild) -> None:
         self.guild = guild
@@ -68,8 +62,10 @@ class ServerBuilder:
         roles = await self._ensure_main_roles()
         await self._ensure_general_area(roles)
         await self._ensure_professor_area(roles)
+
         for level in selected.get("levels", []):
             await self._build_level(level, roles)
+
         await self._cleanup_legacy_subject_channels()
         return self.stats
 
@@ -110,7 +106,7 @@ class ServerBuilder:
             roles[role_name] = role
         return roles
 
-    async def _get_or_create_category(self, name: str, overwrites=None) -> discord.CategoryChannel:
+    async def _get_or_create_category(self, name, overwrites=None):
         category = discord.utils.find(
             lambda item: isinstance(item, discord.CategoryChannel) and item.name == name,
             self.guild.channels,
@@ -154,13 +150,13 @@ class ServerBuilder:
         self.stats.voice_channels_created += 1
         return channel
 
-    async def _get_or_create_forum(self, category, name, topic, overwrites, subject_tags):
+    async def _get_or_create_forum(self, category, name, topic, overwrites, subject_names):
         channel = discord.utils.find(
             lambda item: isinstance(item, discord.ForumChannel) and item.name == name,
             category.channels,
         )
         tag_names = []
-        for subject in subject_tags:
+        for subject in subject_names:
             tag = get_subject_tag(subject)
             if tag not in tag_names and len(tag_names) < FORUM_MAX_TAGS:
                 tag_names.append(tag[:50])
@@ -181,7 +177,7 @@ class ServerBuilder:
             overwrites=overwrites,
             available_tags=forum_tags,
             default_layout=discord.ForumLayoutType.list_view,
-            reason="School manager compact academic forum",
+            reason="School manager shared stream forum",
         )
         self.stats.forums_created += 1
         return channel
@@ -207,7 +203,8 @@ class ServerBuilder:
         )
         category = await self._get_or_create_category(CATEGORY_PROFESSORS, overwrites)
         await self._get_or_create_text(
-            category, PROFESSOR_CHANNELS["discussion"],
+            category,
+            PROFESSOR_CHANNELS["discussion"],
             topic="Espace privé de discussion et de coordination des professeurs.",
             overwrites=overwrites,
         )
@@ -215,76 +212,86 @@ class ServerBuilder:
 
     async def _build_level(self, level, roles):
         level_name = level["name"]
-        abbreviation = level["abbreviation"]
-        stream_data = level.get("streams", [])
-        class_roles = []
-
-        for stream in stream_data:
-            stream_name = stream["name"]
-            class_count = int(stream.get("class_count", len(stream.get("classes", [])) or 1))
-            configured_names = list(stream.get("classes", [])) or get_stream_class_names(level_name, stream_name)
-            for index in range(class_count):
-                class_name = configured_names[index] if index < len(configured_names) else f"Classe {index + 1}"
-                role_name = f"Élève - {abbreviation} - {stream_name} - {class_name}"
-                role = discord.utils.get(self.guild.roles, name=role_name)
-                if role is None:
-                    role = await self.guild.create_role(
-                        name=role_name, permissions=discord.Permissions.none(), colour=discord.Colour.teal(),
-                        mentionable=True, reason="School manager class role"
-                    )
-                    self.stats.roles_created += 1
-                class_roles.append(role)
-                self.stats.classes_processed += 1
-
-        overwrites = level_area_overwrites(
-            self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], class_roles
+        streams = level.get("streams", [])
+        level_overwrites = level_area_overwrites(
+            self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], [roles[ROLE_STUDENT]]
         )
         announcement_overwrites = level_announcement_overwrites(
-            self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], class_roles
-        )
-        category = await self._get_or_create_category(
-            LEVEL_MARKERS.get(level_name, f"📚・{level_name.upper()}"), overwrites
+            self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], [roles[ROLE_STUDENT]]
         )
 
-        subjects = get_level_subjects(level_name)
-        await self._get_or_create_text(
-            category, "📢-annonces", topic=f"Annonces officielles — {level_name}.", overwrites=announcement_overwrites
-        )
-        await self._get_or_create_text(
-            category, "🗓️-emploi-du-temps", topic=f"Emploi du temps, horaires et organisation — {level_name}.", overwrites=announcement_overwrites
-        )
-        await self._get_or_create_forum(
-            category, f"📚-cours-{_safe_name(abbreviation)}",
-            f"Cours et ressources pédagogiques de {level_name}.", overwrites, subjects
-        )
-        await self._get_or_create_forum(
-            category, f"💬-questions-{_safe_name(abbreviation)}",
-            f"Questions et discussions pédagogiques de {level_name}.", overwrites, subjects
-        )
-        await self._get_or_create_forum(
-            category, f"📝-devoirs-{_safe_name(abbreviation)}",
-            f"Devoirs, contrôles et examens de {level_name}.", overwrites, subjects
-        )
-        if level_name in EXAM_CHANNELS:
-            await self._get_or_create_text(
-                category, EXAM_CHANNELS[level_name],
-                topic="Préparation à l'examen régional." if level_name == "1ère Année Bac" else "Préparation à l'examen national.",
-                overwrites=announcement_overwrites,
+        for stream in streams:
+            stream_name = stream["name"]
+            code = stream.get("code") or get_stream_code(level_name, stream_name)
+            subjects = list(stream.get("subjects", [])) or get_stream_subjects(level_name, stream_name)
+
+            # Every stream gets its own shared category. There are NO class roles/channels.
+            category = await self._get_or_create_category(
+                f"🎓・{code}",
+                level_overwrites,
             )
 
-        voice_category = await self._get_or_create_category(CATEGORY_VOICE)
-        await self._get_or_create_voice(
-            voice_category,
-            f"🔊-{_safe_name(abbreviation)}-classe",
-            public_voice_overwrites(self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], class_roles),
-        )
+            await self._get_or_create_text(
+                category,
+                "📌-informations",
+                topic=f"Informations et organisation de la filière {code} — {stream_name}.",
+                overwrites=announcement_overwrites,
+            )
+            await self._get_or_create_text(
+                category,
+                "🗓️-emploi-du-temps",
+                topic=(
+                    f"Emplois du temps de tous les groupes/classes de {code}. "
+                    "Chaque classe peut avoir son propre horaire."
+                ),
+                overwrites=announcement_overwrites,
+            )
+            await self._get_or_create_text(
+                category,
+                "📝-examens",
+                topic=(
+                    f"Dates, horaires et consignes des examens pour {code}. "
+                    "Les informations peuvent différer selon les classes."
+                ),
+                overwrites=announcement_overwrites,
+            )
+            await self._get_or_create_forum(
+                category,
+                "📚-cours",
+                f"Cours et ressources pédagogiques partagés pour toute la filière {code}.",
+                level_overwrites,
+                subjects,
+            )
+            await self._get_or_create_forum(
+                category,
+                "💬-questions",
+                f"Questions et discussions pédagogiques de toute la filière {code}.",
+                level_overwrites,
+                subjects,
+            )
+            await self._get_or_create_forum(
+                category,
+                "📝-devoirs",
+                f"Devoirs, contrôles et exercices pour toute la filière {code}.",
+                level_overwrites,
+                subjects,
+            )
+
+            self.stats.streams_processed += 1
+
         self.stats.levels_processed += 1
 
     async def _cleanup_legacy_subject_channels(self):
-        legacy_names = {"Mathématiques", "Physique et Chimie", "Sciences de la Vie", "Sciences de l'ingénieur", "Arabe", "Français", "Anglais", "Histoire Géographie", "Education Islamique", "Philosophie", "Informatique", "Droit", "Comptabilité et Mathématiques financières", "Économie et Organisation Administrative des Entreprises", "Économie générale et Statistiques", "Informatique de gestion", "Sciences Végétales et Animales (SVA)"}
+        legacy_names = {
+            "Mathématiques", "Physique et Chimie", "Sciences de la Vie", "Sciences de l'ingénieur",
+            "Arabe", "Français", "Anglais", "Histoire Géographie", "Education Islamique", "Philosophie",
+            "Informatique", "Droit", "Comptabilité et Mathématiques financières",
+            "Économie et Organisation Administrative des Entreprises", "Économie générale et Statistiques",
+            "Informatique de gestion", "Sciences Végétales et Animales (SVA)",
+        }
         for channel in list(self.guild.channels):
             if isinstance(channel, discord.ForumChannel) and channel.name in legacy_names:
                 try:
-                    await channel.delete(reason="Replace legacy subject forum with compact level forums")
+                    await channel.delete(reason="Replace legacy subject forum with shared stream forums")
                 except (discord.Forbidden, discord.HTTPException):
                     pass
