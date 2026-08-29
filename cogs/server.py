@@ -10,10 +10,17 @@ from discord.ext import commands
 
 from services.server_builder import ServerBuilder
 from services.storage import create_academic_year, get_guild_config, list_academic_years, reset_guild_data
-from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_STUDENT, STREAM_ROLE_PREFIX, SUBJECT_TEACHER_ROLE_PREFIX
+from services.permissions import (
+    ROLE_ADMIN,
+    ROLE_PROFESSOR,
+    ROLE_PROFESSOR_FEMALE,
+    ROLE_STUDENT,
+    STREAM_ROLE_PREFIX,
+    SUBJECT_TEACHER_ROLE_PREFIX,
+)
 
-
-MAIN_ROLE_NAMES = {ROLE_ADMIN, ROLE_PROFESSOR, ROLE_STUDENT}
+MAIN_ROLE_NAMES = {ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT}
+LEGACY_ROLE_NAMES = {"Professeur", "Professeur (F)"}
 
 
 class ServerCommands(commands.Cog):
@@ -92,15 +99,25 @@ class ServerCommands(commands.Cog):
         if not config:
             await interaction.response.send_message("ℹ️ Aucune configuration. Utilise `/setup`.", ephemeral=True)
             return
-        lines = ["📋 **Configuration enregistrée**", f"📅 Année : **{config.get('academic_year', 'non définie')}**", "", "**Organisation :** une catégorie par filière, channels par matière, sans channels de classes."]
+        lines = [
+            "📋 **Configuration enregistrée**",
+            f"📅 Année : **{config.get('academic_year', 'non définie')}**",
+            "",
+            "**Organisation :** une catégorie par filière, channels par matière, sans channels de classes.",
+        ]
         total_streams = 0
         for level in config.get("levels", []):
             lines.append("")
             lines.append(f"**{level['name']}**")
             for stream in level.get("streams", []):
                 total_streams += 1
-                lines.append(f"• {stream['name']} — {len(stream.get('subjects', []))} matière(s)")
-        lines.extend(["", f"**Total filières :** {total_streams}", "**Par filière :** informations + emploi du temps + examens + channels par matière + à-distance."])
+                code = stream.get("abbreviation", stream["name"])
+                lines.append(f"• **{code}** — {stream['name']} — {len(stream.get('subjects', []))} matière(s)")
+        lines.extend([
+            "",
+            f"**Total filières :** {total_streams}",
+            "**Par filière :** informations + emploi du temps + examens + channels par matière + à-distance.",
+        ])
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
     @app_commands.command(name="resetserver", description="FORMATER complètement le serveur : supprimer tous les channels et la structure du bot.")
@@ -135,7 +152,7 @@ class ServerCommands(commands.Cog):
             for role in list(guild.roles):
                 if role.is_default() or role.managed:
                     continue
-                if role.name in MAIN_ROLE_NAMES or role.name.startswith((STREAM_ROLE_PREFIX, SUBJECT_TEACHER_ROLE_PREFIX)):
+                if role.name in MAIN_ROLE_NAMES or role.name in LEGACY_ROLE_NAMES or role.name.startswith((STREAM_ROLE_PREFIX, SUBJECT_TEACHER_ROLE_PREFIX)):
                     try:
                         await role.delete(reason="School Discord Manager FULL SERVER RESET")
                         deleted_roles += 1
@@ -160,7 +177,6 @@ class ServerCommands(commands.Cog):
             except discord.HTTPException:
                 pass
             return
-
         try:
             await interaction.followup.send(
                 "# ✅ FORMATAGE TERMINÉ\n\n"
