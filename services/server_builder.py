@@ -1,41 +1,54 @@
-"""Build and reconcile the Discord school structure from a saved configuration."""
+"""Build a compact, role-driven Discord school structure."""
 
 from __future__ import annotations
 
 import asyncio
+import re
 
 import discord
 
 from config.curriculum import (
     EXAM_CHANNELS,
-    FORUM_TAGS,
+    FORUM_GUIDE_TAGS,
+    FORUM_MAX_TAGS,
     GENERAL_CHANNELS,
     PROFESSOR_CHANNELS,
+    get_level_subjects,
+    get_stream_class_names,
+    get_stream_subjects,
 )
 from services.permissions import (
     ROLE_ADMIN,
     ROLE_PROFESSOR,
     ROLE_STUDENT,
-    class_area_overwrites,
+    administrator_overwrite,
     general_area_overwrites,
-    read_only_class_overwrites,
+    level_announcement_overwrites,
+    level_area_overwrites,
+    public_voice_overwrites,
     teacher_area_overwrites,
-    virtual_classroom_overwrites,
 )
 
-CATEGORY_GENERAL = "🏢 Administration & Actualités"
-CATEGORY_PROFESSORS = "🤫 Espace Professeurs"
+CATEGORY_GENERAL = "🏢・INFORMATIONS & ADMINISTRATION"
+CATEGORY_PROFESSORS = "👨‍🏫・ESPACE PROFESSEURS"
+CATEGORY_VOICE = "🔊・SALLES VIRTUELLES"
 
 LEVEL_MARKERS = {
-    "Tronc Commun": "📚 TRONC COMMUN",
-    "1ère Année Bac": "📚 PREMIÈRE ANNÉE BAC",
-    "2ème Année Bac": "📚 DEUXIÈME ANNÉE BAC",
+    "Tronc Commun": "📚・TRONC COMMUN",
+    "1ère Année Bac": "📚・1ÈRE ANNÉE BAC",
+    "2ème Année Bac": "📚・2ÈME ANNÉE BAC",
 }
 
 
-class BuildStats:
-    """Counters returned after a successful build."""
+def _safe_name(value: str, max_length: int = 90) -> str:
+    """Turn a display name into a readable Discord channel name."""
+    value = value.lower().replace("’", "'").replace(" ", "-")
+    value = re.sub(r"[^\w\-àâçéèêëîïôûùüÿñæœ']+", "-", value, flags=re.UNICODE)
+    value = re.sub(r"-+", "-", value).strip("-")
+    return value[:max_length]
 
+
+class BuildStats:
     def __init__(self) -> None:
         self.roles_created = 0
         self.categories_created = 0
@@ -43,10 +56,11 @@ class BuildStats:
         self.forums_created = 0
         self.voice_channels_created = 0
         self.classes_processed = 0
+        self.levels_processed = 0
 
 
 class ServerBuilder:
-    """Create the school server structure and reconcile repeated builds safely."""
+    """Create one compact content area per level; never create a channel per subject/class."""
 
     def __init__(self, guild: discord.Guild) -> None:
         self.guild = guild
@@ -57,98 +71,56 @@ class ServerBuilder:
         await self._ensure_general_area(roles)
         await self._ensure_professor_area(roles)
 
-        for level in selected["levels"]:
-            await self._ensure_level_marker(level["name"])
+        for level in selected.get("levels", []):
+            await self._build_level(level, roles)
 
-            for stream in level["streams"]:
-                for class_number in range(1, stream["class_count"] + 1):
-                    await self._ensure_class(
-                        level_name=level["name"],
-                        abbreviation=level["abbreviation"],
-                        stream_name=stream["name"],
-                        class_number=class_number,
-                        subjects=stream["subjects"],
-                        roles=roles,
-                    )
-                    self.stats.classes_processed += 1
-                    await asyncio.sleep(0.5)
-
+        await self._cleanup_legacy_subject_channels()
         return self.stats
 
     async def _ensure_main_roles(self) -> dict[str, discord.Role]:
         roles: dict[str, discord.Role] = {}
 
-        admin = discord.utils.get(self.guild.roles, name=ROLE_ADMIN)
-        if admin is None:
-            permissions = discord.Permissions.none()
-            permissions.administrator = True
-            admin = await self.guild.create_role(
-                name=ROLE_ADMIN,
-                permissions=permissions,
-                colour=discord.Colour.red(),
-                hoist=True,
-                mentionable=True,
-                reason="School manager main role",
-            )
-            self.stats.roles_created += 1
+        definitions = (
+            (ROLE_ADMIN, discord.Colour.red(), True, administrator_overwrite()),
+            (ROLE_PROFESSOR, discord.Colour.blue(), True, None),
+            (ROLE_STUDENT, discord.Colour.green(), True, None),
+        )
 
-        professor = discord.utils.get(self.guild.roles, name=ROLE_PROFESSOR)
-        if professor is None:
-            permissions = discord.Permissions.none()
-            for attr in (
-                "view_channel",
-                "send_messages",
-                "read_message_history",
-                "manage_messages",
-                "manage_threads",
-                "create_public_threads",
-                "create_private_threads",
-                "send_messages_in_threads",
-                "connect",
-                "speak",
-                "stream",
-                "use_application_commands",
-            ):
-                setattr(permissions, attr, True)
+        for role_name, colour, hoist, _ in definitions:
+            role = discord.utils.get(self.guild.roles, name=role_name)
+            if role is None:
+                permissions = discord.Permissions.none()
+                if role_name == ROLE_ADMIN:
+                    permissions.administrator = True
+                elif role_name == ROLE_PROFESSOR:
+                    for permission in (
+                        "view_channel", "send_messages", "read_message_history",
+                        "manage_messages", "manage_threads", "create_public_threads",
+                        "create_private_threads", "send_messages_in_threads",
+                        "connect", "speak", "stream", "use_application_commands",
+                    ):
+                        setattr(permissions, permission, True)
+                else:
+                    for permission in (
+                        "view_channel", "send_messages", "read_message_history",
+                        "create_public_threads", "send_messages_in_threads",
+                        "connect", "speak", "use_application_commands",
+                    ):
+                        setattr(permissions, permission, True)
 
-            professor = await self.guild.create_role(
-                name=ROLE_PROFESSOR,
-                permissions=permissions,
-                colour=discord.Colour.blue(),
-                hoist=True,
-                mentionable=True,
-                reason="School manager main role",
-            )
-            self.stats.roles_created += 1
+                role = await self.guild.create_role(
+                    name=role_name,
+                    permissions=permissions,
+                    colour=colour,
+                    hoist=hoist,
+                    mentionable=True,
+                    reason="School manager main role",
+                )
+                self.stats.roles_created += 1
+                await asyncio.sleep(0.15)
 
-        student = discord.utils.get(self.guild.roles, name=ROLE_STUDENT)
-        if student is None:
-            permissions = discord.Permissions.none()
-            for attr in (
-                "view_channel",
-                "send_messages",
-                "read_message_history",
-                "create_public_threads",
-                "send_messages_in_threads",
-                "connect",
-                "speak",
-                "use_application_commands",
-            ):
-                setattr(permissions, attr, True)
+            roles[role_name] = role
 
-            student = await self.guild.create_role(
-                name=ROLE_STUDENT,
-                permissions=permissions,
-                colour=discord.Colour.green(),
-                hoist=True,
-                mentionable=True,
-                reason="School manager main role",
-            )
-            self.stats.roles_created += 1
-
-        roles[ROLE_ADMIN] = admin
-        roles[ROLE_PROFESSOR] = professor
-        roles[ROLE_STUDENT] = student
         return roles
 
     async def _get_or_create_category(
@@ -160,25 +132,17 @@ class ServerBuilder:
             lambda item: isinstance(item, discord.CategoryChannel) and item.name == name,
             self.guild.channels,
         )
-
         if category:
-            if isinstance(overwrites, dict):
-                await category.edit(
-                    overwrites=overwrites,
-                    reason="School manager permission reconciliation",
-                )
+            if overwrites is not None:
+                await category.edit(overwrites=overwrites, reason="School manager reconciliation")
             return category
 
-        kwargs = {
-            "name": name,
-            "reason": "School manager automatic setup",
-        }
-        if isinstance(overwrites, dict):
+        kwargs = {"name": name, "reason": "School manager automatic setup"}
+        if overwrites is not None:
             kwargs["overwrites"] = overwrites
-
         category = await self.guild.create_category(**kwargs)
         self.stats.categories_created += 1
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.15)
         return category
 
     async def _get_or_create_text(
@@ -186,70 +150,48 @@ class ServerBuilder:
         category: discord.CategoryChannel,
         name: str,
         *,
-        topic: str | None = None,
-        overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite] | None = None,
+        topic: str,
+        overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite],
     ) -> discord.TextChannel:
         channel = discord.utils.find(
             lambda item: isinstance(item, discord.TextChannel) and item.name == name,
             category.channels,
         )
-
         if channel:
-            kwargs = {}
-            if topic is not None and channel.topic != topic:
-                kwargs["topic"] = topic
-            if isinstance(overwrites, dict):
-                kwargs["overwrites"] = overwrites
-            if kwargs:
-                await channel.edit(
-                    **kwargs,
-                    reason="School manager permission reconciliation",
-                )
+            await channel.edit(topic=topic, overwrites=overwrites, reason="School manager reconciliation")
             return channel
 
-        kwargs = {
-            "name": name,
-            "reason": "School manager automatic setup",
-        }
-        if topic:
-            kwargs["topic"] = topic
-        if isinstance(overwrites, dict):
-            kwargs["overwrites"] = overwrites
-
-        channel = await category.create_text_channel(**kwargs)
+        channel = await category.create_text_channel(
+            name=name,
+            topic=topic,
+            overwrites=overwrites,
+            reason="School manager automatic setup",
+        )
         self.stats.text_channels_created += 1
-        await asyncio.sleep(0.25)
+        await asyncio.sleep(0.15)
         return channel
 
     async def _get_or_create_voice(
         self,
         category: discord.CategoryChannel,
         name: str,
-        overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite] | None = None,
+        overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite],
     ) -> discord.VoiceChannel:
         channel = discord.utils.find(
             lambda item: isinstance(item, discord.VoiceChannel) and item.name == name,
             category.channels,
         )
-
         if channel:
-            if isinstance(overwrites, dict):
-                await channel.edit(
-                    overwrites=overwrites,
-                    reason="School manager permission reconciliation",
-                )
+            await channel.edit(overwrites=overwrites, reason="School manager reconciliation")
             return channel
 
-        kwargs = {
-            "name": name,
-            "reason": "School manager automatic setup",
-        }
-        if isinstance(overwrites, dict):
-            kwargs["overwrites"] = overwrites
-
-        channel = await category.create_voice_channel(**kwargs)
+        channel = await category.create_voice_channel(
+            name=name,
+            overwrites=overwrites,
+            reason="School manager virtual classroom",
+        )
         self.stats.voice_channels_created += 1
-        await asyncio.sleep(0.25)
+        await asyncio.sleep(0.15)
         return channel
 
     async def _get_or_create_forum(
@@ -258,31 +200,42 @@ class ServerBuilder:
         name: str,
         topic: str,
         overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite],
+        subject_tags: list[str],
     ) -> discord.ForumChannel:
         channel = discord.utils.find(
             lambda item: isinstance(item, discord.ForumChannel) and item.name == name,
             category.channels,
         )
 
+        tag_names: list[str] = []
+        for tag in FORUM_GUIDE_TAGS:
+            if tag not in tag_names:
+                tag_names.append(tag)
+        for tag in subject_tags:
+            if tag not in tag_names and len(tag_names) < FORUM_MAX_TAGS:
+                tag_names.append(tag)
+
+        forum_tags = [discord.ForumTag(name=tag) for tag in tag_names[:FORUM_MAX_TAGS]]
+
         if channel:
             await channel.edit(
                 topic=topic,
                 overwrites=overwrites,
-                reason="School manager permission reconciliation",
+                available_tags=forum_tags,
+                reason="School manager forum reconciliation",
             )
             return channel
 
-        tags = [discord.ForumTag(name=tag) for tag in FORUM_TAGS]
-        channel = await self.guild.create_forum(
+        channel = await category.create_forum(
             name=name,
-            category=category,
             topic=topic,
             overwrites=overwrites,
-            available_tags=tags,
-            reason="School manager subject forum",
+            available_tags=forum_tags,
+            default_layout=discord.ForumLayoutType.list_view,
+            reason="School manager compact academic forum",
         )
         self.stats.forums_created += 1
-        await asyncio.sleep(0.35)
+        await asyncio.sleep(0.2)
         return channel
 
     async def _ensure_general_area(self, roles: dict[str, discord.Role]) -> None:
@@ -293,15 +246,13 @@ class ServerBuilder:
             roles[ROLE_STUDENT],
         )
         category = await self._get_or_create_category(CATEGORY_GENERAL, overwrites)
-
         topics = {
-            "actualites": "Actualités générales, annonces et informations officielles.",
-            "absences": "Absences des professeurs, dates et durée des absences.",
-            "results": "Résultats, annonces scolaires et informations officielles.",
-            "post_bac": "Bourses, formations, universités, écoles et opportunités post-bac.",
-            "contests": "Concours, activités, événements et opportunités importantes.",
+            "actualites": "Actualités et informations officielles de l'établissement.",
+            "absences": "Informations administratives liées aux absences des professeurs.",
+            "results": "Résultats, annonces scolaires et communications importantes.",
+            "post_bac": "Orientation, études supérieures, bourses et opportunités post-bac.",
+            "contests": "Concours, clubs, activités et événements scolaires.",
         }
-
         for key, name in GENERAL_CHANNELS.items():
             await self._get_or_create_text(
                 category,
@@ -318,124 +269,152 @@ class ServerBuilder:
             roles[ROLE_STUDENT],
         )
         category = await self._get_or_create_category(CATEGORY_PROFESSORS, overwrites)
-
         await self._get_or_create_text(
             category,
             PROFESSOR_CHANNELS["discussion"],
-            topic="Espace confidentiel réservé aux professeurs et à l'administration.",
+            topic="Espace privé de discussion et de coordination des professeurs.",
             overwrites=overwrites,
         )
-
         await self._get_or_create_voice(
             category,
             PROFESSOR_CHANNELS["meeting"],
             overwrites,
         )
 
-    async def _ensure_level_marker(self, level_name: str) -> discord.CategoryChannel:
-        return await self._get_or_create_category(
-            LEVEL_MARKERS.get(level_name, f"📚 {level_name}")
-        )
+    async def _build_level(self, level: dict, roles: dict[str, discord.Role]) -> None:
+        level_name = level["name"]
+        abbreviation = level["abbreviation"]
+        stream_data = level.get("streams", [])
 
-    async def _ensure_class(
-        self,
-        *,
-        level_name: str,
-        abbreviation: str,
-        stream_name: str,
-        class_number: int,
-        subjects: list[str],
-        roles: dict[str, discord.Role],
-    ) -> discord.CategoryChannel:
-        class_role_name = (
-            f"Élève - {abbreviation} - {stream_name} - Classe {class_number}"
-        )
+        class_roles: list[discord.Role] = []
+        for stream in stream_data:
+            stream_name = stream["name"]
+            class_count = int(stream.get("class_count", len(stream.get("classes", [])) or 1))
+            configured_names = list(stream.get("classes", []))
+            subjects = list(stream.get("subjects", []))
+            if not subjects:
+                subjects = get_stream_subjects(level_name, stream_name)
+            if not configured_names:
+                configured_names = get_stream_class_names(level_name, stream_name)
 
-        class_role = discord.utils.get(
-            self.guild.roles,
-            name=class_role_name,
-        )
+            for index in range(class_count):
+                class_name = configured_names[index] if index < len(configured_names) else f"Classe {index + 1}"
+                role_name = f"Élève - {abbreviation} - {stream_name} - {class_name}"
+                role = discord.utils.get(self.guild.roles, name=role_name)
+                if role is None:
+                    role = await self.guild.create_role(
+                        name=role_name,
+                        permissions=discord.Permissions.none(),
+                        colour=discord.Colour.teal(),
+                        mentionable=True,
+                        reason="School manager class role",
+                    )
+                    self.stats.roles_created += 1
+                    await asyncio.sleep(0.1)
+                class_roles.append(role)
+                self.stats.classes_processed += 1
 
-        if class_role is None:
-            class_role = await self.guild.create_role(
-                name=class_role_name,
-                permissions=discord.Permissions.none(),
-                colour=discord.Colour.teal(),
-                mentionable=True,
-                reason="School manager class role",
-            )
-            self.stats.roles_created += 1
-
-        category_name = (
-            f"{abbreviation} - {stream_name} - Classe {class_number}"
-        )
-
-        overwrites = class_area_overwrites(
+        overwrites = level_area_overwrites(
             self.guild.default_role,
             roles[ROLE_ADMIN],
             roles[ROLE_PROFESSOR],
-            roles[ROLE_STUDENT],
-            class_role,
+            class_roles,
         )
-
+        announcement_overwrites = level_announcement_overwrites(
+            self.guild.default_role,
+            roles[ROLE_ADMIN],
+            roles[ROLE_PROFESSOR],
+            class_roles,
+        )
         category = await self._get_or_create_category(
-            category_name,
+            LEVEL_MARKERS.get(level_name, f"📚・{level_name.upper()}"),
             overwrites,
         )
 
-        exam_overwrites = read_only_class_overwrites(
-            self.guild.default_role,
-            roles[ROLE_ADMIN],
-            roles[ROLE_PROFESSOR],
-            roles[ROLE_STUDENT],
-            class_role,
-        )
-
-        if level_name in EXAM_CHANNELS:
-            exam_name = EXAM_CHANNELS[level_name]
-            topic = (
-                "Préparation au régional" if level_name == "1ère Année Bac"
-                else "Préparation au national"
-            )
-            await self._get_or_create_text(
-                category,
-                exam_name,
-                topic=f"{topic} — {category_name}",
-                overwrites=exam_overwrites,
-            )
-        else:
-            await self._get_or_create_text(
-                category,
-                "📢-annonces-classe",
-                topic=f"Annonces de classe — {category_name}",
-                overwrites=exam_overwrites,
-            )
+        subjects = get_level_subjects(level_name)
+        if not subjects:
+            for stream in stream_data:
+                subjects.extend(stream.get("subjects", []))
+            subjects = list(dict.fromkeys(subjects))
 
         await self._get_or_create_text(
             category,
-            "💬-discussion-classe",
-            topic=f"Discussion générale de {category_name}.",
-            overwrites=overwrites,
+            "📢-annonces",
+            topic=f"Annonces officielles — {level_name}.",
+            overwrites=announcement_overwrites,
+        )
+        await self._get_or_create_text(
+            category,
+            "🗓️-organisation",
+            topic=f"Organisation, horaires et informations pratiques — {level_name}.",
+            overwrites=announcement_overwrites,
         )
 
-        for subject in subjects:
-            await self._get_or_create_forum(
+        await self._get_or_create_forum(
+            category,
+            f"📚-cours-{_safe_name(abbreviation)}",
+            f"Cours et ressources pédagogiques de {level_name}. Une publication = un sujet ou une ressource.",
+            overwrites,
+            subjects,
+        )
+        await self._get_or_create_forum(
+            category,
+            f"💬-questions-{_safe_name(abbreviation)}",
+            f"Questions et discussions pédagogiques de {level_name}.",
+            overwrites,
+            subjects,
+        )
+        await self._get_or_create_forum(
+            category,
+            f"📝-devoirs-{_safe_name(abbreviation)}",
+            f"Devoirs, contrôles, examens blancs et préparation des examens de {level_name}.",
+            overwrites,
+            subjects,
+        )
+
+        if level_name in EXAM_CHANNELS:
+            await self._get_or_create_text(
                 category,
-                subject,
-                f"Forum de {subject} — {category_name}",
-                overwrites,
+                EXAM_CHANNELS[level_name],
+                topic=(
+                    "Préparation à l'examen régional."
+                    if level_name == "1ère Année Bac"
+                    else "Préparation à l'examen national."
+                ),
+                overwrites=announcement_overwrites,
             )
 
+        voice_category = await self._get_or_create_category(CATEGORY_VOICE)
         await self._get_or_create_voice(
-            category,
-            "🔊-classe-virtuelle",
-            virtual_classroom_overwrites(
+            voice_category,
+            f"🔊-{_safe_name(abbreviation)}-classe",
+            public_voice_overwrites(
                 self.guild.default_role,
                 roles[ROLE_ADMIN],
                 roles[ROLE_PROFESSOR],
-                roles[ROLE_STUDENT],
-                class_role,
+                class_roles,
             ),
         )
+        self.stats.levels_processed += 1
 
-        return category
+    async def _cleanup_legacy_subject_channels(self) -> None:
+        """Remove only channels that clearly match the previous per-subject builder."""
+        legacy_keywords = {
+            "Mathématiques", "Physique et Chimie", "Sciences de la Vie",
+            "Sciences de l'ingénieur", "Arabe", "Français", "Anglais",
+            "Histoire Géographie", "Education Islamique", "Philosophie",
+            "Informatique", "Droit", "Comptabilité et Mathématiques financières",
+            "Économie et Organisation Administrative des Entreprises",
+            "Économie générale et Statistiques", "Informatique de gestion",
+            "Sciences Végétales et Animales (SVA)",
+        }
+        for channel in list(self.guild.channels):
+            if not isinstance(channel, discord.ForumChannel):
+                continue
+            if channel.name not in legacy_keywords:
+                continue
+            try:
+                await channel.delete(reason="Replace legacy per-subject forum with compact level forums")
+                await asyncio.sleep(0.1)
+            except (discord.Forbidden, discord.HTTPException):
+                continue
