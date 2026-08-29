@@ -1,4 +1,4 @@
-"""Persistence layer for school configuration and academic records."""
+"""Persistence layer for multi-school configuration and academic records."""
 
 from __future__ import annotations
 
@@ -29,36 +29,46 @@ def initialize_database() -> None:
     with _connect() as conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS academic_years (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL,
-            name TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL, UNIQUE(guild_id, name)
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            UNIQUE(guild_id, name)
         );
-        CREATE TABLE IF NOT EXISTS students (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL,
-            discord_id INTEGER, display_name TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL,
-            UNIQUE(guild_id, discord_id)
-        );
-        CREATE TABLE IF NOT EXISTS classes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL,
-            academic_year_id INTEGER NOT NULL, level_name TEXT NOT NULL,
-            stream_name TEXT NOT NULL, class_name TEXT NOT NULL, role_name TEXT,
-            UNIQUE(guild_id, academic_year_id, level_name, stream_name, class_name),
+        CREATE TABLE IF NOT EXISTS streams (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            academic_year_id INTEGER NOT NULL,
+            level_name TEXT NOT NULL,
+            stream_name TEXT NOT NULL,
+            role_name TEXT NOT NULL,
+            UNIQUE(guild_id, academic_year_id, level_name, stream_name),
             FOREIGN KEY(academic_year_id) REFERENCES academic_years(id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS students (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            discord_id INTEGER,
+            display_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            UNIQUE(guild_id, discord_id)
+        );
         CREATE TABLE IF NOT EXISTS enrollments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, student_id INTEGER NOT NULL,
-            class_id INTEGER NOT NULL, start_date TEXT NOT NULL, end_date TEXT,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER NOT NULL,
+            stream_id INTEGER NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT,
             status TEXT NOT NULL DEFAULT 'active',
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
-            FOREIGN KEY(class_id) REFERENCES classes(id) ON DELETE CASCADE
+            FOREIGN KEY(stream_id) REFERENCES streams(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_students_guild_discord ON students(guild_id, discord_id);
+        CREATE INDEX IF NOT EXISTS idx_streams_guild_year ON streams(guild_id, academic_year_id);
         CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id);
         """)
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(classes)").fetchall()}
-        if "role_name" not in columns:
-            conn.execute("ALTER TABLE classes ADD COLUMN role_name TEXT")
 
 
 def load_all() -> dict[str, Any]:
@@ -99,8 +109,24 @@ def reset_guild_data(guild_id: int) -> None:
     initialize_database()
     with _connect() as conn:
         conn.execute("DELETE FROM students WHERE guild_id=?", (guild_id,))
-        conn.execute("DELETE FROM classes WHERE guild_id=?", (guild_id,))
+        conn.execute("DELETE FROM streams WHERE guild_id=?", (guild_id,))
+        # Keep legacy tables harmlessly isolated until a migration is introduced.
+        if _table_exists(conn, "enrollments") and _table_has_column(conn, "stream_id"):
+            conn.execute("DELETE FROM enrollments WHERE student_id NOT IN (SELECT id FROM students)")
         conn.execute("DELETE FROM academic_years WHERE guild_id=?", (guild_id,))
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _table_has_column(conn: sqlite3.Connection, column_name: str) -> bool:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(enrollments)").fetchall()}
+    return column_name in columns
 
 
 def ensure_academic_year(guild_id: int, name: str, *, active: bool = False) -> int:
@@ -153,22 +179,26 @@ def sync_configuration_to_database(guild_id: int, config: dict[str, Any]) -> Non
     year_id = ensure_academic_year(guild_id, year_name, active=True)
     with _connect() as conn:
         for level in config.get("levels", []):
-            abbreviation = level.get("abbreviation", "")
             for stream in level.get("streams", []):
-                count = int(stream.get("class_count", 0))
-                names = list(stream.get("classes", []))
-                if len(names) < count:
-                    names.extend(f"Classe {i}" for i in range(len(names) + 1, count + 1))
-                for class_name in names[:count]:
-                    role_name = f"Élève - {abbreviation} - {stream['name']} - {class_name}"
-                    conn.execute(
-                        "INSERT OR IGNORE INTO classes(guild_id,academic_year_id,level_name,stream_name,class_name,role_name) VALUES(?,?,?,?,?,?)",
-                        (guild_id, year_id, level["name"], stream["name"], class_name, role_name),
-                    )
-                    conn.execute(
-                        "UPDATE classes SET role_name=? WHERE guild_id=? AND academic_year_id=? AND level_name=? AND stream_name=? AND class_name=?",
-                        (role_name, guild_id, year_id, level["name"], stream["name"], class_name),
-                    )
+                stream_name = stream["name"]
+                role_name = f"Filière - {level['name']} - {stream_name}"
+                conn.execute(
+                    "INSERT OR IGNORE INTO streams(guild_id,academic_year_id,level_name,stream_name,role_name) VALUES(?,?,?,?,?)",
+                    (guild_id, year_id, level["name"], stream_name, role_name),
+                )
+                conn.execute(
+                    "UPDATE streams SET role_name=? WHERE guild_id=? AND academic_year_id=? AND level_name=? AND stream_name=?",
+                    (role_name, guild_id, year_id, level["name"], stream_name),
+                )
+
+
+def get_stream(guild_id: int, academic_year_id: int, level_name: str, stream_name: str) -> sqlite3.Row | None:
+    initialize_database()
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT * FROM streams WHERE guild_id=? AND academic_year_id=? AND level_name=? AND stream_name=? LIMIT 1",
+            (guild_id, academic_year_id, level_name, stream_name),
+        ).fetchone()
 
 
 def upsert_student(guild_id: int, discord_id: int | None, display_name: str) -> int:
@@ -179,7 +209,7 @@ def upsert_student(guild_id: int, discord_id: int | None, display_name: str) -> 
                 "SELECT id FROM students WHERE guild_id=? AND discord_id=?",
                 (guild_id, discord_id),
             ).fetchone()
-            if discord_id
+            if discord_id is not None
             else None
         )
         if row:
@@ -192,16 +222,10 @@ def upsert_student(guild_id: int, discord_id: int | None, display_name: str) -> 
         return int(cur.lastrowid)
 
 
-def find_class(guild_id: int, academic_year_id: int, role_name: str) -> sqlite3.Row | None:
-    initialize_database()
-    with _connect() as conn:
-        return conn.execute(
-            "SELECT * FROM classes WHERE guild_id=? AND academic_year_id=? AND role_name=? LIMIT 1",
-            (guild_id, academic_year_id, role_name),
-        ).fetchone()
-
-
-def enroll_student(guild_id: int, student_id: int, class_id: int) -> None:
+def enroll_student(guild_id: int, student_id: int, academic_year_id: int, level_name: str, stream_name: str) -> None:
+    stream = get_stream(guild_id, academic_year_id, level_name, stream_name)
+    if stream is None:
+        raise ValueError("Selected stream is not configured for the active academic year.")
     today = date.today().isoformat()
     with _connect() as conn:
         conn.execute(
@@ -209,8 +233,8 @@ def enroll_student(guild_id: int, student_id: int, class_id: int) -> None:
             (today, student_id),
         )
         conn.execute(
-            "INSERT INTO enrollments(student_id,class_id,start_date,status) VALUES(?,?,?,'active')",
-            (student_id, class_id, today),
+            "INSERT INTO enrollments(student_id,stream_id,start_date,status) VALUES(?,?,?,'active')",
+            (student_id, int(stream["id"]), today),
         )
         conn.execute(
             "UPDATE students SET status='active' WHERE id=? AND guild_id=?",
@@ -246,17 +270,16 @@ def get_student_history(guild_id: int, discord_id: int) -> list[sqlite3.Row]:
         return conn.execute(
             """
             SELECT ay.name AS academic_year,
-                   c.level_name,
-                   c.stream_name,
-                   c.class_name,
+                   s.level_name,
+                   s.stream_name,
                    e.start_date,
                    e.end_date,
                    e.status
-            FROM students s
-            JOIN enrollments e ON e.student_id=s.id
-            JOIN classes c ON c.id=e.class_id
-            JOIN academic_years ay ON ay.id=c.academic_year_id
-            WHERE s.guild_id=? AND s.discord_id=?
+            FROM students st
+            JOIN enrollments e ON e.student_id=st.id
+            JOIN streams s ON s.id=e.stream_id
+            JOIN academic_years ay ON ay.id=s.academic_year_id
+            WHERE st.guild_id=? AND st.discord_id=?
             ORDER BY e.start_date DESC
             """,
             (guild_id, discord_id),
