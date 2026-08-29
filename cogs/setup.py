@@ -12,7 +12,7 @@ from services.storage import save_guild_config
 
 
 class SetupBaseView(discord.ui.View):
-    """Base view that restricts interactions to the administrator who started it."""
+    """Base view restricted to the administrator who started the setup."""
 
     def __init__(self, owner_id: int, *, timeout: float = 900) -> None:
         super().__init__(timeout=timeout)
@@ -33,66 +33,105 @@ class SetupBaseView(discord.ui.View):
 
 
 class LevelSelect(discord.ui.Select):
+    """Multi-select for the academic levels present in the school."""
+
     def __init__(self, view: "LevelView") -> None:
         self.parent_view = view
+
         options = [
             discord.SelectOption(
                 label="Tronc Commun",
                 value="Tronc Commun",
+                description="Configurer les filières du Tronc Commun",
                 emoji="📚",
             ),
             discord.SelectOption(
                 label="1ère Année Bac",
                 value="1ère Année Bac",
+                description="Configurer les filières de 1BAC",
                 emoji="1️⃣",
             ),
             discord.SelectOption(
                 label="2ème Année Bac",
                 value="2ème Année Bac",
+                description="Configurer les filières de 2BAC",
                 emoji="2️⃣",
             ),
         ]
+
         super().__init__(
-            placeholder="Choisis un niveau...",
+            placeholder="Sélectionne les niveaux présents...",
             min_values=1,
-            max_values=1,
+            max_values=len(options),
             options=options,
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await self.parent_view.start_stream_selection(
+        selected = [
+            level
+            for level in self.parent_view.level_order
+            if level in self.values
+        ]
+
+        await self.parent_view.start_next_level(
             interaction,
-            self.values[0],
+            selected_levels=selected,
         )
 
 
 class LevelView(SetupBaseView):
+    """First setup screen: choose one or more academic levels."""
+
+    level_order = tuple(CURRICULUM.keys())
+
     def __init__(self, owner_id: int) -> None:
         super().__init__(owner_id)
+        self.selected_level_names: list[str] = []
+        self.completed_levels: list[dict] = []
+        self.current_level_index = 0
         self.add_item(LevelSelect(self))
 
-    async def start_stream_selection(
+    async def start_next_level(
         self,
         interaction: discord.Interaction,
-        level_name: str,
+        *,
+        selected_levels: list[str],
     ) -> None:
-        next_view = StreamView(
+        self.selected_level_names = selected_levels
+        self.completed_levels = []
+        self.current_level_index = 0
+
+        await self.show_current_level(interaction)
+
+    async def show_current_level(self, interaction: discord.Interaction) -> None:
+        level_name = self.selected_level_names[self.current_level_index]
+
+        view = StreamView(
             owner_id=self.owner_id,
-            selected_levels=[],
-            current_level=level_name,
+            selected_level_names=self.selected_level_names,
+            level_index=self.current_level_index,
+            completed_levels=self.completed_levels,
         )
+
+        stream_count = len(CURRICULUM[level_name]["filieres"])
+
         await interaction.response.edit_message(
             content=(
-                f"📚 **{level_name}**\n\n"
-                "Sélectionne toutes les filières présentes dans ton établissement."
+                f"## 📚 {level_name}\n\n"
+                f"Niveau **{self.current_level_index + 1}/{len(self.selected_level_names)}**\n"
+                f"Filières disponibles : **{stream_count}**\n\n"
+                "Sélectionne les filières présentes dans ton établissement."
             ),
-            view=next_view,
+            view=view,
         )
 
 
 class StreamSelect(discord.ui.Select):
+    """Multi-select for streams within the current academic level."""
+
     def __init__(self, view: "StreamView") -> None:
         self.parent_view = view
+
         streams = CURRICULUM[view.current_level]["filieres"]
         options = [
             discord.SelectOption(
@@ -102,6 +141,7 @@ class StreamSelect(discord.ui.Select):
             )
             for name, subjects in streams.items()
         ]
+
         super().__init__(
             placeholder="Sélectionne les filières...",
             min_values=1,
@@ -116,18 +156,26 @@ class StreamSelect(discord.ui.Select):
 
 
 class StreamView(SetupBaseView):
+    """Configure the streams of one selected academic level."""
+
     def __init__(
         self,
         owner_id: int,
-        selected_levels: list[dict],
-        current_level: str,
+        selected_level_names: list[str],
+        level_index: int,
+        completed_levels: list[dict],
     ) -> None:
         super().__init__(owner_id)
-        self.selected_levels = selected_levels
-        self.current_level = current_level
+
+        self.selected_level_names = selected_level_names
+        self.level_index = level_index
+        self.completed_levels = completed_levels
+
+        self.current_level = selected_level_names[level_index]
         self.selected_streams: list[str] = []
         self.stream_index = 0
         self.stream_counts: list[dict] = []
+
         self.add_item(StreamSelect(self))
 
     async def ask_class_count(self, interaction: discord.Interaction) -> None:
@@ -143,8 +191,9 @@ class StreamView(SetupBaseView):
 
         await interaction.response.edit_message(
             content=(
-                f"📚 **{self.current_level}**\n\n"
+                f"## 📚 {self.current_level}\n\n"
                 f"Filière : **{stream_name}**\n"
+                f"Étape : **{self.stream_index + 1}/{len(self.selected_streams)}**\n"
                 f"Matières : **{len(subjects)}**\n\n"
                 "Combien de classes veux-tu créer pour cette filière ?"
             ),
@@ -161,7 +210,9 @@ class StreamView(SetupBaseView):
             {
                 "name": stream_name,
                 "class_count": class_count,
-                "subjects": list(CURRICULUM[self.current_level]["filieres"][stream_name]),
+                "subjects": list(
+                    CURRICULUM[self.current_level]["filieres"][stream_name]
+                ),
             }
         )
 
@@ -171,7 +222,7 @@ class StreamView(SetupBaseView):
             await self.ask_class_count(interaction)
             return
 
-        self.selected_levels.append(
+        self.completed_levels.append(
             {
                 "name": self.current_level,
                 "abbreviation": CURRICULUM[self.current_level]["abbreviation"],
@@ -179,10 +230,36 @@ class StreamView(SetupBaseView):
             }
         )
 
+        next_level_index = self.level_index + 1
+
+        if next_level_index < len(self.selected_level_names):
+            next_level = self.selected_level_names[next_level_index]
+            next_view = StreamView(
+                owner_id=self.owner_id,
+                selected_level_names=self.selected_level_names,
+                level_index=next_level_index,
+                completed_levels=self.completed_levels,
+            )
+
+            stream_count = len(CURRICULUM[next_level]["filieres"])
+
+            await interaction.response.edit_message(
+                content=(
+                    f"## ✅ {self.current_level} configuré\n\n"
+                    f"Passage au niveau suivant : **{next_level}**\n"
+                    f"Niveau : **{next_level_index + 1}/{len(self.selected_level_names)}**\n"
+                    f"Filières disponibles : **{stream_count}**\n\n"
+                    "Sélectionne les filières présentes dans ton établissement."
+                ),
+                view=next_view,
+            )
+            return
+
         summary = SummaryView(
             owner_id=self.owner_id,
-            config={"levels": self.selected_levels},
+            config={"levels": self.completed_levels},
         )
+
         await interaction.response.edit_message(
             content=summary.format_summary(),
             view=summary,
@@ -190,8 +267,11 @@ class StreamView(SetupBaseView):
 
 
 class ClassCountSelect(discord.ui.Select):
+    """Select the number of classes for the current stream."""
+
     def __init__(self, view: "ClassCountView") -> None:
         self.parent_view = view
+
         options = [
             discord.SelectOption(
                 label=str(number),
@@ -200,6 +280,7 @@ class ClassCountSelect(discord.ui.Select):
             )
             for number in range(1, MAX_CLASSES_PER_STREAM + 1)
         ]
+
         super().__init__(
             placeholder="Nombre de classes...",
             min_values=1,
@@ -216,6 +297,8 @@ class ClassCountSelect(discord.ui.Select):
 
 
 class ClassCountView(SetupBaseView):
+    """View for choosing the class count for one stream."""
+
     def __init__(
         self,
         owner_id: int,
@@ -231,6 +314,8 @@ class ClassCountView(SetupBaseView):
 
 
 class SummaryView(SetupBaseView):
+    """Final review screen before building the Discord server."""
+
     def __init__(self, owner_id: int, config: dict) -> None:
         super().__init__(owner_id)
         self.config = config
@@ -263,21 +348,28 @@ class SummaryView(SetupBaseView):
         lines = [
             "## ✅ Configuration prête",
             "",
-            "Vérifie la configuration avant de lancer la construction.\n",
+            "Vérifie la configuration avant de lancer la construction.",
+            "",
         ]
+
         total_classes = 0
         total_forums = 0
 
         for level in self.config["levels"]:
             lines.append(f"### 📚 {level['name']}")
+
             for stream in level["streams"]:
                 classes = stream["class_count"]
                 subjects = len(stream["subjects"])
+
                 total_classes += classes
                 total_forums += classes * subjects
+
                 lines.append(
-                    f"• **{stream['name']}** → {classes} classe(s) → {subjects} matière(s)"
+                    f"• **{stream['name']}** → {classes} classe(s) → "
+                    f"{subjects} matière(s)"
                 )
+
             lines.append("")
 
         lines.extend(
@@ -288,6 +380,7 @@ class SummaryView(SetupBaseView):
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━",
             ]
         )
+
         return "\n".join(lines)
 
     async def build_callback(self, interaction: discord.Interaction) -> None:
@@ -299,7 +392,10 @@ class SummaryView(SetupBaseView):
             return
 
         await interaction.response.edit_message(
-            content="🏗️ **Construction en cours...**\n\nCette opération peut prendre plusieurs minutes.",
+            content=(
+                "🏗️ **Construction en cours...**\n\n"
+                "Cette opération peut prendre plusieurs minutes."
+            ),
             view=None,
         )
 
@@ -341,7 +437,7 @@ class SummaryView(SetupBaseView):
         await interaction.response.edit_message(
             content=(
                 "## 🏫 School Discord Manager\n\n"
-                "Choisis le niveau que tu veux configurer."
+                "Choisis les niveaux présents dans ton établissement."
             ),
             view=LevelView(self.owner_id),
         )
@@ -366,9 +462,11 @@ class Setup(commands.Cog):
     @app_commands.checks.has_permissions(administrator=True)
     async def setup_command(self, interaction: discord.Interaction) -> None:
         view = LevelView(interaction.user.id)
+
         await interaction.response.send_message(
             "## 🏫 School Discord Manager\n\n"
-            "Choisis le niveau que tu veux configurer.",
+            "Sélectionne les niveaux présents dans ton établissement.\n"
+            "Tu peux sélectionner plusieurs niveaux.",
             view=view,
             ephemeral=True,
         )
