@@ -7,11 +7,9 @@ import re
 import discord
 
 from config.curriculum import (
-    FORUM_MAX_TAGS,
     GENERAL_CHANNELS,
     PROFESSOR_CHANNELS,
     get_stream_subjects,
-    get_subject_tag,
 )
 from services.permissions import (
     ROLE_ADMIN,
@@ -36,6 +34,10 @@ def _safe_name(value: str, max_length: int = 90) -> str:
     return value[:max_length]
 
 
+def _subject_channel_name(subject: str) -> str:
+    return f"📚-{_safe_name(subject)}"
+
+
 class BuildStats:
     def __init__(self) -> None:
         self.roles_created = 0
@@ -43,13 +45,12 @@ class BuildStats:
         self.text_channels_created = 0
         self.forums_created = 0
         self.voice_channels_created = 0
-        self.classes_processed = 0
         self.levels_processed = 0
         self.streams_processed = 0
 
 
 class ServerBuilder:
-    """Create one shared academic area per selected stream; classes are not Discord resources."""
+    """Create one shared academic category per selected stream and one channel per subject."""
 
     def __init__(self, guild: discord.Guild) -> None:
         self.guild = guild
@@ -64,7 +65,6 @@ class ServerBuilder:
         for level in selected.get("levels", []):
             await self._build_level(level, roles, voice_category)
 
-        await self._cleanup_legacy_subject_channels()
         return self.stats
 
     async def _ensure_main_roles(self) -> dict[str, discord.Role]:
@@ -148,38 +148,6 @@ class ServerBuilder:
         self.stats.voice_channels_created += 1
         return channel
 
-    async def _get_or_create_forum(self, category, name, topic, overwrites, subject_names):
-        channel = discord.utils.find(
-            lambda item: isinstance(item, discord.ForumChannel) and item.name == name,
-            category.channels,
-        )
-        tag_names = []
-        for subject in subject_names:
-            tag = get_subject_tag(subject)
-            if tag not in tag_names and len(tag_names) < FORUM_MAX_TAGS:
-                tag_names.append(tag[:50])
-        forum_tags = [discord.ForumTag(name=tag) for tag in tag_names]
-
-        if channel:
-            await channel.edit(
-                topic=topic,
-                overwrites=overwrites,
-                available_tags=forum_tags,
-                reason="School manager forum reconciliation",
-            )
-            return channel
-
-        channel = await category.create_forum(
-            name=name,
-            topic=topic,
-            overwrites=overwrites,
-            available_tags=forum_tags,
-            default_layout=discord.ForumLayoutType.list_view,
-            reason="School manager shared stream forum",
-        )
-        self.stats.forums_created += 1
-        return channel
-
     async def _ensure_general_area(self, roles):
         overwrites = general_area_overwrites(
             self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], roles[ROLE_STUDENT]
@@ -221,7 +189,6 @@ class ServerBuilder:
         for stream in streams:
             stream_name = stream["name"]
             subjects = list(stream.get("subjects", [])) or get_stream_subjects(level_name, stream_name)
-
             category = await self._get_or_create_category(f"🎓・{stream_name}", level_overwrites)
 
             await self._get_or_create_text(
@@ -233,36 +200,27 @@ class ServerBuilder:
             await self._get_or_create_text(
                 category,
                 "🗓️-emploi-du-temps",
-                topic=f"Emplois du temps de tous les groupes/classes de {stream_name}. Chaque classe peut avoir son propre horaire.",
+                topic=f"Emplois du temps de tous les groupes/classes de {stream_name}.",
                 overwrites=announcement_overwrites,
             )
             await self._get_or_create_text(
                 category,
                 "📝-examens",
-                topic=f"Dates, horaires et consignes des examens pour {stream_name}. Les informations peuvent différer selon les classes.",
+                topic=f"Dates, horaires et consignes des examens pour {stream_name}.",
                 overwrites=announcement_overwrites,
             )
-            await self._get_or_create_forum(
-                category,
-                "📚-cours",
-                f"Cours et ressources pédagogiques partagés pour toute la filière {stream_name}.",
-                level_overwrites,
-                subjects,
-            )
-            await self._get_or_create_forum(
-                category,
-                "💬-questions",
-                f"Questions et discussions pédagogiques de toute la filière {stream_name}.",
-                level_overwrites,
-                subjects,
-            )
-            await self._get_or_create_forum(
-                category,
-                "📝-devoirs",
-                f"Devoirs, contrôles et exercices pour toute la filière {stream_name}.",
-                level_overwrites,
-                subjects,
-            )
+
+            for subject in subjects:
+                await self._get_or_create_text(
+                    category,
+                    _subject_channel_name(subject),
+                    topic=(
+                        f"Cours, devoirs, exercices, examens blancs et ressources de {subject} "
+                        f"pour toute la filière {stream_name}."
+                    ),
+                    overwrites=level_overwrites,
+                )
+
             await self._get_or_create_voice(
                 voice_category,
                 f"🔊-{_safe_name(stream_name)}-à-distance",
@@ -276,18 +234,3 @@ class ServerBuilder:
             self.stats.streams_processed += 1
 
         self.stats.levels_processed += 1
-
-    async def _cleanup_legacy_subject_channels(self):
-        legacy_names = {
-            "Mathématiques", "Physique et Chimie", "Sciences de la Vie", "Sciences de l'ingénieur",
-            "Arabe", "Français", "Anglais", "Histoire Géographie", "Education Islamique", "Philosophie",
-            "Informatique", "Droit", "Comptabilité et Mathématiques financières",
-            "Économie et Organisation Administrative des Entreprises", "Économie générale et Statistiques",
-            "Informatique de gestion", "Sciences Végétales et Animales (SVA)",
-        }
-        for channel in list(self.guild.channels):
-            if isinstance(channel, discord.ForumChannel) and channel.name in legacy_names:
-                try:
-                    await channel.delete(reason="Replace legacy subject forum with shared stream forums")
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
