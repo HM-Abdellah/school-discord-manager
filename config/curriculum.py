@@ -1,4 +1,4 @@
-"""Academic curriculum used by the compact Discord school server."""
+"""Academic curriculum for the stream-based school Discord structure."""
 
 from __future__ import annotations
 
@@ -36,36 +36,36 @@ CURRICULUM = {
         "Tronc Commun": {
             "abbreviation": "TC",
             "filieres": {
-                "Sciences": {"classes": [f"Classe {i}" for i in range(1, 8)], "matieres": GENERAL_SCIENCES + ["Informatique"]},
-                "Technologies": {"classes": ["Classe 1"], "matieres": TECHNOLOGY},
-                "Lettres et Sciences Humaines": {"classes": ["Classe 1", "Classe 2"], "matieres": LETTERS_SCIENCES_HUMAINES},
+                "Sciences": {"code": "TCSF", "matieres": GENERAL_SCIENCES + ["Informatique"]},
+                "Technologies": {"code": "TCT", "matieres": TECHNOLOGY},
+                "Lettres et Sciences Humaines": {"code": "TCSH", "matieres": LETTERS_SCIENCES_HUMAINES},
             },
         },
         "1ère Année Bac": {
             "abbreviation": "1BAC",
             "filieres": {
-                "Sciences Mathématiques": {"classes": ["Classe 1"], "matieres": GENERAL_SCIENCES},
-                "Sciences Expérimentales": {"classes": [f"Classe {i}" for i in range(1, 7)], "matieres": GENERAL_SCIENCES},
-                "Sciences et Technologies Électriques": {"classes": ["Classe 1"], "matieres": TECH_BAC},
-                "Sciences et Technologies Mécaniques": {"classes": ["Classe 1"], "matieres": TECH_BAC},
-                "Sciences Économiques et Gestion": {"classes": ["Classe 1"], "matieres": ECONOMICS},
-                "Lettres et Sciences Humaines": {"classes": ["Classe 1", "Classe 2"], "matieres": LETTERS_SCIENCES_HUMAINES},
+                "Sciences Mathématiques": {"code": "1BACSM", "matieres": GENERAL_SCIENCES},
+                "Sciences Expérimentales": {"code": "1BACSEF", "matieres": GENERAL_SCIENCES},
+                "Sciences et Technologies Électriques": {"code": "1BACSTE", "matieres": TECH_BAC},
+                "Sciences et Technologies Mécaniques": {"code": "1BACSTM", "matieres": TECH_BAC},
+                "Sciences Économiques et Gestion": {"code": "1BACSEG", "matieres": ECONOMICS},
+                "Lettres et Sciences Humaines": {"code": "1BACLH", "matieres": LETTERS_SCIENCES_HUMAINES},
             },
         },
         "2ème Année Bac": {
             "abbreviation": "2BAC",
             "filieres": {
-                "Sciences Mathématiques A": {"classes": ["Classe 1"], "matieres": GENERAL_SCIENCES_NO_HISTORY},
-                "Sciences Mathématiques B": {"classes": ["Classe 1"], "matieres": TECH_BAC},
-                "Sciences Physiques": {"classes": [f"Classe {i}" for i in range(1, 6)], "matieres": GENERAL_SCIENCES_NO_HISTORY},
-                "Sciences de la Vie et de la Terre (SVT)": {"classes": ["Classe 1"], "matieres": GENERAL_SCIENCES_NO_HISTORY},
-                "Sciences Agronomiques": {"classes": ["Classe 1"], "matieres": GENERAL_SCIENCES + ["Sciences Végétales et Animales (SVA)"]},
-                "Sciences et Technologies Électriques": {"classes": ["Classe 1"], "matieres": TECH_BAC},
-                "Sciences et Technologies Mécaniques": {"classes": ["Classe 1"], "matieres": TECH_BAC},
-                "Sciences Économiques": {"classes": ["Classe 1"], "matieres": ECONOMICS},
-                "Sciences de Gestion Comptable (SGC)": {"classes": ["Classe 1"], "matieres": ECONOMICS},
-                "Lettres": {"classes": ["Classe 1", "Classe 2"], "matieres": LETTERS},
-                "Sciences Humaines": {"classes": ["Classe 1", "Classe 2"], "matieres": LETTERS},
+                "Sciences Mathématiques A": {"code": "2BACSMA", "matieres": GENERAL_SCIENCES_NO_HISTORY},
+                "Sciences Mathématiques B": {"code": "2BACSMB", "matieres": TECH_BAC},
+                "Sciences Physiques": {"code": "2BACSP", "matieres": GENERAL_SCIENCES_NO_HISTORY},
+                "Sciences de la Vie et de la Terre (SVT)": {"code": "2BACSVT", "matieres": GENERAL_SCIENCES_NO_HISTORY},
+                "Sciences Agronomiques": {"code": "2BACSA", "matieres": GENERAL_SCIENCES + ["Sciences Végétales et Animales (SVA)"]},
+                "Sciences et Technologies Électriques": {"code": "2BACSTE", "matieres": TECH_BAC},
+                "Sciences et Technologies Mécaniques": {"code": "2BACSTM", "matieres": TECH_BAC},
+                "Sciences Économiques": {"code": "2BACSE", "matieres": ECONOMICS},
+                "Sciences de Gestion Comptable (SGC)": {"code": "2BACSGC", "matieres": ECONOMICS},
+                "Lettres": {"code": "2BACL", "matieres": LETTERS},
+                "Sciences Humaines": {"code": "2BACSH", "matieres": LETTERS},
             },
         },
     }
@@ -89,7 +89,6 @@ EXAM_CHANNELS = {
     "2ème Année Bac": "🇲🇦-préparation-national",
 }
 
-# Short Discord-safe labels. Discord Forum tag names cannot exceed 50 characters.
 SUBJECT_TAGS = {
     "Mathématiques": "Mathématiques",
     "Physique et Chimie": "Physique-Chimie",
@@ -111,7 +110,6 @@ SUBJECT_TAGS = {
 }
 
 FORUM_MAX_TAGS = 20
-MAX_CLASSES_PER_STREAM = 20
 
 
 def get_levels() -> list[str]:
@@ -130,12 +128,12 @@ def get_stream(stream_name: str, level_name: str) -> dict:
     return get_level(level_name)["filieres"][stream_name]
 
 
+def get_stream_code(level_name: str, stream_name: str) -> str:
+    return str(get_stream(stream_name, level_name)["code"])
+
+
 def get_stream_subjects(level_name: str, stream_name: str) -> list[str]:
     return list(get_stream(stream_name, level_name)["matieres"])
-
-
-def get_stream_class_names(level_name: str, stream_name: str) -> list[str]:
-    return list(get_stream(stream_name, level_name)["classes"])
 
 
 def get_level_subjects(level_name: str) -> list[str]:
