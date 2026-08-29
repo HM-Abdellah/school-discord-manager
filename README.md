@@ -1,38 +1,86 @@
 # 🏫 School Discord Manager
 
-An open-source Discord bot for generating and managing a structured school server.
+A Discord bot for generating and managing a clean, role-driven school server for Moroccan secondary education.
 
-The project is designed around a configurable Moroccan secondary-school structure with:
+## ✨ New compact architecture
 
-- Tronc Commun
-- 1ère Année Bac
-- 2ème Année Bac
-- Selectable streams (filières)
-- Configurable number of classes per stream
-- Subject forums with educational tags
-- Private class areas
-- Teacher-only private area
-- Regional and national exam channels
-- Virtual classroom voice channels
-- Student and teacher role management
+The server no longer creates a channel for every class and every subject. That design grows too quickly and can hit Discord's 500-channel server cap. citeturn359286search0
 
-## ✨ Main idea
+The new structure is:
 
-The school structure is **configured interactively inside Discord** instead of hard-coding the number of classes.
+```text
+🏢 INFORMATIONS & ADMINISTRATION
+├── 📢 actualités
+├── 👨‍🏫 absences-professeurs
+├── 📊 résultats-et-annonces
+├── 🎓 opportunités-post-bac
+└── 🏆 concours-et-activités
 
-An administrator runs:
+👨‍🏫 ESPACE PROFESSEURS
+├── 💬 discussion-professeurs
+└── 🔊 réunion-professeurs
+
+📚 1ÈRE ANNÉE BAC
+├── 📢 annonces
+├── 🗓️ organisation
+├── 📚 cours-1bac          ← Forum
+├── 💬 questions-1bac      ← Forum
+├── 📝 devoirs-1bac        ← Forum
+└── 🇲🇦 préparation-régional
+
+🔊 SALLES VIRTUELLES
+├── 🔊 TC-classe
+├── 🔊 1BAC-classe
+└── 🔊 2BAC-classe
+```
+
+### How subjects are organized
+
+Subjects are **Forum tags**, not channels. Discord Forum channels support organized posts and tags, with a current limit of 20 tags per Forum channel. citeturn359286search11turn359286search1
+
+Classes are **roles**, not channels. A student is assigned one class role with `/assignstudent`; the role controls access to the appropriate level area.
+
+This keeps the server small even when a school has many classes.
+
+## ⚙️ Setup
+
+Run:
 
 ```text
 /setup
 ```
 
-The wizard lets the administrator choose the level, select only the streams available at the school, and choose the number of classes for every selected stream.
+The wizard lets an administrator:
 
-The configuration is then saved locally and can be built with:
+1. Select the levels present in the school.
+2. Select the available filières for each level.
+3. Choose the number of classes per filière (using the curriculum's predefined class names as defaults).
+4. Review the configuration.
+5. Build the server.
+
+The configuration is saved locally and can later be rebuilt with:
 
 ```text
 /build
 ```
+
+Use:
+
+```text
+/status
+```
+
+to inspect the saved configuration and the compact architecture.
+
+## 📚 Curriculum
+
+The complete academic catalogue lives in `config/curriculum.py` under:
+
+```python
+CURRICULUM["niveaux"]
+```
+
+It contains the level, filière, class names and subjects. The catalogue does **not** duplicate BIOF variants as separate subjects; regular subject names are used once.
 
 ## 📁 Project structure
 
@@ -43,143 +91,79 @@ school-discord-manager/
 ├── .env.example
 ├── .gitignore
 ├── README.md
-│
 ├── config/
 │   ├── __init__.py
 │   └── curriculum.py
-│
 ├── cogs/
 │   ├── __init__.py
 │   ├── setup.py
 │   ├── server.py
 │   ├── students.py
 │   └── teachers.py
-│
 ├── services/
 │   ├── __init__.py
 │   ├── permissions.py
 │   ├── server_builder.py
 │   └── storage.py
-│
 └── data/
     └── (generated local JSON files)
 ```
 
 ## 🔐 Token security
 
-Never put your real Discord bot token in GitHub.
+Never commit your real Discord token to GitHub.
 
-Create a local `.env` file from `.env.example`:
+Create `.env` from `.env.example`:
 
 ```env
 DISCORD_TOKEN=YOUR_REAL_DISCORD_BOT_TOKEN
 DISCORD_GUILD_ID=YOUR_TEST_SERVER_ID
 ```
 
-`.env` is ignored by Git through `.gitignore`.
-
-`DISCORD_GUILD_ID` is optional. During development, setting it makes slash-command synchronization happen on that server immediately. Leave it empty when you want global synchronization.
-
 ## 🛠️ Local installation
-
-Python 3.8+ is required. The project is intended to run with current supported Python 3 versions, including Python 3.13.
-
-### 1. Clone the repository
 
 ```bash
 git clone https://github.com/HM-Abdellah/school-discord-manager.git
 cd school-discord-manager
-```
-
-### 2. Create a virtual environment
-
-Windows PowerShell:
-
-```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-```
-
-### 3. Install dependencies
-
-```bash
 python -m pip install -r requirements.txt
 ```
 
-### 4. Configure the bot token
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Open `.env` and set your own Discord bot token. Do not commit the `.env` file.
-
-### 5. Discord Developer Portal
-
-Enable these privileged gateway intents for the bot:
-
-- Server Members Intent
-- Message Content Intent
-
-Invite the bot to your test server with the permissions required to create and manage the configured roles and channels. For initial development, Administrator is the simplest option.
-
-Forum channels require the Discord server configuration needed for community/forum functionality.
-
-### 6. Run
+Then configure `.env` and run:
 
 ```bash
 python bot.py
 ```
 
+Forum channels require Community to be enabled on the Discord server. citeturn359286search11
+
 ## 🤖 Commands
 
-### `/setup`
+`/setup` — configure the school's levels, filières and classes.
 
-Interactive setup wizard:
+`/build` — build/reconcile the saved compact server structure.
 
-1. Select a school level.
-2. Select the streams available in your school.
-3. Choose the number of classes for each selected stream.
-4. Review the configuration.
-5. Confirm and build the server.
+`/status` — inspect the saved configuration.
 
-### `/build`
+`/assignstudent` — assign a student to a generated class role.
 
-Builds or reconciles the saved configuration on the current server. Existing matching resources are reused when possible.
+`/assignteacher` — assign the `Professeur` role.
 
-### `/status`
+`/reportabsence` — publish a teacher absence announcement.
 
-Shows the saved configuration and estimated class/forum counts.
+## 🧪 First test
 
-### `/assignstudent`
+For the cleanest test, create a **new empty Discord server** and invite the current bot there. The old test server may already be at Discord's channel cap because it contains the legacy per-class/per-subject structure.
 
-Assigns a student to one of the generated class roles and removes any previous School Discord Manager class role from that student.
+After starting the bot:
 
-### `/assignteacher`
+```text
+/setup
+→ choose your levels
+→ choose filières
+→ choose classes
+→ Construire le serveur
+```
 
-Assigns the `Professeur` role to a member.
-
-### `/reportabsence`
-
-Publishes a teacher-absence announcement in the configured institution channel.
-
-## 📚 Curriculum catalogue
-
-The stream and subject catalogue is stored in `config/curriculum.py`.
-
-The catalogue defines **what exists academically**. It intentionally does not define the number of classes: class counts are selected through `/setup`.
-
-## 🧭 Roadmap
-
-- Persistent database instead of JSON storage
-- Teacher-to-class assignment
-- Automatic absence notifications to affected classes
-- Timetable management
-- More granular subject permissions
-- Audit logs
-- Web dashboard
-- Automated tests and CI
-
-## 📜 License
-
-This project is open source. Add the license that matches how you want the project to be reused.
+The important result to check is that you get a small number of level Forums and class roles instead of a long list of subject channels.
