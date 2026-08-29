@@ -10,6 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from config.curriculum import get_level, get_levels, get_stream_abbreviation, get_stream_subjects, get_streams
+from services.permissions import management_check
 from services.server_builder import ServerBuilder
 from services.storage import get_active_academic_year, save_guild_config
 
@@ -245,8 +246,11 @@ class Setup(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="setup", description="Configurer les niveaux et filières du serveur scolaire.")
-    @app_commands.checks.has_permissions(administrator=True)
+    @management_check()
     async def setup_command(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
         await interaction.response.send_message(
             f"## 🏫 School Discord Manager\n\n"
             "Sélectionne les niveaux présents, puis uniquement les filières présentes dans ton établissement.\n"
