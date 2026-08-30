@@ -31,6 +31,7 @@ from services.permissions import (
 CATEGORY_GENERAL = "🏢・INFORMATIONS & ADMINISTRATION"
 CATEGORY_PROFESSORS = "👨‍🏫・ESPACE PROFESSEURS"
 CATEGORY_VOICE = "🔊・SALLES VIRTUELLES"
+
 LEVEL_CATEGORY_NAMES = {
     "Tronc Commun": "📘・TRONC COMMUN",
     "1ère Année Bac": "1️⃣・1BAC",
@@ -69,7 +70,7 @@ def _subject_channel_name(stream_code: str, subject: str) -> str:
 
 
 def _stream_header_name(stream_name: str, stream_code: str) -> str:
-    """Legacy display helper kept for cleanup of older builds."""
+    """Legacy helper for identifying headers created by older versions."""
     return f"🔹・{STREAM_EMOJIS.get(stream_name, '🎓')}・{stream_code}"
 
 
@@ -84,6 +85,8 @@ def _stream_role_name(level_name: str, stream_name: str) -> str:
 def _subject_role_name(level_name: str, stream_name: str, subject: str) -> str:
     stream_code = get_stream_abbreviation(level_name, stream_name)
     subject_code = get_subject_internal_code(subject)
+    # Compact, scoped role: the stream is part of the role so Math in 1BACSE
+    # cannot grant write access to Math in another stream.
     return f"{SUBJECT_ROLE_PREFIX}{stream_code} - {subject_code}"[:100]
 
 
@@ -99,7 +102,7 @@ class BuildStats:
 
 
 class ServerBuilder:
-    """Build one category per level and group streams visually by channel prefixes."""
+    """Build one category per level and group streams visually by compact channel prefixes."""
 
     def __init__(self, guild: discord.Guild) -> None:
         self.guild = guild
@@ -107,17 +110,17 @@ class ServerBuilder:
 
     @staticmethod
     def _planned_channel_names(level: dict) -> set[str]:
-        """Plan only channels that will physically live in this level category.
+        """Plan channels that physically belong to a level category.
 
-        We deliberately do not create a separate stream-header channel because every
-        channel counts toward Discord's category limit. The information channel is the
-        visual start of each stream block and contains the stream emoji/code in its name/topic.
+        There is intentionally no separate stream-header channel: Discord counts every
+        channel toward the category limit. The first text channel of each stream is its
+        `informations` channel and carries the stream emoji/code, acting as the visual divider.
         """
         names: set[str] = set()
         for stream in level.get("streams", []):
             code = stream.get("abbreviation") or ""
             names.update({
-                f"📌-{code}・informations",
+                f"📌{STREAM_EMOJIS.get(stream['name'], '🎓')}・{code}・informations",
                 f"🗓️-{code}・emploi-du-temps",
                 f"📝-{code}・examens",
             })
@@ -138,28 +141,15 @@ class ServerBuilder:
             if projected > 50:
                 raise ValueError(
                     f"La catégorie `{category_name}` dépasserait la limite Discord de 50 salons ({projected}). "
-                    "Réduis le nombre de filières sélectionnées dans ce niveau."
+                    "Réduis le nombre de filières sélectionnées dans ce niveau ou utilise moins de canaux par filière."
                 )
             total_new_channels += len(planned_names - existing_names)
 
-        # This counts the channels already present plus the channels planned for all levels.
-        # Shared administration/professor/voice channels are only a small fixed addition here;
-        # a separate level-cap check above is the important guard for normal school sizes.
         current_total = len(self.guild.channels)
-        fixed_shared = len(GENERAL_CHANNELS) + len(PROFESSOR_CHANNELS)
-        stream_voice_new = sum(
-            1
-            for level in selected.get("levels", [])
-            for stream in level.get("streams", [])
-            if not discord.utils.get(
-                self.guild.voice_channels,
-                name=f"🔊-{_safe_name(stream.get('abbreviation', ''), 30)}-à-distance",
-            )
-        )
-        if current_total + total_new_channels + stream_voice_new + fixed_shared > 500:
-            projected_total = current_total + total_new_channels + stream_voice_new + fixed_shared
+        if current_total + total_new_channels > 500:
             raise ValueError(
-                f"La construction dépasserait la limite Discord de 500 salons ({projected_total})."
+                f"La construction dépasserait la limite Discord de 500 salons ({current_total + total_new_channels}). "
+                "Réduis la configuration de l'établissement."
             )
 
     async def build(self, selected: dict) -> BuildStats:
@@ -205,8 +195,8 @@ class ServerBuilder:
             elif role_name in (ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE):
                 perms = discord.Permissions.none()
                 for permission in (
-                    "view_channel", "read_message_history", "connect", "speak",
-                    "stream", "use_application_commands",
+                    "view_channel", "read_message_history", "connect", "speak", "stream",
+                    "use_application_commands",
                 ):
                     setattr(perms, permission, True)
                 await role.edit(permissions=perms, reason="School manager teacher base role")
@@ -301,11 +291,8 @@ class ServerBuilder:
 
     async def _ensure_general_area(self, roles):
         overwrites = general_area_overwrites(
-            self.guild.default_role,
-            roles[ROLE_ADMIN],
-            roles[ROLE_PROFESSOR],
-            roles[ROLE_PROFESSOR_FEMALE],
-            roles[ROLE_STUDENT],
+            self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR],
+            roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT]
         )
         category = await self._get_or_create_category(CATEGORY_GENERAL, overwrites)
         topics = {
@@ -320,11 +307,8 @@ class ServerBuilder:
 
     async def _ensure_professor_area(self, roles):
         overwrites = teacher_area_overwrites(
-            self.guild.default_role,
-            roles[ROLE_ADMIN],
-            roles[ROLE_PROFESSOR],
-            roles[ROLE_PROFESSOR_FEMALE],
-            roles[ROLE_STUDENT],
+            self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR],
+            roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT]
         )
         category = await self._get_or_create_category(CATEGORY_PROFESSORS, overwrites)
         await self._get_or_create_text(
@@ -362,9 +346,10 @@ class ServerBuilder:
                 stream_role,
             )
 
+            stream_emoji = STREAM_EMOJIS.get(stream_name, "🎓")
             await self._get_or_create_text(
                 level_category,
-                f"📌-{stream_code}・informations",
+                f"📌{stream_emoji}・{stream_code}・informations",
                 topic=f"🔹 {stream_code} — {stream_name}. Informations générales et organisation de la filière.",
                 overwrites=announcements,
             )
