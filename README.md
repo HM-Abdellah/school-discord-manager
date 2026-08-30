@@ -4,106 +4,152 @@ A Discord bot for generating and managing a clean, role-driven school server for
 
 ## ✨ Current Discord architecture
 
-The bot builds one **category per level**. Streams are grouped visually inside that level with locked, non-joinable voice headers; Discord does not support nested categories. Each stream has its own announcement/timetable/exam channels and subject channels.
+The server is organized by **level**, then streams are grouped visually inside that level. Discord does not support categories inside categories, so each stream uses compact channel names rather than a nested category.
 
 ```text
 📘・TRONC COMMUN
-├── 🔹・🔬・TCS        ← locked visual stream header
-├── 📌-TCS・informations
+├── 📌🔬・TCS・informations
 ├── 🗓️-TCS・emploi-du-temps
 ├── 📝-TCS・examens
-├── 📚-TCS・math
-├── 📚-TCS・pc
-└── ...
+└── 📚-TCS・Math / PC / SVT / ...
 
 1️⃣・1BAC
-├── 🔹・🧪・1BACSE
-├── 📌-1BACSE・informations
+├── 📌🧪・1BACSE・informations
 ├── 🗓️-1BACSE・emploi-du-temps
 ├── 📝-1BACSE・examens
-├── 📚-1BACSE・math
-└── ...
+└── 📚-1BACSE・Math / PC / SVT / ...
 
 2️⃣・2BAC
 └── ...
-
-🔊・SALLES VIRTUELLES
-├── 🔊-TCS-à-distance
-├── 🔊-1bacse-à-distance
-└── 🔊-2bacpc-à-distance
 ```
 
-No Discord channels or roles are created for individual classes/groups.
+Each stream has one shared academic space for all of its classes/groups. No Discord channel or role is created per class.
 
-## 👨‍🏫 Teacher roles
+## 👥 Roles and permissions
 
-Teachers use compact roles:
+Main roles:
 
-```text
-Prof
-Prof (F)
-Filière - 1BACSE
-Matière - 1BACSE - Math
-```
+- `Administration`
+- `Prof`
+- `Prof (F)`
+- `Élève`
 
-A teacher can be assigned to multiple levels, filières and subjects. Subject roles are stream-specific so a teacher assigned to `1BACSE / Math` cannot publish in `1BACSE / PC` or `2BAC / Math` unless separately assigned.
+For each stream, the bot creates separate roles for teachers and students:
 
-Teachers can publish in organizational channels such as information, timetable and exams. In subject channels, publishing is restricted to the matching stream-subject role. Teachers cannot manage channels or permissions.
+- `Filière - 1BACSE` → teacher stream role
+- `Élèves - 1BACSE` → student stream role
+- `Matière - 1BACSE - Math` → teacher role scoped to one subject and one stream
 
-## 📚 Curriculum
+This separation is important: a teacher can see all subject channels, but can publish in a subject only when they have that subject role. A teacher may teach several levels/streams/subjects at the same time.
 
-The academic catalogue lives in `config/curriculum.py` under `CURRICULUM["niveaux"]`.
-
-Current active catalogue:
-
-```text
-Tronc Commun: TCS, TCL, TCT
-1ère Année Bac: 1BACSE, 1BACSM, 1BACSH, 1BACECO, 1BACSTE, 1BACSTM
-2ème Année Bac: 2BACPC, 2BACSVT, 2BACSMA, 2BACSMB, 2BACL, 2BACSH, 2BACSE, 2BACSGC
-```
-
-`Tronc Commun Originel`, `1ère Année Bac Arts Appliqués`, and `2ème Année Bac Arts Appliqués` are intentionally not active yet.
-
-Display names for subjects stay short on Discord (`Math`, `PC`, `SVT`, `العربية`, `الاجتماعيات`, `التربية الإسلامية`, `الفلسفة`, etc.) while the full canonical names remain in the curriculum code.
-
-## 🛠️ Commands
-
-```text
-/setup
-/build
-/addstream
-/removestream
-/status
-/newyear 2027/2028
-/years
-/assignstudent
-/studenthistory
-/leave_school
-/assignteacher
-/assignsubjectteachers
-/reportabsence
-/resetserver   ← server owner only
-```
-
-`/build` is non-destructive: it reconciles the configured structure without formatting the whole server.
-
-`/addstream` adds one configured stream without resetting the server.
-
-`/removestream` removes one configured stream and its managed resources.
-
-`/resetserver` is a development/emergency command reserved for the Discord server owner.
+Teachers can publish in organizational channels such as information, exams and schedules, but they cannot manage channels or permissions. Administration manages the school structure and schedules. `/resetserver` is restricted to the Discord server owner.
 
 ## 📅 Academic years and student history
 
-School data is separated from Discord channels. The bot stores configuration and academic history locally in SQLite at `data/school.db`.
+School data is separated from Discord channels. The bot stores academic years, students and enrollment history in local SQLite at `data/school.db`.
 
-Students keep historical enrollments when transferred or marked as having left the school.
+At the start of a new school year:
 
-## 🔐 Security
+```text
+/newyear 2027/2028
+/setup
+/build
+```
 
-Never commit `.env` or real school data.
+Previous years remain stored for future archive/history features.
 
-The repository ignores `.env`, local JSON configuration and SQLite/database files. The reusable `Administration` role is intentionally not granted Discord's full `Administrator` permission.
+## ⚙️ Setup and maintenance commands
+
+```text
+/setup
+```
+Configure the levels and only the streams actually present in the school.
+
+```text
+/build
+```
+Reconcile the current configuration without formatting the server.
+
+```text
+/addstream
+```
+Add one stream without rebuilding the whole server from scratch.
+
+```text
+/removestream
+```
+Remove one stream and its resources without touching unrelated streams.
+
+```text
+/status
+/years
+/newyear 2027/2028
+```
+Inspect configuration and manage academic years.
+
+Teacher/student administration:
+
+```text
+/assignteacher
+/assignsubjectteachers
+/assignstudent
+/studenthistory
+/leave_school
+/reportabsence
+```
+
+Dangerous maintenance:
+
+```text
+/resetserver RESET
+```
+This performs a full server format and is restricted to the server owner.
+
+## 📚 Curriculum
+
+The academic catalogue lives in `config/curriculum.py`. The project currently includes only the configured streams in that catalogue; unsupported/unused streams such as `TCA` and Arts Appliqués are intentionally omitted for now.
+
+Subject display names are compact for Discord, while full canonical names remain available in the curriculum data.
+
+## 📁 Project structure
+
+```text
+school-discord-manager/
+├── bot.py
+├── requirements.txt
+├── .env.example
+├── .gitignore
+├── README.md
+├── config/
+│   ├── __init__.py
+│   └── curriculum.py
+├── cogs/
+│   ├── __init__.py
+│   ├── setup.py
+│   ├── server_v2.py
+│   ├── students.py
+│   └── teachers.py
+├── services/
+│   ├── __init__.py
+│   ├── permissions.py
+│   ├── server_builder.py
+│   └── storage.py
+└── data/
+    └── .gitkeep
+```
+
+Local `.env` and SQLite/JSON data are ignored by Git and must never contain secrets in commits.
+
+## 🔐 Token security
+
+Never commit your real Discord token.
+
+Create `.env` from `.env.example`:
+
+```env
+DISCORD_TOKEN=YOUR_REAL_DISCORD_BOT_TOKEN
+DISCORD_GUILD_ID=YOUR_TEST_SERVER_ID
+```
 
 ## 🛠️ Local installation
 
@@ -116,16 +162,4 @@ python -m pip install -r requirements.txt
 python bot.py
 ```
 
-For development, put your bot token and test server ID in `.env`:
-
-```env
-DISCORD_TOKEN=YOUR_REAL_DISCORD_BOT_TOKEN
-DISCORD_GUILD_ID=YOUR_TEST_SERVER_ID
-```
-
-After updates:
-
-```bash
-git pull origin main
-python bot.py
-```
+The bot uses `discord.py` application commands and disables the message-content intent because the current command architecture does not need it.
