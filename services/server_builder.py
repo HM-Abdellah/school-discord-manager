@@ -20,6 +20,7 @@ from services.permissions import (
     ROLE_PROFESSOR_FEMALE,
     ROLE_STUDENT,
     STREAM_ROLE_PREFIX,
+    STUDENT_STREAM_ROLE_PREFIX,
     SUBJECT_ROLE_PREFIX,
     general_area_overwrites,
     public_voice_overwrites,
@@ -31,13 +32,11 @@ from services.permissions import (
 CATEGORY_GENERAL = "🏢・INFORMATIONS & ADMINISTRATION"
 CATEGORY_PROFESSORS = "👨‍🏫・ESPACE PROFESSEURS"
 CATEGORY_VOICE = "🔊・SALLES VIRTUELLES"
-
 LEVEL_CATEGORY_NAMES = {
     "Tronc Commun": "📘・TRONC COMMUN",
     "1ère Année Bac": "1️⃣・1BAC",
     "2ème Année Bac": "2️⃣・2BAC",
 }
-
 STREAM_EMOJIS = {
     "Tronc Commun Scientifique": "🔬",
     "Tronc Commun Lettres": "📩",
@@ -70,7 +69,7 @@ def _subject_channel_name(stream_code: str, subject: str) -> str:
 
 
 def _stream_header_name(stream_name: str, stream_code: str) -> str:
-    """Legacy helper for identifying headers created by older versions."""
+    """Legacy helper for removing old visual header channels."""
     return f"🔹・{STREAM_EMOJIS.get(stream_name, '🎓')}・{stream_code}"
 
 
@@ -82,11 +81,13 @@ def _stream_role_name(level_name: str, stream_name: str) -> str:
     return f"{STREAM_ROLE_PREFIX}{get_stream_abbreviation(level_name, stream_name)}"
 
 
+def _student_stream_role_name(level_name: str, stream_name: str) -> str:
+    return f"{STUDENT_STREAM_ROLE_PREFIX}{get_stream_abbreviation(level_name, stream_name)}"
+
+
 def _subject_role_name(level_name: str, stream_name: str, subject: str) -> str:
     stream_code = get_stream_abbreviation(level_name, stream_name)
     subject_code = get_subject_internal_code(subject)
-    # Compact, scoped role: the stream is part of the role so Math in 1BACSE
-    # cannot grant write access to Math in another stream.
     return f"{SUBJECT_ROLE_PREFIX}{stream_code} - {subject_code}"[:100]
 
 
@@ -110,12 +111,6 @@ class ServerBuilder:
 
     @staticmethod
     def _planned_channel_names(level: dict) -> set[str]:
-        """Plan channels that physically belong to a level category.
-
-        There is intentionally no separate stream-header channel: Discord counts every
-        channel toward the category limit. The first text channel of each stream is its
-        `informations` channel and carries the stream emoji/code, acting as the visual divider.
-        """
         names: set[str] = set()
         for stream in level.get("streams", []):
             code = stream.get("abbreviation") or ""
@@ -185,10 +180,9 @@ class ServerBuilder:
             if role_name == ROLE_ADMIN:
                 perms = discord.Permissions.none()
                 for permission in (
-                    "view_channel", "send_messages", "read_message_history",
-                    "manage_channels", "manage_permissions", "manage_roles",
-                    "manage_messages", "manage_threads", "connect", "speak", "stream",
-                    "use_application_commands",
+                    "view_channel", "send_messages", "read_message_history", "manage_channels",
+                    "manage_permissions", "manage_roles", "manage_messages", "manage_threads",
+                    "connect", "speak", "stream", "use_application_commands",
                 ):
                     setattr(perms, permission, True)
                 await role.edit(permissions=perms, reason="School manager least-privilege administration role")
@@ -203,9 +197,8 @@ class ServerBuilder:
             else:
                 perms = discord.Permissions.none()
                 for permission in (
-                    "view_channel", "send_messages", "read_message_history",
-                    "create_public_threads", "send_messages_in_threads", "connect", "speak",
-                    "use_application_commands",
+                    "view_channel", "send_messages", "read_message_history", "create_public_threads",
+                    "send_messages_in_threads", "connect", "speak", "use_application_commands",
                 ):
                     setattr(perms, permission, True)
                 await role.edit(permissions=perms, reason="School manager student base role")
@@ -221,7 +214,21 @@ class ServerBuilder:
                 permissions=discord.Permissions.none(),
                 colour=discord.Colour.teal(),
                 mentionable=True,
-                reason="School manager stream role",
+                reason="School manager teacher stream role",
+            )
+            self.stats.roles_created += 1
+        return role
+
+    async def _ensure_student_stream_role(self, level_name: str, stream_name: str) -> discord.Role:
+        role_name = _student_stream_role_name(level_name, stream_name)
+        role = discord.utils.get(self.guild.roles, name=role_name)
+        if role is None:
+            role = await self.guild.create_role(
+                name=role_name,
+                permissions=discord.Permissions.none(),
+                colour=discord.Colour.green(),
+                mentionable=False,
+                reason="School manager student stream role",
             )
             self.stats.roles_created += 1
         return role
@@ -235,7 +242,7 @@ class ServerBuilder:
                 permissions=discord.Permissions.none(),
                 colour=discord.Colour.dark_blue(),
                 mentionable=False,
-                reason="School manager stream-subject teacher role",
+                reason="School manager subject teacher role",
             )
             self.stats.roles_created += 1
         return role
@@ -312,8 +319,7 @@ class ServerBuilder:
         )
         category = await self._get_or_create_category(CATEGORY_PROFESSORS, overwrites)
         await self._get_or_create_text(
-            category,
-            PROFESSOR_CHANNELS["discussion"],
+            category, PROFESSOR_CHANNELS["discussion"],
             topic="Espace privé de discussion et de coordination des professeurs.",
             overwrites=overwrites,
         )
@@ -336,21 +342,23 @@ class ServerBuilder:
             stream_name = stream["name"]
             stream_code = stream.get("abbreviation") or get_stream_abbreviation(level_name, stream_name)
             subjects = list(stream.get("subjects", [])) or get_stream_subjects(level_name, stream_name)
-            stream_role = await self._ensure_stream_role(level_name, stream_name)
+            teacher_stream_role = await self._ensure_stream_role(level_name, stream_name)
+            student_stream_role = await self._ensure_student_stream_role(level_name, stream_name)
             announcements = stream_announcement_overwrites(
                 self.guild.default_role,
                 roles[ROLE_ADMIN],
                 roles[ROLE_PROFESSOR],
                 roles[ROLE_PROFESSOR_FEMALE],
                 roles[ROLE_STUDENT],
-                stream_role,
+                teacher_stream_role,
+                student_stream_role,
             )
 
             stream_emoji = STREAM_EMOJIS.get(stream_name, "🎓")
             await self._get_or_create_text(
                 level_category,
                 f"📌{stream_emoji}・{stream_code}・informations",
-                topic=f"🔹 {stream_code} — {stream_name}. Informations générales et organisation de la filière.",
+                topic=f"{stream_code} — {stream_name}. Informations générales et organisation de la filière.",
                 overwrites=announcements,
             )
             await self._get_or_create_text(
@@ -380,7 +388,8 @@ class ServerBuilder:
                         roles[ROLE_ADMIN],
                         roles[ROLE_PROFESSOR],
                         roles[ROLE_PROFESSOR_FEMALE],
-                        stream_role,
+                        teacher_stream_role,
+                        student_stream_role,
                         subject_role,
                     ),
                 )
@@ -394,7 +403,8 @@ class ServerBuilder:
                     roles[ROLE_PROFESSOR],
                     roles[ROLE_PROFESSOR_FEMALE],
                     roles[ROLE_STUDENT],
-                    stream_role,
+                    teacher_stream_role,
+                    student_stream_role,
                 ),
             )
             self.stats.streams_processed += 1
