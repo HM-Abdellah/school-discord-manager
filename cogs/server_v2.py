@@ -8,36 +8,25 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config.curriculum import get_levels, get_stream_abbreviation, get_stream_subjects, get_streams
+from config.curriculum import get_levels, get_stream_abbreviation, get_streams, get_stream_subjects
 from services.permissions import (
     ROLE_ADMIN,
     ROLE_PROFESSOR,
     ROLE_PROFESSOR_FEMALE,
     ROLE_STUDENT,
     STREAM_ROLE_PREFIX,
+    STUDENT_STREAM_ROLE_PREFIX,
     SUBJECT_ROLE_PREFIX,
     management_check,
     owner_only_check,
 )
-from services.server_builder import ServerBuilder, _level_category_name, _safe_name, _stream_header_name, _subject_role_name, _stream_role_name
+from services.server_builder import ServerBuilder, _level_category_name, _safe_name, _stream_header_name
 from services.storage import create_academic_year, get_guild_config, list_academic_years, reset_guild_data, save_guild_config
 
 MAIN_ROLE_NAMES = {ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT}
 LEGACY_ROLE_NAMES = {"Professeur", "Professeur (F)"}
 LEGACY_SUBJECT_ROLE_PREFIXES = ("Professeur Matière - ", "Professeur Matiere - ")
 LEVEL_ABBREVIATIONS = {"Tronc Commun": "TC", "1ère Année Bac": "1BAC", "2ème Année Bac": "2BAC"}
-
-
-def _is_management(interaction: discord.Interaction) -> bool:
-    guild = interaction.guild
-    if guild is None:
-        return False
-    if interaction.user.id == guild.owner_id:
-        return True
-    if getattr(interaction.user.guild_permissions, "administrator", False):
-        return True
-    admin_role = discord.utils.get(guild.roles, name=ROLE_ADMIN)
-    return admin_role is not None and admin_role in getattr(interaction.user, "roles", [])
 
 
 async def level_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
@@ -147,7 +136,7 @@ class ServerCommands(commands.Cog):
         level_category = discord.utils.get(interaction.guild.categories, name=_level_category_name(level))
         if level_category is not None:
             prefixes = (
-                f"📌{_stream_emoji_placeholder()}" if False else f"📌-{code}・",
+                f"📌-{code}・",
                 f"📌{code}・",
                 f"🗓️-{code}・",
                 f"📝-{code}・",
@@ -175,18 +164,19 @@ class ServerCommands(commands.Cog):
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
-        stream_role = discord.utils.get(interaction.guild.roles, name=f"{STREAM_ROLE_PREFIX}{code}")
-        if stream_role is not None:
-            try:
-                await stream_role.delete(reason="School manager stream removal")
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-
-        subject_role_prefix = f"{SUBJECT_ROLE_PREFIX}{code} - "
+        role_names = {
+            f"{STREAM_ROLE_PREFIX}{code}",
+            f"{STUDENT_STREAM_ROLE_PREFIX}{code}",
+        }
+        role_names.update(
+            role.name
+            for role in interaction.guild.roles
+            if role.name.startswith(f"{SUBJECT_ROLE_PREFIX}{code} - ")
+        )
         for role in list(interaction.guild.roles):
-            if role.name.startswith(subject_role_prefix):
+            if role.name in role_names:
                 try:
-                    await role.delete(reason="School manager stream subject-role cleanup")
+                    await role.delete(reason="School manager stream role cleanup")
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
@@ -238,11 +228,7 @@ class ServerCommands(commands.Cog):
             for stream in level.get("streams", []):
                 total += 1
                 lines.append(f"• **{stream.get('abbreviation', stream['name'])}** — {stream['name']}")
-        lines.extend([
-            "",
-            f"**Total filières :** {total}",
-            "**Discord :** une catégorie par niveau, informations servant de repère par filière, channels par matière.",
-        ])
+        lines.extend(["", f"**Total filières :** {total}", "**Discord :** une catégorie par niveau, informations servant de repère par filière, channels par matière."])
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
     @app_commands.command(name="resetserver", description="FORMATER complètement le serveur : supprimer les salons et la structure School Manager.")
@@ -274,7 +260,12 @@ class ServerCommands(commands.Cog):
             for role in list(guild.roles):
                 if role.is_default() or role.managed:
                     continue
-                if role.name in MAIN_ROLE_NAMES or role.name in LEGACY_ROLE_NAMES or role.name.startswith((STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX)) or role.name.startswith(LEGACY_SUBJECT_ROLE_PREFIXES):
+                if (
+                    role.name in MAIN_ROLE_NAMES
+                    or role.name in LEGACY_ROLE_NAMES
+                    or role.name.startswith((STREAM_ROLE_PREFIX, STUDENT_STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX))
+                    or role.name.startswith(LEGACY_SUBJECT_ROLE_PREFIXES)
+                ):
                     try:
                         await role.delete(reason="School Discord Manager FULL SERVER RESET")
                         deleted_roles += 1
