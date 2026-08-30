@@ -7,7 +7,13 @@ from discord import app_commands
 from discord.ext import commands
 
 from config.curriculum import get_levels, get_stream_abbreviation, get_streams
-from services.permissions import ROLE_STUDENT, STUDENT_STREAM_ROLE_PREFIX, STREAM_ROLE_PREFIX, management_check
+from services.permissions import (
+    ROLE_STUDENT,
+    STUDENT_STREAM_ROLE_PREFIX,
+    STREAM_ROLE_PREFIX,
+    SUBJECT_ROLE_PREFIX,
+    management_check,
+)
 from services.storage import enroll_student, get_active_academic_year, get_student, get_student_history, mark_student_left, upsert_student
 
 
@@ -49,16 +55,13 @@ class StudentCommands(commands.Cog):
                 role for role in student.roles
                 if role.name.startswith(STUDENT_STREAM_ROLE_PREFIX) and role != student_stream_role
             ]
-            if old_student_stream_roles:
-                await student.remove_roles(*old_student_stream_roles, reason="Student stream transfer")
-
-            # Remove legacy teacher-style stream roles accidentally attached by older versions.
-            old_teacher_stream_roles = [
+            cleanup_roles = old_student_stream_roles + [
                 role for role in student.roles
                 if role.name.startswith(STREAM_ROLE_PREFIX)
+                or role.name.startswith(SUBJECT_ROLE_PREFIX)
             ]
-            if old_teacher_stream_roles:
-                await student.remove_roles(*old_teacher_stream_roles, reason="Student legacy stream role cleanup")
+            if cleanup_roles:
+                await student.remove_roles(*cleanup_roles, reason="Student role normalization")
 
             await student.add_roles(student_role, student_stream_role, reason="Student stream assignment")
             enroll_student(interaction.guild.id, db_student_id, int(year["id"]), level, stream)
@@ -112,6 +115,7 @@ class StudentCommands(commands.Cog):
             role for role in student.roles
             if role.name.startswith(STUDENT_STREAM_ROLE_PREFIX)
             or role.name.startswith(STREAM_ROLE_PREFIX)
+            or role.name.startswith(SUBJECT_ROLE_PREFIX)
         ]
         student_role = discord.utils.get(interaction.guild.roles, name=ROLE_STUDENT)
         try:
