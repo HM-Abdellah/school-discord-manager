@@ -22,10 +22,8 @@ from services.permissions import (
     STREAM_ROLE_PREFIX,
     SUBJECT_ROLE_PREFIX,
     general_area_overwrites,
-    locked_stream_header_overwrites,
     public_voice_overwrites,
     stream_announcement_overwrites,
-    stream_area_overwrites,
     subject_channel_overwrites,
     teacher_area_overwrites,
 )
@@ -38,6 +36,7 @@ LEVEL_CATEGORY_NAMES = {
     "1ère Année Bac": "1️⃣・1BAC",
     "2ème Année Bac": "2️⃣・2BAC",
 }
+
 STREAM_EMOJIS = {
     "Tronc Commun Scientifique": "🔬",
     "Tronc Commun Lettres": "📩",
@@ -70,6 +69,7 @@ def _subject_channel_name(stream_code: str, subject: str) -> str:
 
 
 def _stream_header_name(stream_name: str, stream_code: str) -> str:
+    """Legacy display helper kept for cleanup of older builds."""
     return f"🔹・{STREAM_EMOJIS.get(stream_name, '🎓')}・{stream_code}"
 
 
@@ -99,7 +99,7 @@ class BuildStats:
 
 
 class ServerBuilder:
-    """Build one category per level; stream headers are locked non-chat voice channels."""
+    """Build one category per level and group streams visually by channel prefixes."""
 
     def __init__(self, guild: discord.Guild) -> None:
         self.guild = guild
@@ -107,13 +107,16 @@ class ServerBuilder:
 
     @staticmethod
     def _planned_channel_names(level: dict) -> set[str]:
+        """Plan only channels that will physically live in this level category.
+
+        We deliberately do not create a separate stream-header channel because every
+        channel counts toward Discord's category limit. The information channel is the
+        visual start of each stream block and contains the stream emoji/code in its name/topic.
+        """
         names: set[str] = set()
-        level_name = level["name"]
         for stream in level.get("streams", []):
-            stream_name = stream["name"]
-            code = stream.get("abbreviation") or get_stream_abbreviation(level_name, stream_name)
+            code = stream.get("abbreviation") or ""
             names.update({
-                _stream_header_name(stream_name, code),
                 f"📌-{code}・informations",
                 f"🗓️-{code}・emploi-du-temps",
                 f"📝-{code}・examens",
@@ -122,7 +125,6 @@ class ServerBuilder:
         return names
 
     def _validate_capacity(self, selected: dict) -> None:
-        """Discord currently limits each category to 50 channels and the server to 500 channels."""
         total_new_channels = 0
         for level in selected.get("levels", []):
             category_name = _level_category_name(level["name"])
@@ -140,10 +142,24 @@ class ServerBuilder:
                 )
             total_new_channels += len(planned_names - existing_names)
 
+        # This counts the channels already present plus the channels planned for all levels.
+        # Shared administration/professor/voice channels are only a small fixed addition here;
+        # a separate level-cap check above is the important guard for normal school sizes.
         current_total = len(self.guild.channels)
-        if current_total + total_new_channels > 500:
+        fixed_shared = len(GENERAL_CHANNELS) + len(PROFESSOR_CHANNELS)
+        stream_voice_new = sum(
+            1
+            for level in selected.get("levels", [])
+            for stream in level.get("streams", [])
+            if not discord.utils.get(
+                self.guild.voice_channels,
+                name=f"🔊-{_safe_name(stream.get('abbreviation', ''), 30)}-à-distance",
+            )
+        )
+        if current_total + total_new_channels + stream_voice_new + fixed_shared > 500:
+            projected_total = current_total + total_new_channels + stream_voice_new + fixed_shared
             raise ValueError(
-                f"La construction dépasserait la limite Discord de 500 salons ({current_total + total_new_channels})."
+                f"La construction dépasserait la limite Discord de 500 salons ({projected_total})."
             )
 
     async def build(self, selected: dict) -> BuildStats:
@@ -175,22 +191,34 @@ class ServerBuilder:
                     reason="School manager main role",
                 )
                 self.stats.roles_created += 1
+
             if role_name == ROLE_ADMIN:
-                await role.edit(
-                    permissions=discord.Permissions(
-                        view_channel=True,
-                        send_messages=True,
-                        read_message_history=True,
-                        manage_channels=True,
-                        manage_permissions=True,
-                        manage_messages=True,
-                        manage_threads=True,
-                        connect=True,
-                        speak=True,
-                        stream=True,
-                    ),
-                    reason="School manager least-privilege administration role",
-                )
+                perms = discord.Permissions.none()
+                for permission in (
+                    "view_channel", "send_messages", "read_message_history",
+                    "manage_channels", "manage_permissions", "manage_roles",
+                    "manage_messages", "manage_threads", "connect", "speak", "stream",
+                    "use_application_commands",
+                ):
+                    setattr(perms, permission, True)
+                await role.edit(permissions=perms, reason="School manager least-privilege administration role")
+            elif role_name in (ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE):
+                perms = discord.Permissions.none()
+                for permission in (
+                    "view_channel", "read_message_history", "connect", "speak",
+                    "stream", "use_application_commands",
+                ):
+                    setattr(perms, permission, True)
+                await role.edit(permissions=perms, reason="School manager teacher base role")
+            else:
+                perms = discord.Permissions.none()
+                for permission in (
+                    "view_channel", "send_messages", "read_message_history",
+                    "create_public_threads", "send_messages_in_threads", "connect", "speak",
+                    "use_application_commands",
+                ):
+                    setattr(perms, permission, True)
+                await role.edit(permissions=perms, reason="School manager student base role")
             roles[role_name] = role
         return roles
 
@@ -222,7 +250,7 @@ class ServerBuilder:
             self.stats.roles_created += 1
         return role
 
-    async def _get_or_create_category(self, name, overwrites=None):
+    async def _get_or_create_category(self, name: str, overwrites=None):
         category = discord.utils.find(
             lambda item: isinstance(item, discord.CategoryChannel) and item.name == name,
             self.guild.channels,
@@ -238,7 +266,7 @@ class ServerBuilder:
         self.stats.categories_created += 1
         return category
 
-    async def _get_or_create_text(self, category, name, *, topic, overwrites):
+    async def _get_or_create_text(self, category, name: str, *, topic: str, overwrites):
         channel = discord.utils.find(
             lambda item: isinstance(item, discord.TextChannel) and item.name == name,
             category.channels,
@@ -255,7 +283,7 @@ class ServerBuilder:
         self.stats.text_channels_created += 1
         return channel
 
-    async def _get_or_create_voice(self, category, name, overwrites):
+    async def _get_or_create_voice(self, category, name: str, overwrites):
         channel = discord.utils.find(
             lambda item: isinstance(item, discord.VoiceChannel) and item.name == name,
             category.channels,
@@ -307,15 +335,24 @@ class ServerBuilder:
         )
         await self._get_or_create_voice(category, PROFESSOR_CHANNELS["meeting"], overwrites)
 
+    async def _cleanup_legacy_stream_headers(self, level_category):
+        for channel in list(level_category.channels):
+            if channel.name.startswith("🔹-") or channel.name.startswith("🔹・"):
+                try:
+                    await channel.delete(reason="School manager legacy stream header cleanup")
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
     async def _build_level(self, level, roles, voice_category):
         level_name = level["name"]
         level_category = await self._get_or_create_category(_level_category_name(level_name))
+        await self._cleanup_legacy_stream_headers(level_category)
+
         for stream in level.get("streams", []):
             stream_name = stream["name"]
             stream_code = stream.get("abbreviation") or get_stream_abbreviation(level_name, stream_name)
             subjects = list(stream.get("subjects", [])) or get_stream_subjects(level_name, stream_name)
             stream_role = await self._ensure_stream_role(level_name, stream_name)
-
             announcements = stream_announcement_overwrites(
                 self.guild.default_role,
                 roles[ROLE_ADMIN],
@@ -325,21 +362,10 @@ class ServerBuilder:
                 stream_role,
             )
 
-            await self._get_or_create_voice(
-                level_category,
-                _stream_header_name(stream_name, stream_code),
-                locked_stream_header_overwrites(
-                    self.guild.default_role,
-                    roles[ROLE_ADMIN],
-                    roles[ROLE_PROFESSOR],
-                    roles[ROLE_PROFESSOR_FEMALE],
-                    stream_role,
-                ),
-            )
             await self._get_or_create_text(
                 level_category,
                 f"📌-{stream_code}・informations",
-                topic=f"Informations et organisation de {stream_name} — {level_name}.",
+                topic=f"🔹 {stream_code} — {stream_name}. Informations générales et organisation de la filière.",
                 overwrites=announcements,
             )
             await self._get_or_create_text(
@@ -362,7 +388,7 @@ class ServerBuilder:
                     _subject_channel_name(stream_code, subject),
                     topic=(
                         f"Cours, devoirs, exercices, examens blancs et ressources de {get_subject_display_name(subject)} "
-                        f"pour {stream_name} ({level_name}). Seuls les enseignants affectés à cette matière peuvent publier."
+                        f"pour {stream_name} ({level_name}). Les enseignants doivent posséder le rôle matière correspondant pour publier."
                     ),
                     overwrites=subject_channel_overwrites(
                         self.guild.default_role,
