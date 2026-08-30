@@ -69,7 +69,6 @@ def _subject_channel_name(stream_code: str, subject: str) -> str:
 
 
 def _stream_header_name(stream_name: str, stream_code: str) -> str:
-    """Legacy helper for removing old visual header channels."""
     return f"🔹・{STREAM_EMOJIS.get(stream_name, '🎓')}・{stream_code}"
 
 
@@ -103,8 +102,6 @@ class BuildStats:
 
 
 class ServerBuilder:
-    """Build one category per level and group streams visually by compact channel prefixes."""
-
     def __init__(self, guild: discord.Guild) -> None:
         self.guild = guild
         self.stats = BuildStats()
@@ -130,9 +127,15 @@ class ServerBuilder:
                 lambda item: isinstance(item, discord.CategoryChannel) and item.name == category_name,
                 self.guild.categories,
             )
-            existing_names = {channel.name for channel in category.channels} if category else set()
+            existing_channels = list(category.channels) if category else []
+            legacy_headers = {
+                channel.id for channel in existing_channels
+                if channel.name.startswith("🔹-") or channel.name.startswith("🔹・")
+            }
+            existing_names = {channel.name for channel in existing_channels if channel.id not in legacy_headers}
             planned_names = self._planned_channel_names(level)
-            projected = (len(category.channels) if category else 0) + len(planned_names - existing_names)
+            existing_count = len(existing_channels) - len(legacy_headers)
+            projected = existing_count + len(planned_names - existing_names)
             if projected > 50:
                 raise ValueError(
                     f"La catégorie `{category_name}` dépasserait la limite Discord de 50 salons ({projected}). "
@@ -248,10 +251,7 @@ class ServerBuilder:
         return role
 
     async def _get_or_create_category(self, name: str, overwrites=None):
-        category = discord.utils.find(
-            lambda item: isinstance(item, discord.CategoryChannel) and item.name == name,
-            self.guild.channels,
-        )
+        category = discord.utils.find(lambda item: isinstance(item, discord.CategoryChannel) and item.name == name, self.guild.channels)
         if category:
             if overwrites is not None:
                 await category.edit(overwrites=overwrites, reason="School manager reconciliation")
@@ -264,43 +264,25 @@ class ServerBuilder:
         return category
 
     async def _get_or_create_text(self, category, name: str, *, topic: str, overwrites):
-        channel = discord.utils.find(
-            lambda item: isinstance(item, discord.TextChannel) and item.name == name,
-            category.channels,
-        )
+        channel = discord.utils.find(lambda item: isinstance(item, discord.TextChannel) and item.name == name, category.channels)
         if channel:
             await channel.edit(topic=topic, overwrites=overwrites, reason="School manager reconciliation")
             return channel
-        channel = await category.create_text_channel(
-            name=name,
-            topic=topic,
-            overwrites=overwrites,
-            reason="School manager automatic setup",
-        )
+        channel = await category.create_text_channel(name=name, topic=topic, overwrites=overwrites, reason="School manager automatic setup")
         self.stats.text_channels_created += 1
         return channel
 
     async def _get_or_create_voice(self, category, name: str, overwrites):
-        channel = discord.utils.find(
-            lambda item: isinstance(item, discord.VoiceChannel) and item.name == name,
-            category.channels,
-        )
+        channel = discord.utils.find(lambda item: isinstance(item, discord.VoiceChannel) and item.name == name, category.channels)
         if channel:
             await channel.edit(overwrites=overwrites, reason="School manager reconciliation")
             return channel
-        channel = await category.create_voice_channel(
-            name=name,
-            overwrites=overwrites,
-            reason="School manager automatic setup",
-        )
+        channel = await category.create_voice_channel(name=name, overwrites=overwrites, reason="School manager automatic setup")
         self.stats.voice_channels_created += 1
         return channel
 
     async def _ensure_general_area(self, roles):
-        overwrites = general_area_overwrites(
-            self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR],
-            roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT]
-        )
+        overwrites = general_area_overwrites(self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT])
         category = await self._get_or_create_category(CATEGORY_GENERAL, overwrites)
         topics = {
             "actualites": "Annonces et informations officielles de l'établissement.",
@@ -313,16 +295,9 @@ class ServerBuilder:
             await self._get_or_create_text(category, name, topic=topics[key], overwrites=overwrites)
 
     async def _ensure_professor_area(self, roles):
-        overwrites = teacher_area_overwrites(
-            self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR],
-            roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT]
-        )
+        overwrites = teacher_area_overwrites(self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT])
         category = await self._get_or_create_category(CATEGORY_PROFESSORS, overwrites)
-        await self._get_or_create_text(
-            category, PROFESSOR_CHANNELS["discussion"],
-            topic="Espace privé de discussion et de coordination des professeurs.",
-            overwrites=overwrites,
-        )
+        await self._get_or_create_text(category, PROFESSOR_CHANNELS["discussion"], topic="Espace privé de discussion et de coordination des professeurs.", overwrites=overwrites)
         await self._get_or_create_voice(category, PROFESSOR_CHANNELS["meeting"], overwrites)
 
     async def _cleanup_legacy_stream_headers(self, level_category):
@@ -337,7 +312,6 @@ class ServerBuilder:
         level_name = level["name"]
         level_category = await self._get_or_create_category(_level_category_name(level_name))
         await self._cleanup_legacy_stream_headers(level_category)
-
         for stream in level.get("streams", []):
             stream_name = stream["name"]
             stream_code = stream.get("abbreviation") or get_stream_abbreviation(level_name, stream_name)
@@ -353,7 +327,6 @@ class ServerBuilder:
                 teacher_stream_role,
                 student_stream_role,
             )
-
             stream_emoji = STREAM_EMOJIS.get(stream_name, "🎓")
             await self._get_or_create_text(
                 level_category,
@@ -373,7 +346,6 @@ class ServerBuilder:
                 topic=f"Dates, horaires et consignes des examens pour {stream_name} — {level_name}.",
                 overwrites=announcements,
             )
-
             for subject in subjects:
                 subject_role = await self._ensure_subject_role(level_name, stream_name, subject)
                 await self._get_or_create_text(
@@ -393,7 +365,6 @@ class ServerBuilder:
                         subject_role,
                     ),
                 )
-
             await self._get_or_create_voice(
                 voice_category,
                 f"🔊-{_safe_name(stream_code, 30)}-à-distance",
@@ -408,5 +379,4 @@ class ServerBuilder:
                 ),
             )
             self.stats.streams_processed += 1
-
         self.stats.levels_processed += 1
