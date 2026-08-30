@@ -180,11 +180,11 @@ class SummaryView(SetupBaseView):
             f"📅 Année scolaire : **{self.config.get('academic_year', 'non définie')}**",
             "",
             "**Organisation :** une catégorie Discord par niveau.",
-            "**Filières :** regroupées visuellement à l'intérieur de leur niveau.",
+            "**Filières :** regroupées visuellement dans leur niveau.",
             "**Aucune classe ne sera créée comme rôle ou channel.**",
             "**Matières :** un channel par matière et par filière.",
             "**Emploi du temps :** un channel par filière pour toutes ses classes/groupes.",
-            "**Codes courts :** utilisés pour garder les noms Discord compacts.",
+            "**Codes courts :** utilisés pour garder Discord compact.",
             "",
         ]
         for level in levels:
@@ -197,7 +197,7 @@ class SummaryView(SetupBaseView):
             "━━━━━━━━━━━━━━━━━━━━━━━━━━",
             f"**Niveaux :** {len(levels)}",
             f"**Filières sélectionnées :** {stream_count}",
-            "**Par filière :** header · informations · emploi du temps · examens · channels par matière · à-distance",
+            "**Par filière :** informations · emploi du temps · examens · channels par matière · à-distance",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━",
         ])
         return "\n".join(lines)
@@ -248,14 +248,12 @@ class Setup(commands.Cog):
     @app_commands.command(name="setup", description="Configurer les niveaux et filières du serveur scolaire.")
     @management_check()
     async def setup_command(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
-            return
+        guild_id = interaction.guild.id if interaction.guild else 0
         await interaction.response.send_message(
-            f"## 🏫 School Discord Manager\n\n"
+            "## 🏫 School Discord Manager\n\n"
             "Sélectionne les niveaux présents, puis uniquement les filières présentes dans ton établissement.\n"
             "Les noms complets restent utilisés dans la configuration interne; les codes courts servent à garder Discord compact.\n\n"
-            f"📅 Année active : **{current_year_for(interaction.guild.id)}**",
+            f"📅 Année active : **{current_year_for(guild_id)}**",
             view=LevelView(interaction.user.id),
             ephemeral=True,
         )
