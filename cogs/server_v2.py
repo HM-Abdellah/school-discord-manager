@@ -28,23 +28,27 @@ LEGACY_SUBJECT_ROLE_PREFIXES = ("Professeur Matière - ", "Professeur Matiere - 
 LEVEL_ABBREVIATIONS = {"Tronc Commun": "TC", "1ère Année Bac": "1BAC", "2ème Année Bac": "2BAC"}
 
 
+def _is_management(interaction: discord.Interaction) -> bool:
+    guild = interaction.guild
+    if guild is None:
+        return False
+    if interaction.user.id == guild.owner_id:
+        return True
+    if getattr(interaction.user.guild_permissions, "administrator", False):
+        return True
+    admin_role = discord.utils.get(guild.roles, name=ROLE_ADMIN)
+    return admin_role is not None and admin_role in getattr(interaction.user, "roles", [])
+
+
 async def level_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-    return [
-        app_commands.Choice(name=level, value=level)
-        for level in get_levels()
-        if current.lower() in level.lower()
-    ][:25]
+    return [app_commands.Choice(name=level, value=level) for level in get_levels() if current.lower() in level.lower()][:25]
 
 
 async def stream_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
     level = str(getattr(interaction.namespace, "level", ""))
     if level not in get_levels():
         return []
-    return [
-        app_commands.Choice(name=stream, value=stream)
-        for stream in get_streams(level)
-        if current.lower() in stream.lower()
-    ][:25]
+    return [app_commands.Choice(name=stream, value=stream) for stream in get_streams(level) if current.lower() in stream.lower()][:25]
 
 
 class ServerCommands(commands.Cog):
@@ -101,10 +105,7 @@ class ServerCommands(commands.Cog):
             target = {"name": level, "abbreviation": LEVEL_ABBREVIATIONS[level], "streams": []}
             config.setdefault("levels", []).append(target)
         if any(item.get("name") == stream for item in target.get("streams", [])):
-            await interaction.response.send_message(
-                f"ℹ️ **{get_stream_abbreviation(level, stream)}** existe déjà.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message(f"ℹ️ **{get_stream_abbreviation(level, stream)}** existe déjà.", ephemeral=True)
             return
         target.setdefault("streams", []).append({
             "name": stream,
@@ -113,21 +114,12 @@ class ServerCommands(commands.Cog):
         })
         try:
             save_guild_config(interaction.guild.id, config)
-            await interaction.response.send_message(
-                f"✅ **{get_stream_abbreviation(level, stream)}** ajouté. Construction en cours...",
-                ephemeral=True,
-            )
+            await interaction.response.send_message(f"✅ **{get_stream_abbreviation(level, stream)}** ajouté. Construction en cours...", ephemeral=True)
             await ServerBuilder(interaction.guild).build(config)
         except Exception as exc:
-            await interaction.followup.send(
-                f"⚠️ Configuration enregistrée, mais construction échouée : `{type(exc).__name__}: {exc}`",
-                ephemeral=True,
-            )
+            await interaction.followup.send(f"⚠️ Configuration enregistrée, mais construction échouée : `{type(exc).__name__}: {exc}`", ephemeral=True)
             return
-        await interaction.followup.send(
-            f"✅ **{get_stream_abbreviation(level, stream)}** ajouté sans reset.",
-            ephemeral=True,
-        )
+        await interaction.followup.send(f"✅ **{get_stream_abbreviation(level, stream)}** ajouté sans reset.", ephemeral=True)
 
     @app_commands.command(name="removestream", description="Supprimer une filière et uniquement ses ressources.")
     @app_commands.describe(level="Niveau", stream="Filière à supprimer")
@@ -143,10 +135,7 @@ class ServerCommands(commands.Cog):
         config = get_guild_config(interaction.guild.id)
         target = next((item for item in config.get("levels", []) if item.get("name") == level), None) if config else None
         if target is None or not any(item.get("name") == stream for item in target.get("streams", [])):
-            await interaction.response.send_message(
-                f"ℹ️ **{get_stream_abbreviation(level, stream)}** n'est pas configurée.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message(f"ℹ️ **{get_stream_abbreviation(level, stream)}** n'est pas configurée.", ephemeral=True)
             return
 
         code = get_stream_abbreviation(level, stream)
@@ -157,10 +146,16 @@ class ServerCommands(commands.Cog):
 
         level_category = discord.utils.get(interaction.guild.categories, name=_level_category_name(level))
         if level_category is not None:
-            header = _stream_header_name(stream, code)
-            prefixes = (f"📌-{code}・", f"🗓️-{code}・", f"📝-{code}・", f"📚-{code}・")
+            prefixes = (
+                f"📌{_stream_emoji_placeholder()}" if False else f"📌-{code}・",
+                f"📌{code}・",
+                f"🗓️-{code}・",
+                f"📝-{code}・",
+                f"📚-{code}・",
+            )
+            legacy_header = _stream_header_name(stream, code)
             for channel in list(level_category.channels):
-                if channel.name == header or any(channel.name.startswith(prefix) for prefix in prefixes):
+                if channel.name == legacy_header or any(channel.name.startswith(prefix) for prefix in prefixes):
                     try:
                         await channel.delete(reason="School manager stream removal")
                     except (discord.Forbidden, discord.HTTPException):
@@ -173,10 +168,7 @@ class ServerCommands(commands.Cog):
 
         voice_category = discord.utils.get(interaction.guild.categories, name="🔊・SALLES VIRTUELLES")
         if voice_category is not None:
-            voice = discord.utils.get(
-                voice_category.voice_channels,
-                name=f"🔊-{_safe_name(code, 30)}-à-distance",
-            )
+            voice = discord.utils.get(voice_category.voice_channels, name=f"🔊-{_safe_name(code, 30)}-à-distance")
             if voice is not None:
                 try:
                     await voice.delete(reason="School manager stream removal")
@@ -198,10 +190,7 @@ class ServerCommands(commands.Cog):
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
-        await interaction.followup.send(
-            f"✅ **{code}** supprimée sans toucher au reste du serveur.",
-            ephemeral=True,
-        )
+        await interaction.followup.send(f"✅ **{code}** supprimée sans toucher au reste du serveur.", ephemeral=True)
 
     @app_commands.command(name="newyear", description="Créer une nouvelle année scolaire et la rendre active.")
     @app_commands.describe(year="Format : 2026/2027")
@@ -242,11 +231,7 @@ class ServerCommands(commands.Cog):
         if not config:
             await interaction.response.send_message("ℹ️ Aucune configuration. Utilise `/setup`.", ephemeral=True)
             return
-        lines = [
-            "📋 **Configuration enregistrée**",
-            f"📅 Année : **{config.get('academic_year', 'non définie')}**",
-            "",
-        ]
+        lines = ["📋 **Configuration enregistrée**", f"📅 Année : **{config.get('academic_year', 'non définie')}**", ""]
         total = 0
         for level in config.get("levels", []):
             lines.append(f"**{level['name']}**")
@@ -256,7 +241,7 @@ class ServerCommands(commands.Cog):
         lines.extend([
             "",
             f"**Total filières :** {total}",
-            "**Discord :** une catégorie par niveau, en-têtes de filière verrouillés, channels par matière.",
+            "**Discord :** une catégorie par niveau, informations servant de repère par filière, channels par matière.",
         ])
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
