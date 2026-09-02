@@ -26,6 +26,7 @@ class SchoolBot(commands.Bot):
         "cogs.server_v3",
         "cogs.students",
         "cogs.teachers",
+        "cogs.admin",
     )
 
     def __init__(self) -> None:
@@ -59,7 +60,7 @@ class SchoolBot(commands.Bot):
         print(f"Bot      : {self.user}")
         print(f"Bot ID   : {self.user.id}")
         print(f"Servers  : {len(self.guilds)}")
-        print("Commands : /setup /build /addstream /removestream /status /newyear /years /assignstudent /assignteacher /assignsubjectteachers /reportabsence /resetserver(owner)")
+        print("Commands : /setup /build /addstream /removestream /status /newyear /years /assignstudent /assignteacher /assignsubjectteachers /assignteacherfull /set_timetable /setexam /adminpanel /serverhealth /reportabsence /resetserver(owner)")
         print("=" * 72)
 
 
