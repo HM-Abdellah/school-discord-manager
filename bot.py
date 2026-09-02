@@ -21,7 +21,6 @@ class SchoolBot(commands.Bot):
     """Main bot with application-command synchronization and cog loading."""
 
     EXTENSIONS = (
-        "services.stream_layout",
         "cogs.setup",
         "cogs.server_v3",
         "cogs.students",
