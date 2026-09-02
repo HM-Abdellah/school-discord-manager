@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import tempfile
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,7 @@ from config.curriculum import get_stream_abbreviation
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CONFIG_FILE = DATA_DIR / "guild_config.json"
 DATABASE_FILE = DATA_DIR / "school.db"
+SQLITE_BUSY_TIMEOUT_MS = 5000
 
 
 def _ensure_storage() -> None:
@@ -21,8 +24,11 @@ def _ensure_storage() -> None:
 
 def _connect() -> sqlite3.Connection:
     _ensure_storage()
-    conn = sqlite3.connect(DATABASE_FILE)
+    conn = sqlite3.connect(DATABASE_FILE, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
     conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -57,7 +63,6 @@ def _migrate_legacy_enrollments(conn: sqlite3.Connection) -> None:
         return
 
     legacy_name = _next_legacy_table_name(conn)
-    # SQLite cannot parameterize identifiers, but legacy_name is generated locally.
     conn.execute(f"ALTER TABLE enrollments RENAME TO {legacy_name}")
     conn.execute("""
         CREATE TABLE enrollments (
@@ -135,8 +140,27 @@ def load_all() -> dict[str, Any]:
 
 
 def save_all(data: dict[str, Any]) -> None:
+    """Atomically replace the JSON configuration file."""
     _ensure_storage()
-    CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{CONFIG_FILE.name}.", dir=DATA_DIR, text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, CONFIG_FILE)
+        try:
+            dir_fd = os.open(DATA_DIR, os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
 
 
 def get_guild_config(guild_id: int) -> dict[str, Any] | None:
@@ -210,10 +234,26 @@ def list_academic_years(guild_id: int) -> list[sqlite3.Row]:
 
 
 def sync_configuration_to_database(guild_id: int, config: dict[str, Any]) -> None:
+    """Synchronize the selected configuration in one SQLite transaction."""
     initialize_database()
     year_name = config.get("academic_year") or f"{date.today().year}/{date.today().year + 1}"
-    year_id = ensure_academic_year(guild_id, year_name, active=True)
+    today = date.today().isoformat()
     with _connect() as conn:
+        conn.execute("UPDATE academic_years SET is_active=0 WHERE guild_id=?", (guild_id,))
+        conn.execute(
+            "INSERT OR IGNORE INTO academic_years(guild_id,name,is_active,created_at) VALUES(?,?,1,?)",
+            (guild_id, year_name, today),
+        )
+        conn.execute(
+            "UPDATE academic_years SET is_active=1 WHERE guild_id=? AND name=?",
+            (guild_id, year_name),
+        )
+        row = conn.execute(
+            "SELECT id FROM academic_years WHERE guild_id=? AND name=?",
+            (guild_id, year_name),
+        ).fetchone()
+        assert row is not None
+        year_id = int(row["id"])
         for level in config.get("levels", []):
             for stream in level.get("streams", []):
                 stream_name = stream["name"]
@@ -260,11 +300,15 @@ def upsert_student(guild_id: int, discord_id: int | None, display_name: str) -> 
 
 
 def enroll_student(guild_id: int, student_id: int, academic_year_id: int, level_name: str, stream_name: str) -> None:
-    stream = get_stream(guild_id, academic_year_id, level_name, stream_name)
-    if stream is None:
-        raise ValueError("Selected stream is not configured for the active academic year.")
+    initialize_database()
     today = date.today().isoformat()
     with _connect() as conn:
+        stream = conn.execute(
+            "SELECT * FROM streams WHERE guild_id=? AND academic_year_id=? AND level_name=? AND stream_name=? LIMIT 1",
+            (guild_id, academic_year_id, level_name, stream_name),
+        ).fetchone()
+        if stream is None:
+            raise ValueError("Selected stream is not configured for the active academic year.")
         conn.execute(
             "UPDATE enrollments SET end_date=?, status='transferred' WHERE student_id=? AND status='active'",
             (today, student_id),
@@ -277,6 +321,43 @@ def enroll_student(guild_id: int, student_id: int, academic_year_id: int, level_
             "UPDATE students SET status='active' WHERE id=? AND guild_id=?",
             (student_id, guild_id),
         )
+
+
+def enroll_student_record(guild_id: int, discord_id: int, display_name: str, academic_year_id: int, level_name: str, stream_name: str) -> int:
+    """Atomically upsert a student and create the active enrollment."""
+    initialize_database()
+    today = date.today().isoformat()
+    with _connect() as conn:
+        stream = conn.execute(
+            "SELECT * FROM streams WHERE guild_id=? AND academic_year_id=? AND level_name=? AND stream_name=? LIMIT 1",
+            (guild_id, academic_year_id, level_name, stream_name),
+        ).fetchone()
+        if stream is None:
+            raise ValueError("Selected stream is not configured for the active academic year.")
+
+        row = conn.execute(
+            "SELECT id FROM students WHERE guild_id=? AND discord_id=?",
+            (guild_id, discord_id),
+        ).fetchone()
+        if row:
+            student_id = int(row["id"])
+            conn.execute("UPDATE students SET display_name=?, status='active' WHERE id=?", (display_name, student_id))
+        else:
+            cur = conn.execute(
+                "INSERT INTO students(guild_id,discord_id,display_name,created_at,status) VALUES(?,?,?,?, 'active')",
+                (guild_id, discord_id, display_name, today),
+            )
+            student_id = int(cur.lastrowid)
+
+        conn.execute(
+            "UPDATE enrollments SET end_date=?, status='transferred' WHERE student_id=? AND status='active'",
+            (today, student_id),
+        )
+        conn.execute(
+            "INSERT INTO enrollments(student_id,stream_id,start_date,status) VALUES(?,?,?,'active')",
+            (student_id, int(stream["id"]), today),
+        )
+        return student_id
 
 
 def mark_student_left(guild_id: int, student_id: int) -> None:
