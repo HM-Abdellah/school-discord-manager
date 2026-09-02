@@ -411,7 +411,7 @@ class ServerBuilder:
             stream_name = stream["name"]
             stream_code = stream.get("abbreviation") or get_stream_abbreviation(level_name, stream_name)
             subjects = list(stream.get("subjects", [])) or get_stream_subjects(level_name, stream_name)
-            stream_count = 3 + len(subjects)
+            stream_count = 4 + len(subjects)
             target_category = await self._category_for_stream(level_name, stream_code, stream_count)
             print(f"[BUILD] Stream start: {level_name}/{stream_code} -> {target_category.name}")
 
@@ -497,7 +497,6 @@ class ServerBuilder:
                 ),
             )
 
-            # Place the visual stream title before the rest of this stream's channels.
             stream_channels = [
                 channel for channel in target_category.channels
                 if channel.id != header.id
