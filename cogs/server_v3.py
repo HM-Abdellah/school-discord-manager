@@ -32,6 +32,41 @@ async def stream_autocomplete(interaction: discord.Interaction, current: str) ->
     return [app_commands.Choice(name=stream, value=stream) for stream in get_streams(level) if current.lower() in stream.lower()][:25]
 
 
+def _reset_target_categories(guild: discord.Guild) -> set[int]:
+    """Return category IDs belonging to the current School Manager naming scheme."""
+    names = {CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE}
+    for level in get_levels():
+        for stream in get_streams(level):
+            names.add(_stream_category_name(level, stream, get_stream_abbreviation(level, stream)))
+    return {category.id for category in guild.categories if category.name in names}
+
+
+def _reset_target_roles(guild: discord.Guild) -> set[int]:
+    """Return role IDs belonging to School Manager, including partially-built resources."""
+    names = set(MAIN_ROLE_NAMES) | LEGACY_ROLE_NAMES
+    ids = {role.id for role in guild.roles if role.name in names}
+    for role in guild.roles:
+        if role.name.startswith(STREAM_ROLE_PREFIX) or role.name.startswith(STUDENT_STREAM_ROLE_PREFIX):
+            ids.add(role.id)
+        elif role.name.startswith(SUBJECT_ROLE_PREFIX) or any(role.name.startswith(prefix) for prefix in LEGACY_SUBJECT_ROLE_PREFIXES):
+            ids.add(role.id)
+    return ids
+
+
+def _reset_target_channels(guild: discord.Guild, category_ids: set[int]) -> set[int]:
+    """Return channels inside School Manager categories, plus known global managed channels."""
+    ids: set[int] = set()
+    global_names = set()
+    from config.curriculum import GENERAL_CHANNELS, PROFESSOR_CHANNELS
+    global_names.update(GENERAL_CHANNELS.values())
+    global_names.add(PROFESSOR_CHANNELS["discussion"])
+    global_names.add(PROFESSOR_CHANNELS["meeting"])
+    for channel in guild.channels:
+        if channel.category_id in category_ids or channel.name in global_names:
+            ids.add(channel.id)
+    return ids
+
+
 async def _run_build(guild: discord.Guild, config: dict) -> object:
     lock = get_build_lock(guild.id)
     if lock.locked():
@@ -219,10 +254,14 @@ class ServerCommands(commands.Cog):
             await interaction.response.send_message("⏳ Une construction est déjà en cours sur ce serveur.", ephemeral=True)
             return
         await interaction.response.send_message("🧹 **RESET SCHOOL MANAGER EN COURS...**", ephemeral=True)
-        managed = (get_guild_config(guild.id) or {}).get("managed", {})
-        role_ids = {int(value) for value in managed.get("roles", {}).values() if isinstance(value, int)}
-        channel_ids = {int(value) for value in managed.get("channels", {}).values() if isinstance(value, int)}
-        category_ids = {int(value) for value in managed.get("categories", {}).values() if isinstance(value, int)}
+        config = get_guild_config(guild.id) or {}
+        managed = config.get("managed", {}) if isinstance(config, dict) else {}
+        configured_role_ids = {int(value) for value in managed.get("roles", {}).values() if isinstance(value, int)}
+        configured_channel_ids = {int(value) for value in managed.get("channels", {}).values() if isinstance(value, int)}
+        configured_category_ids = {int(value) for value in managed.get("categories", {}).values() if isinstance(value, int)}
+        category_ids = _reset_target_categories(guild) | configured_category_ids
+        channel_ids = _reset_target_channels(guild, category_ids) | configured_channel_ids
+        role_ids = _reset_target_roles(guild) | configured_role_ids
         deleted_channels = deleted_categories = deleted_roles = 0
         try:
             async with lock:
@@ -236,9 +275,11 @@ class ServerCommands(commands.Cog):
                     if isinstance(category, discord.CategoryChannel) and not category.channels:
                         await category.delete(reason="School Manager scoped reset")
                         deleted_categories += 1
+                bot_member = guild.me
+                top_role = bot_member.top_role if bot_member is not None else None
                 for role_id in list(role_ids):
                     role = guild.get_role(role_id)
-                    if role is not None and not role.is_default() and not role.managed and role < guild.me.top_role:
+                    if role is not None and not role.is_default() and not role.managed and (top_role is None or role < top_role):
                         await role.delete(reason="School Manager scoped reset")
                         deleted_roles += 1
                 reset_guild_data(guild.id)
