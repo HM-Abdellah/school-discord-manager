@@ -6,6 +6,7 @@ import json
 import os
 import sqlite3
 import tempfile
+from copy import deepcopy
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -174,10 +175,19 @@ def get_guild_config(guild_id: int) -> dict[str, Any] | None:
 
 
 def save_guild_config(guild_id: int, config: dict[str, Any]) -> None:
-    data = load_all()
-    data[str(guild_id)] = config
-    save_all(data)
-    sync_configuration_to_database(guild_id, config)
+    """Persist JSON + SQLite as one logical operation with JSON rollback."""
+    old_data = load_all()
+    new_data = deepcopy(old_data)
+    new_data[str(guild_id)] = config
+    try:
+        save_all(new_data)
+        sync_configuration_to_database(guild_id, config)
+    except Exception:
+        try:
+            save_all(old_data)
+        except Exception:
+            pass
+        raise
 
 
 def delete_guild_config(guild_id: int) -> None:
@@ -187,12 +197,22 @@ def delete_guild_config(guild_id: int) -> None:
 
 
 def reset_guild_data(guild_id: int) -> None:
-    delete_guild_config(guild_id)
-    initialize_database()
-    with _connect() as conn:
-        conn.execute("DELETE FROM students WHERE guild_id=?", (guild_id,))
-        conn.execute("DELETE FROM streams WHERE guild_id=?", (guild_id,))
-        conn.execute("DELETE FROM academic_years WHERE guild_id=?", (guild_id,))
+    old_data = load_all()
+    new_data = deepcopy(old_data)
+    new_data.pop(str(guild_id), None)
+    try:
+        save_all(new_data)
+        initialize_database()
+        with _connect() as conn:
+            conn.execute("DELETE FROM students WHERE guild_id=?", (guild_id,))
+            conn.execute("DELETE FROM streams WHERE guild_id=?", (guild_id,))
+            conn.execute("DELETE FROM academic_years WHERE guild_id=?", (guild_id,))
+    except Exception:
+        try:
+            save_all(old_data)
+        except Exception:
+            pass
+        raise
 
 
 def ensure_academic_year(guild_id: int, name: str, *, active: bool = False) -> int:
