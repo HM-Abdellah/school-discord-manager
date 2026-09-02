@@ -11,7 +11,7 @@ from discord.ext import commands
 
 from config.curriculum import GENERAL_CHANNELS, get_levels, get_stream_abbreviation, get_streams, get_stream_subjects
 from services.audit import record_event
-from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX, management_check
+from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, SUBJECT_ROLE_PREFIX, management_check, professor_subject_member_overwrite, professor_subject_view_overwrite, administrator_overwrite, hidden_overwrite, student_overwrite
 from services.server_builder import _subject_channel_name, _subject_role_name, _stream_role_name
 
 MENTION_RE = re.compile(r"<@!?(\d+)>")
@@ -73,13 +73,14 @@ class TeacherCommands(commands.Cog):
             await interaction.response.send_message("❌ Ce salon n'est pas un salon de matière reconnu par le curriculum actif.", ephemeral=True)
             return
         level, stream, subject = target
+        code = get_stream_abbreviation(level, stream)
         stream_role_name = _stream_role_name(level, stream)
         subject_role_name = _subject_role_name(level, stream, subject)
         stream_role = discord.utils.get(guild.roles, name=stream_role_name)
-        subject_role = discord.utils.get(guild.roles, name=subject_role_name)
-        if stream_role is None or subject_role is None:
-            await interaction.response.send_message("❌ Les rôles de cette filière/matière n'existent pas encore. Lance `/build`.", ephemeral=True)
+        if stream_role is None:
+            await interaction.response.send_message("❌ Le rôle de cette filière n'existe pas encore. Lance `/build`.", ephemeral=True)
             return
+        subject_role = discord.utils.get(guild.roles, name=subject_role_name)
         ids: list[int] = []
         for match in MENTION_RE.finditer(teachers):
             member_id = int(match.group(1))
@@ -93,17 +94,43 @@ class TeacherCommands(commands.Cog):
             await interaction.response.send_message("❌ Aucun membre valide avec le rôle `Prof` ou `Prof (F)` n'a été détecté.", ephemeral=True)
             return
         try:
+            if subject_role is None:
+                subject_role = await guild.create_role(
+                    name=subject_role_name,
+                    permissions=discord.Permissions.none(),
+                    colour=discord.Colour.dark_blue(),
+                    mentionable=False,
+                    reason="School manager subject role created on demand",
+                )
+            overwrites = {
+                guild.default_role: hidden_overwrite(),
+                stream_role: professor_subject_view_overwrite(),
+            }
+            admin_role = discord.utils.get(guild.roles, name="Administration")
+            prof_role = discord.utils.get(guild.roles, name=ROLE_PROFESSOR)
+            prof_f_role = discord.utils.get(guild.roles, name=ROLE_PROFESSOR_FEMALE)
+            student_stream_role = discord.utils.get(guild.roles, name=f"Élèves - {code}")
+            if admin_role is not None:
+                overwrites[admin_role] = administrator_overwrite()
+            if prof_role is not None:
+                overwrites[prof_role] = professor_subject_view_overwrite()
+            if prof_f_role is not None:
+                overwrites[prof_f_role] = professor_subject_view_overwrite()
+            if student_stream_role is not None:
+                overwrites[student_stream_role] = student_overwrite(can_send=True)
+            overwrites[subject_role] = professor_subject_member_overwrite()
+            await channel.edit(overwrites=overwrites, reason="School manager subject teacher access")
             for member in members:
-                await member.add_roles(stream_role, subject_role, reason=f"School manager teacher assignment: {get_stream_abbreviation(level, stream)} / {subject}")
+                await member.add_roles(stream_role, subject_role, reason=f"School manager teacher assignment: {code} / {subject}")
         except discord.Forbidden:
-            await interaction.response.send_message("❌ Permission refusée. Vérifie Manage Roles et la hiérarchie du rôle du bot.", ephemeral=True)
+            await interaction.response.send_message("❌ Permission refusée. Vérifie Manage Roles, Manage Channels et la hiérarchie.", ephemeral=True)
             return
         except discord.HTTPException as exc:
             await interaction.response.send_message(f"❌ Discord API : `{exc}`", ephemeral=True)
             return
         mentions = ", ".join(member.mention for member in members)
-        record_event(guild.id, interaction.user.id, interaction.user.display_name, "assignsubjectteachers", ", ".join(member.display_name for member in members), f"{get_stream_abbreviation(level, stream)} / {subject}")
-        await interaction.response.send_message(f"✅ **{len(members)} professeur(s)** affecté(s) à **{get_stream_abbreviation(level, stream)} / {subject}**.\nRôles ajoutés : `{stream_role_name}` + `{subject_role_name}`\nProfesseurs : {mentions}", ephemeral=True)
+        record_event(guild.id, interaction.user.id, interaction.user.display_name, "assignsubjectteachers", ", ".join(member.display_name for member in members), f"{code} / {subject}")
+        await interaction.response.send_message(f"✅ **{len(members)} professeur(s)** affecté(s) à **{code} / {subject}**.\nRôles ajoutés : `{stream_role_name}` + `{subject_role_name}`\nProfesseurs : {mentions}", ephemeral=True)
 
     @app_commands.command(name="reportabsence", description="Publier une annonce d'absence d'un professeur.")
     @app_commands.describe(teacher="Professeur absent", duration="Durée de l'absence, par exemple : 3 jours", classes="Classes concernées, par exemple : 1BACSE C1/C2")
