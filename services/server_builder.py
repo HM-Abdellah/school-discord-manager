@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 import discord
@@ -25,6 +26,7 @@ from services.permissions import (
     general_area_overwrites,
     public_voice_overwrites,
     stream_announcement_overwrites,
+    stream_header_overwrites,
     subject_channel_overwrites,
     teacher_area_overwrites,
 )
@@ -69,7 +71,6 @@ def _subject_channel_name(stream_code: str, subject: str) -> str:
 
 
 def _stream_header_name(stream_name: str, stream_code: str) -> str:
-    """Legacy helper for removing header channels from older builds."""
     return f"🔹・{STREAM_EMOJIS.get(stream_name, '🎓')}・{stream_code}"
 
 
@@ -120,12 +121,13 @@ class ServerBuilder:
     @staticmethod
     def _stream_channel_count(level: dict, stream: dict) -> int:
         subjects = list(stream.get("subjects", []))
-        return 3 + len(subjects)
+        return 4 + len(subjects)
 
     @staticmethod
     def _planned_channel_names_for_stream(stream: dict) -> set[str]:
         code = stream.get("abbreviation") or ""
         return {
+            _stream_header_name(stream.get("name", ""), code),
             f"📌-{code}・informations",
             f"🗓️-{code}・emploi-du-temps",
             f"📝-{code}・examens",
@@ -154,7 +156,11 @@ class ServerBuilder:
     @staticmethod
     def _stream_in_category(category: discord.CategoryChannel, stream_code: str) -> bool:
         prefixes = _stream_channel_prefixes(stream_code)
-        return any(any(channel.name.startswith(prefix) for prefix in prefixes) for channel in category.channels)
+        return any(
+            (channel.name.startswith("🔹・") and channel.name.endswith(f"・{stream_code}"))
+            or any(channel.name.startswith(prefix) for prefix in prefixes)
+            for channel in category.channels
+        )
 
     def _stream_category_capacity(self, category: discord.CategoryChannel) -> int:
         return 50 - len(category.channels)
@@ -190,26 +196,37 @@ class ServerBuilder:
                 existing = 0
                 for category in self._level_categories(level["name"]):
                     if self._stream_in_category(category, code):
-                        existing = len(
-                            [channel for channel in category.channels if any(channel.name.startswith(prefix) for prefix in _stream_channel_prefixes(code))]
-                        )
+                        expected_names = self._planned_channel_names_for_stream(stream)
+                        existing = sum(channel.name in expected_names for channel in category.channels)
                         break
                 projected_missing += max(0, stream_count - existing)
 
         current_total = len(self.guild.channels)
-        # Give a small safety margin for category/voice creation and reconciliation.
         if current_total + projected_missing + len(selected.get("levels", [])) + 10 > 500:
             projected_total = current_total + projected_missing + len(selected.get("levels", [])) + 10
             raise ValueError(f"La construction dépasserait la limite Discord de 500 salons ({projected_total}).")
 
     async def build(self, selected: dict) -> BuildStats:
-        self._validate_capacity(selected)
-        roles = await self._ensure_main_roles()
-        await self._ensure_general_area(roles)
-        await self._ensure_professor_area(roles)
-        voice_category = await self._get_or_create_category(CATEGORY_VOICE)
-        for level in selected.get("levels", []):
-            await self._build_level(level, roles, voice_category)
+        print(f"[BUILD] Start guild={self.guild.id}")
+        try:
+            async with asyncio.timeout(300):
+                self._validate_capacity(selected)
+                print("[BUILD] Capacity check OK")
+                roles = await self._ensure_main_roles()
+                print("[BUILD] Main roles OK")
+                await self._ensure_general_area(roles)
+                print("[BUILD] General area OK")
+                await self._ensure_professor_area(roles)
+                print("[BUILD] Professor area OK")
+                voice_category = await self._get_or_create_category(CATEGORY_VOICE)
+                print("[BUILD] Voice area OK")
+                for level in selected.get("levels", []):
+                    print(f"[BUILD] Level start: {level['name']}")
+                    await self._build_level(level, roles, voice_category)
+                    print(f"[BUILD] Level done: {level['name']}")
+                print("[BUILD] Complete")
+        except TimeoutError as exc:
+            raise RuntimeError("La construction a dépassé 5 minutes. Consulte le terminal: la dernière étape affichée indique où elle s'est bloquée.") from exc
         return self.stats
 
     async def _ensure_main_roles(self) -> dict[str, discord.Role]:
@@ -387,19 +404,8 @@ class ServerBuilder:
         )
         await self._get_or_create_voice(category, PROFESSOR_CHANNELS["meeting"], overwrites)
 
-    async def _cleanup_legacy_stream_headers(self, categories: list[discord.CategoryChannel]) -> None:
-        for level_category in categories:
-            for channel in list(level_category.channels):
-                if channel.name.startswith("🔹-") or channel.name.startswith("🔹・"):
-                    try:
-                        await channel.delete(reason="School manager legacy stream header cleanup")
-                    except (discord.Forbidden, discord.HTTPException):
-                        pass
-
     async def _build_level(self, level, roles, voice_category):
         level_name = level["name"]
-        existing_categories = self._level_categories(level_name)
-        await self._cleanup_legacy_stream_headers(existing_categories)
 
         for stream in level.get("streams", []):
             stream_name = stream["name"]
@@ -407,6 +413,7 @@ class ServerBuilder:
             subjects = list(stream.get("subjects", [])) or get_stream_subjects(level_name, stream_name)
             stream_count = 3 + len(subjects)
             target_category = await self._category_for_stream(level_name, stream_code, stream_count)
+            print(f"[BUILD] Stream start: {level_name}/{stream_code} -> {target_category.name}")
 
             teacher_stream_role = await self._ensure_stream_role(level_name, stream_name)
             student_stream_role = await self._ensure_student_stream_role(level_name, stream_name)
@@ -420,7 +427,22 @@ class ServerBuilder:
                 student_stream_role,
             )
 
-            stream_emoji = STREAM_EMOJIS.get(stream_name, "🎓")
+            header_overwrites = stream_header_overwrites(
+                self.guild.default_role,
+                roles[ROLE_ADMIN],
+                roles[ROLE_PROFESSOR],
+                roles[ROLE_PROFESSOR_FEMALE],
+                roles[ROLE_STUDENT],
+                teacher_stream_role,
+                student_stream_role,
+            )
+            header = await self._get_or_create_text(
+                target_category,
+                _stream_header_name(stream_name, stream_code),
+                topic=f"{stream_code} — {stream_name}",
+                overwrites=header_overwrites,
+            )
+
             await self._get_or_create_text(
                 target_category,
                 f"📌-{stream_code}・informations",
@@ -474,7 +496,20 @@ class ServerBuilder:
                     student_stream_role,
                 ),
             )
+
+            # Place the visual stream title before the rest of this stream's channels.
+            stream_channels = [
+                channel for channel in target_category.channels
+                if channel.id != header.id
+                and any(channel.name.startswith(prefix) for prefix in _stream_channel_prefixes(stream_code))
+            ]
+            if stream_channels:
+                first_position = min(channel.position for channel in stream_channels)
+                if header.position != first_position:
+                    await header.edit(position=first_position, reason="School manager stream title placement")
+
             self.stats.streams_processed += 1
+            print(f"[BUILD] Stream done: {level_name}/{stream_code}")
 
         self.stats.levels_processed += 1
 
