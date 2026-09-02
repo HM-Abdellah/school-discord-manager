@@ -2,49 +2,37 @@
 
 from __future__ import annotations
 
-from datetime import date
-
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from config.curriculum import get_levels, get_stream_abbreviation, get_streams, get_stream_subjects, get_subject_display_name
 from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, _preflight_message, management_check
-from services.server_builder import ServerBuilder, _subject_channel_name
-from services.storage import get_active_academic_year, get_guild_config, list_academic_years
+from services.server_builder import _subject_role_name
+from services.storage import get_guild_config, list_academic_years
 
 
 async def level_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-    return [
-        app_commands.Choice(name=level, value=level)
-        for level in get_levels()
-        if current.lower() in level.lower()
-    ][:25]
+    return [app_commands.Choice(name=level, value=level) for level in get_levels() if current.lower() in level.lower()][:25]
 
 
 async def stream_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
     level = str(getattr(interaction.namespace, "level", ""))
     if level not in get_levels():
         return []
-    return [
-        app_commands.Choice(name=stream, value=stream)
-        for stream in get_streams(level)
-        if current.lower() in stream.lower()
-    ][:25]
+    return [app_commands.Choice(name=stream, value=stream) for stream in get_streams(level) if current.lower() in stream.lower()][:25]
 
 
 def _find_stream_channel(guild: discord.Guild, level: str, stream: str, kind: str) -> discord.TextChannel | None:
     code = get_stream_abbreviation(level, stream)
     prefix = {"timetable": f"🗓️-{code}・", "exams": f"📝-{code}・"}[kind]
-    return discord.utils.find(
-        lambda channel: isinstance(channel, discord.TextChannel) and channel.name.startswith(prefix),
-        guild.text_channels,
-    )
+    return discord.utils.find(lambda channel: isinstance(channel, discord.TextChannel) and channel.name.startswith(prefix), guild.text_channels)
 
 
 async def _upsert_bot_embed(channel: discord.TextChannel, *, marker: str, embed: discord.Embed) -> discord.Message:
+    bot_user = channel.guild.me
     async for message in channel.history(limit=50):
-        if message.author.id == channel.guild.me.id and message.embeds:
+        if bot_user is not None and message.author.id == bot_user.id and message.embeds:
             footer = message.embeds[0].footer.text or ""
             if footer == marker:
                 await message.edit(embed=embed)
@@ -104,26 +92,15 @@ class AdminCommands(commands.Cog):
         checks.append(f"✅ Category capacity: largest **{largest_category}/50**" if largest_category < 50 else f"❌ Category capacity: largest **{largest_category}/50**")
         config = get_guild_config(guild.id)
         checks.append("✅ Configuration" if config else "⚠️ Aucune configuration enregistrée")
-        embed = discord.Embed(title="🩺 SERVER HEALTH", description="\n".join(checks), colour=discord.Colour.green())
+        colour = discord.Colour.green() if all(item.startswith("✅") or item.startswith("⚠️") for item in checks) else discord.Colour.orange()
+        embed = discord.Embed(title="🩺 SERVER HEALTH", description="\n".join(checks), colour=colour)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="assignteacherfull", description="Affecter un professeur à une filière et à une ou plusieurs matières.")
-    @app_commands.describe(
-        teacher="Professeur",
-        level="Niveau scolaire",
-        stream="Filière scolaire",
-        subjects="Matières séparées par des virgules; utilise les noms affichés dans le curriculum",
-    )
+    @app_commands.describe(teacher="Professeur", level="Niveau scolaire", stream="Filière scolaire", subjects="Matières séparées par des virgules")
     @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete)
     @management_check()
-    async def assign_teacher_full(
-        self,
-        interaction: discord.Interaction,
-        teacher: discord.Member,
-        level: str,
-        stream: str,
-        subjects: str,
-    ) -> None:
+    async def assign_teacher_full(self, interaction: discord.Interaction, teacher: discord.Member, level: str, stream: str, subjects: str) -> None:
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
@@ -135,39 +112,34 @@ class AdminCommands(commands.Cog):
         curriculum_subjects = get_stream_subjects(level, stream)
         chosen = [subject for subject in curriculum_subjects if get_subject_display_name(subject).casefold() in requested or subject.casefold() in requested]
         if not chosen:
-            await interaction.response.send_message("❌ Aucune matière reconnue. Copie les noms des matières affichés par le curriculum.", ephemeral=True)
+            await interaction.response.send_message("❌ Aucune matière reconnue. Sépare les noms par des virgules.", ephemeral=True)
             return
-        prof_role = discord.utils.get(guild.roles, name=ROLE_PROFESSOR)
-        if prof_role is None:
-            prof_role = discord.utils.get(guild.roles, name=ROLE_PROFESSOR_FEMALE)
-        stream_role_name = f"Filière - {get_stream_abbreviation(level, stream)}"
-        stream_role = discord.utils.get(guild.roles, name=stream_role_name)
+        stream_code = get_stream_abbreviation(level, stream)
+        stream_role = discord.utils.get(guild.roles, name=f"Filière - {stream_code}")
         if stream_role is None:
             await interaction.response.send_message("❌ Lance `/build` avant d'affecter ce professeur.", ephemeral=True)
             return
         subject_roles = []
         for subject in chosen:
-            role_name = f"Matière - {get_stream_abbreviation(level, stream)} - {ServerBuilder._subject_role_name(level, stream, subject).split(' - ', 2)[-1]}"
+            role_name = _subject_role_name(level, stream, subject)
             role = discord.utils.get(guild.roles, name=role_name)
             if role is None:
                 await interaction.response.send_message(f"❌ Rôle matière manquant: `{role_name}`. Lance `/build`.", ephemeral=True)
                 return
             subject_roles.append(role)
+        base_roles = [role for role in guild.roles if role.name in {ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE}]
         try:
-            if prof_role is not None and prof_role not in teacher.roles:
-                await teacher.add_roles(prof_role, reason="School manager teacher assignment")
+            if not any(role in teacher.roles for role in base_roles) and base_roles:
+                await teacher.add_roles(base_roles[0], reason="School manager teacher assignment")
             await teacher.add_roles(stream_role, *subject_roles, reason="School manager full teacher assignment")
         except discord.Forbidden:
             await interaction.response.send_message("❌ Impossible d'attribuer les rôles. Vérifie la hiérarchie du bot.", ephemeral=True)
             return
         subject_names = ", ".join(get_subject_display_name(subject) for subject in chosen)
-        await interaction.response.send_message(
-            f"✅ {teacher.mention} est affecté à **{get_stream_abbreviation(level, stream)}** pour: {subject_names}.",
-            ephemeral=True,
-        )
+        await interaction.response.send_message(f"✅ {teacher.mention} est affecté à **{stream_code}** pour: {subject_names}.", ephemeral=True)
 
     @app_commands.command(name="set_timetable", description="Mettre à jour l'emploi du temps d'une filière sans créer de nouveau salon.")
-    @app_commands.describe(level="Niveau", stream="Filière", content="Contenu de l'emploi du temps, avec lignes et horaires")
+    @app_commands.describe(level="Niveau", stream="Filière", content="Contenu de l'emploi du temps")
     @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete)
     @management_check()
     async def set_timetable(self, interaction: discord.Interaction, level: str, stream: str, content: str) -> None:
