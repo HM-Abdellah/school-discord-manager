@@ -164,14 +164,25 @@ def stream_header_overwrites(
     everyone, admin_role, professor_role, female_professor_role,
     student_role, teacher_stream_role, student_stream_role,
 ):
-    """Read-only title channel used to visually separate streams in a level category."""
-    readonly = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
+    """Read-only visual separator channel for a stream."""
+    readonly = discord.PermissionOverwrite(
+        view_channel=True,
+        send_messages=False,
+        read_message_history=True,
+        create_public_threads=False,
+        create_private_threads=False,
+        send_messages_in_threads=False,
+        manage_messages=False,
+        manage_threads=False,
+        manage_channels=False,
+        manage_permissions=False,
+    )
     return {
         everyone: hidden_overwrite(),
         student_role: readonly,
         professor_role: readonly,
         female_professor_role: readonly,
-        admin_role: administrator_overwrite(),
+        admin_role: readonly,
         teacher_stream_role: readonly,
         student_stream_role: readonly,
     }
