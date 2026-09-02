@@ -156,8 +156,18 @@ def teacher_area_overwrites(everyone, admin_role, professor_role, female_profess
     return {everyone: hidden_overwrite(), student_role: hidden_overwrite(), professor_role: professor_general_overwrite(), female_professor_role: professor_general_overwrite(), admin_role: administrator_overwrite()}
 
 
-def subject_channel_overwrites(everyone, admin_role, professor_role, female_professor_role, teacher_stream_role, student_stream_role, subject_role):
-    return {everyone: hidden_overwrite(), admin_role: administrator_overwrite(), professor_role: professor_subject_view_overwrite(), female_professor_role: professor_subject_view_overwrite(), teacher_stream_role: professor_subject_view_overwrite(), student_stream_role: student_overwrite(can_send=True), subject_role: professor_subject_member_overwrite()}
+def subject_channel_overwrites(everyone, admin_role, professor_role, female_professor_role, teacher_stream_role, student_stream_role, subject_role=None):
+    overwrites = {
+        everyone: hidden_overwrite(),
+        admin_role: administrator_overwrite(),
+        professor_role: professor_subject_view_overwrite(),
+        female_professor_role: professor_subject_view_overwrite(),
+        teacher_stream_role: professor_subject_view_overwrite(),
+        student_stream_role: student_overwrite(can_send=True),
+    }
+    if subject_role is not None:
+        overwrites[subject_role] = professor_subject_member_overwrite()
+    return overwrites
 
 
 def public_voice_overwrites(everyone, admin_role, professor_role, female_professor_role, student_role, teacher_stream_role, student_stream_role):
