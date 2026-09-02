@@ -22,7 +22,7 @@ class SchoolBot(commands.Bot):
 
     EXTENSIONS = (
         "cogs.setup",
-        "cogs.server_v2",
+        "cogs.server_v3",
         "cogs.students",
         "cogs.teachers",
     )
