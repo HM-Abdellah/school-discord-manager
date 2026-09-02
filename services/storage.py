@@ -68,7 +68,7 @@ def _create_enrollments_table(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_legacy_enrollments(conn: sqlite3.Connection) -> None:
-    """Migrate legacy class-based rows when a safe class->stream mapping exists; otherwise retain an immutable backup."""
+    """Migrate legacy class-based rows when a safe class->stream mapping exists; otherwise retain a backup."""
     if not _table_exists(conn, "enrollments"):
         _create_enrollments_table(conn)
         return
@@ -81,16 +81,12 @@ def _migrate_legacy_enrollments(conn: sqlite3.Connection) -> None:
     legacy_name = _next_legacy_name(conn)
     conn.execute(f"ALTER TABLE enrollments RENAME TO {legacy_name}")
     _create_enrollments_table(conn)
-
     if _table_exists(conn, "classes"):
         class_columns = _table_columns(conn, "classes")
         if {"id", "stream_id"}.issubset(class_columns):
             conn.execute(f"""
                 INSERT INTO enrollments(student_id, stream_id, start_date, end_date, status)
-                SELECT e.student_id,
-                       c.stream_id,
-                       COALESCE(e.start_date, DATE('now')),
-                       e.end_date,
+                SELECT e.student_id, c.stream_id, COALESCE(e.start_date, DATE('now')), e.end_date,
                        CASE WHEN COALESCE(e.status, 'active') IN ('active','transferred','left_school')
                             THEN COALESCE(e.status, 'active') ELSE 'active' END
                 FROM {legacy_name} e
@@ -102,14 +98,11 @@ def _migrate_legacy_enrollments(conn: sqlite3.Connection) -> None:
 
 
 def _deduplicate_active_enrollments(conn: sqlite3.Connection) -> None:
-    """Keep the newest active enrollment per student before adding the uniqueness guard."""
     conn.execute("""
         UPDATE enrollments
         SET status='transferred', end_date=COALESCE(end_date, DATE('now'))
         WHERE status='active'
-          AND id NOT IN (
-              SELECT MAX(id) FROM enrollments WHERE status='active' GROUP BY student_id
-          )
+          AND id NOT IN (SELECT MAX(id) FROM enrollments WHERE status='active' GROUP BY student_id)
     """)
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_one_active_enrollment_per_student ON enrollments(student_id) WHERE status='active'")
 
@@ -117,41 +110,13 @@ def _deduplicate_active_enrollments(conn: sqlite3.Connection) -> None:
 def initialize_database() -> None:
     with _connect() as conn:
         conn.executescript("""
-        CREATE TABLE IF NOT EXISTS academic_years (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            guild_id INTEGER NOT NULL,
-            name TEXT NOT NULL,
-            is_active INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            UNIQUE(guild_id, name)
-        );
-        CREATE TABLE IF NOT EXISTS streams (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            guild_id INTEGER NOT NULL,
-            academic_year_id INTEGER NOT NULL,
-            level_name TEXT NOT NULL,
-            stream_name TEXT NOT NULL,
-            role_name TEXT NOT NULL,
-            UNIQUE(guild_id, academic_year_id, level_name, stream_name),
-            FOREIGN KEY(academic_year_id) REFERENCES academic_years(id) ON DELETE CASCADE
-        );
-        CREATE TABLE IF NOT EXISTS students (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            guild_id INTEGER NOT NULL,
-            discord_id INTEGER,
-            display_name TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'active',
-            created_at TEXT NOT NULL,
-            UNIQUE(guild_id, discord_id)
-        );
+        CREATE TABLE IF NOT EXISTS academic_years (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, name TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, UNIQUE(guild_id, name));
+        CREATE TABLE IF NOT EXISTS streams (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, academic_year_id INTEGER NOT NULL, level_name TEXT NOT NULL, stream_name TEXT NOT NULL, role_name TEXT NOT NULL, UNIQUE(guild_id, academic_year_id, level_name, stream_name), FOREIGN KEY(academic_year_id) REFERENCES academic_years(id) ON DELETE CASCADE);
+        CREATE TABLE IF NOT EXISTS students (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, discord_id INTEGER, display_name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, UNIQUE(guild_id, discord_id));
         """)
         _migrate_legacy_enrollments(conn)
         _deduplicate_active_enrollments(conn)
-        conn.executescript("""
-        CREATE INDEX IF NOT EXISTS idx_students_guild_discord ON students(guild_id, discord_id);
-        CREATE INDEX IF NOT EXISTS idx_streams_guild_year ON streams(guild_id, academic_year_id);
-        CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id);
-        """)
+        conn.executescript("CREATE INDEX IF NOT EXISTS idx_students_guild_discord ON students(guild_id, discord_id); CREATE INDEX IF NOT EXISTS idx_streams_guild_year ON streams(guild_id, academic_year_id); CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id);")
 
 
 def load_all() -> dict[str, Any]:
@@ -185,7 +150,6 @@ def get_guild_config(guild_id: int) -> dict[str, Any] | None:
 
 
 def save_guild_config(guild_id: int, config: dict[str, Any]) -> None:
-    """Persist JSON and database with rollback of JSON if SQLite synchronization fails."""
     old_data = load_all()
     new_data = deepcopy(old_data)
     new_data[str(guild_id)] = deepcopy(config)
@@ -207,16 +171,18 @@ def delete_guild_config(guild_id: int) -> None:
 
 
 def reset_guild_data(guild_id: int) -> None:
+    """Delete all persisted application data belonging to one guild in one transaction."""
     old_data = load_all()
     new_data = deepcopy(old_data)
     new_data.pop(str(guild_id), None)
     try:
-        save_all(new_data)
-        initialize_database()
         with _connect() as conn:
             conn.execute("DELETE FROM students WHERE guild_id=?", (guild_id,))
             conn.execute("DELETE FROM streams WHERE guild_id=?", (guild_id,))
             conn.execute("DELETE FROM academic_years WHERE guild_id=?", (guild_id,))
+            if _table_exists(conn, "audit_events"):
+                conn.execute("DELETE FROM audit_events WHERE guild_id=?", (guild_id,))
+        save_all(new_data)
     except Exception:
         try:
             save_all(old_data)
@@ -234,8 +200,7 @@ def ensure_academic_year(guild_id: int, name: str, *, active: bool = False) -> i
         conn.execute("INSERT OR IGNORE INTO academic_years(guild_id,name,is_active,created_at) VALUES(?,?,?,?)", (guild_id, name, int(active), today))
         if active:
             conn.execute("UPDATE academic_years SET is_active=1 WHERE guild_id=? AND name=?", (guild_id, name))
-        row = conn.execute("SELECT id FROM academic_years WHERE guild_id=? AND name=?", (guild_id, name)).fetchone()
-        return int(row["id"])
+        return int(conn.execute("SELECT id FROM academic_years WHERE guild_id=? AND name=?", (guild_id, name)).fetchone()[0])
 
 
 def create_academic_year(guild_id: int, name: str, *, activate: bool = True) -> int:
@@ -255,7 +220,6 @@ def list_academic_years(guild_id: int) -> list[sqlite3.Row]:
 
 
 def sync_configuration_to_database(guild_id: int, config: dict[str, Any]) -> None:
-    """Synchronize the current selected streams without deleting historical stream records."""
     initialize_database()
     year_name = config.get("academic_year") or f"{date.today().year}/{date.today().year + 1}"
     today = date.today().isoformat()
@@ -307,7 +271,6 @@ def enroll_student(guild_id: int, student_id: int, academic_year_id: int, level_
 
 
 def enroll_student_record(guild_id: int, discord_id: int, display_name: str, academic_year_id: int, level_name: str, stream_name: str) -> int:
-    """Atomically upsert a student and change enrollment only when the stream actually changes."""
     initialize_database()
     with _connect() as conn:
         stream = conn.execute("SELECT * FROM streams WHERE guild_id=? AND academic_year_id=? AND level_name=? AND stream_name=? LIMIT 1", (guild_id, academic_year_id, level_name, stream_name)).fetchone()
