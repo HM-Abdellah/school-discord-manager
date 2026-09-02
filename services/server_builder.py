@@ -1,36 +1,14 @@
-"""Build a compact, idempotent school Discord structure."""
+"""Simple, stable Discord server builder for School Manager."""
 
 from __future__ import annotations
 
-import asyncio
 import re
-from collections.abc import Awaitable
 from typing import Any
 
 import discord
 
-from config.curriculum import (
-    GENERAL_CHANNELS,
-    PROFESSOR_CHANNELS,
-    get_stream_abbreviation,
-    get_stream_subjects,
-    get_subject_display_name,
-    get_subject_internal_code,
-)
-from services.permissions import (
-    ROLE_ADMIN,
-    ROLE_PROFESSOR,
-    ROLE_PROFESSOR_FEMALE,
-    ROLE_STUDENT,
-    STREAM_ROLE_PREFIX,
-    STUDENT_STREAM_ROLE_PREFIX,
-    SUBJECT_ROLE_PREFIX,
-    general_area_overwrites,
-    public_voice_overwrites,
-    stream_announcement_overwrites,
-    subject_channel_overwrites,
-    teacher_area_overwrites,
-)
+from config.curriculum import GENERAL_CHANNELS, PROFESSOR_CHANNELS, get_stream_abbreviation, get_stream_subjects, get_subject_display_name, get_subject_internal_code
+from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT, STREAM_ROLE_PREFIX, STUDENT_STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX, general_area_overwrites, public_voice_overwrites, stream_announcement_overwrites, teacher_area_overwrites
 
 CATEGORY_GENERAL = "🏢・INFORMATIONS & ADMINISTRATION"
 CATEGORY_PROFESSORS = "👨‍🏫・ESPACE PROFESSEURS"
@@ -78,17 +56,19 @@ def _subject_role_name(level_name: str, stream_name: str, subject: str) -> str:
 
 
 def _stream_channel_prefixes(stream_code: str) -> tuple[str, ...]:
-    return (
-        f"📌-{stream_code}・",
-        f"📌{stream_code}・",
-        f"🗓️-{stream_code}・",
-        f"📝-{stream_code}・",
-        f"📚-{stream_code}・",
-    )
+    return (f"📌-{stream_code}・", f"📌{stream_code}・", f"🗓️-{stream_code}・", f"📝-{stream_code}・", f"📚-{stream_code}・")
 
 
 def _level_category_name(level_name: str) -> str:
     return LEVEL_PREFIXES.get(level_name, f"📚・{_safe_name(level_name, 30).upper()}")
+
+
+def _subject_channel_overwrites(everyone, admin_role, professor_role, female_professor_role, teacher_stream_role, student_stream_role):
+    teacher = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, create_public_threads=True, send_messages_in_threads=True)
+    professor = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
+    student = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, create_public_threads=True, send_messages_in_threads=True)
+    admin = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, manage_channels=True, manage_permissions=True, manage_messages=True, manage_threads=True)
+    return {everyone: discord.PermissionOverwrite(view_channel=False), admin_role: admin, professor_role: professor, female_professor_role: professor, teacher_stream_role: teacher, student_stream_role: student}
 
 
 class BuildStats:
@@ -103,24 +83,12 @@ class BuildStats:
 
 
 class ServerBuilder:
-    """Simple idempotent builder. Subject-teacher roles are created only when needed."""
-
-    API_TIMEOUT = 60
+    """Create the managed structure with as few Discord API requests as possible."""
 
     def __init__(self, guild: discord.Guild) -> None:
         self.guild = guild
         self.stats = BuildStats()
-        self.managed: dict[str, Any] = {"roles": {}, "categories": {}, "channels": {}}
-
-    async def _api(self, label: str, operation: Awaitable[Any]) -> Any:
-        print(f"[BUILD] -> {label}", flush=True)
-        try:
-            result = await asyncio.wait_for(operation, timeout=self.API_TIMEOUT)
-        except TimeoutError as exc:
-            print(f"[BUILD] TIMEOUT: {label}", flush=True)
-            raise RuntimeError(f"Discord operation timed out after {self.API_TIMEOUT}s: {label}") from exc
-        print(f"[BUILD] <- {label}", flush=True)
-        return result
+        self.managed: dict[str, dict[str, int]] = {"roles": {}, "categories": {}, "channels": {}}
 
     @staticmethod
     def _stream_channel_count(level: dict, stream: dict) -> int:
@@ -129,12 +97,7 @@ class ServerBuilder:
     @staticmethod
     def _planned_channel_names_for_stream(stream: dict) -> set[str]:
         code = stream.get("abbreviation") or ""
-        return {
-            f"📌-{code}・informations",
-            f"🗓️-{code}・emploi-du-temps",
-            f"📝-{code}・examens",
-            *{_subject_channel_name(code, subject) for subject in stream.get("subjects", [])},
-        }
+        return {f"📌-{code}・informations", f"🗓️-{code}・emploi-du-temps", f"📝-{code}・examens", *{_subject_channel_name(code, subject) for subject in stream.get("subjects", [])}}
 
     def _remember_role(self, role: discord.Role) -> None:
         self.managed["roles"][role.name] = role.id
@@ -145,60 +108,57 @@ class ServerBuilder:
     def _remember_channel(self, channel: discord.abc.GuildChannel) -> None:
         self.managed["channels"][channel.name] = channel.id
 
+    def _find_category(self, name: str) -> discord.CategoryChannel | None:
+        return discord.utils.get(self.guild.categories, name=name)
+
+    def _find_text(self, category: discord.CategoryChannel, name: str) -> discord.TextChannel | None:
+        return discord.utils.get(category.text_channels, name=name)
+
+    def _find_voice(self, category: discord.CategoryChannel, name: str) -> discord.VoiceChannel | None:
+        return discord.utils.get(category.voice_channels, name=name)
+
     def _validate_capacity(self, selected: dict) -> None:
         streams = [stream for level in selected.get("levels", []) for stream in level.get("streams", [])]
-        missing_categories = 0
-        for level in selected.get("levels", []):
-            for stream in level.get("streams", []):
-                if not discord.utils.find(
-                    lambda c: isinstance(c, discord.CategoryChannel)
-                    and c.name == _stream_category_name(level["name"], stream["name"], stream.get("abbreviation")),
-                    self.guild.categories,
-                ):
-                    missing_categories += 1
-        missing_channels = 0
-        fixed_names = set(GENERAL_CHANNELS.values()) | {PROFESSOR_CHANNELS["discussion"]}
-        for level in selected.get("levels", []):
-            for stream in level.get("streams", []):
-                expected = self._planned_channel_names_for_stream(stream)
-                category = discord.utils.find(
-                    lambda c: isinstance(c, discord.CategoryChannel)
-                    and c.name == _stream_category_name(level["name"], stream["name"], stream.get("abbreviation")),
-                    self.guild.categories,
-                )
-                existing = {c.name for c in category.channels} if category else set()
-                missing_channels += len(expected - existing)
-        existing_fixed = {c.name for c in self.guild.text_channels if c.name in fixed_names}
-        missing_channels += len(fixed_names - existing_fixed)
-        if not discord.utils.get(self.guild.channels, name=PROFESSOR_CHANNELS["meeting"]):
-            missing_channels += 1
-        missing_voice = 0 if discord.utils.get(self.guild.categories, name=CATEGORY_VOICE) else 1
-        projected_channels = len(self.guild.channels) + missing_channels + missing_categories + 3 * missing_voice
-        if projected_channels > 500:
-            raise ValueError(f"La construction dépasserait la limite Discord de 500 salons ({projected_channels}).")
-        projected_categories = len(self.guild.categories) + missing_categories + sum(
-            1 for name in (CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE)
-            if discord.utils.get(self.guild.categories, name=name) is None
-        )
-        if projected_categories > 50:
-            raise ValueError("La construction dépasserait la limite Discord de 50 catégories.")
         for stream in streams:
             if self._stream_channel_count({}, stream) > 50:
                 code = stream.get("abbreviation") or stream.get("name", "stream")
                 raise ValueError(f"La filière `{code}` dépasse la limite de 50 salons dans sa catégorie.")
+        missing_categories = 0
+        for level in selected.get("levels", []):
+            for stream in level.get("streams", []):
+                if self._find_category(_stream_category_name(level["name"], stream["name"], stream.get("abbreviation"))) is None:
+                    missing_categories += 1
+        missing_channels = 0
+        fixed_names = set(GENERAL_CHANNELS.values()) | {PROFESSOR_CHANNELS["discussion"], PROFESSOR_CHANNELS["meeting"]}
+        existing_fixed = {channel.name for channel in self.guild.channels if channel.name in fixed_names}
+        missing_channels += len(fixed_names - existing_fixed)
+        for level in selected.get("levels", []):
+            for stream in level.get("streams", []):
+                category = self._find_category(_stream_category_name(level["name"], stream["name"], stream.get("abbreviation")))
+                expected = self._planned_channel_names_for_stream(stream)
+                existing = {channel.name for channel in category.channels} if category else set()
+                missing_channels += len(expected - existing)
+        if self._find_category(CATEGORY_VOICE) is None:
+            missing_categories += 1
+        projected_channels = len(self.guild.channels) + missing_channels + 3
+        if projected_channels > 500:
+            raise ValueError(f"La construction dépasserait la limite Discord de 500 salons ({projected_channels}).")
+        if len(self.guild.categories) + missing_categories > 50:
+            raise ValueError("La construction dépasserait la limite Discord de 50 catégories.")
 
     async def build(self, selected: dict) -> BuildStats:
         print(f"[BUILD] Start guild={self.guild.id}", flush=True)
-        async with asyncio.timeout(600):
-            self._validate_capacity(selected)
-            roles = await self._ensure_main_roles()
-            await self._ensure_general_area(roles)
-            await self._ensure_professor_area(roles)
-            voice_category = await self._get_or_create_category(CATEGORY_VOICE)
-            for level in selected.get("levels", []):
-                await self._build_level(level, roles, voice_category)
-                self.stats.levels_processed += 1
-            print("[BUILD] Complete", flush=True)
+        self._validate_capacity(selected)
+        roles = await self._ensure_main_roles()
+        selected["managed"] = self.managed
+        selected["management_role_id"] = roles[ROLE_ADMIN].id
+        await self._ensure_general_area(roles)
+        await self._ensure_professor_area(roles)
+        voice_category = await self._get_or_create_category(CATEGORY_VOICE)
+        for level in selected.get("levels", []):
+            await self._build_level(level, roles, voice_category)
+            self.stats.levels_processed += 1
+        print("[BUILD] Complete", flush=True)
         return self.stats
 
     async def _ensure_main_roles(self) -> dict[str, discord.Role]:
@@ -215,28 +175,19 @@ class ServerBuilder:
             for permission in permission_names:
                 setattr(perms, permission, True)
             if role is None:
-                role = await self._api(
-                    f"create role: {name}",
-                    self.guild.create_role(name=name, permissions=perms, colour=colour, hoist=hoist, mentionable=mentionable, reason="School manager managed role"),
-                )
+                role = await self.guild.create_role(name=name, permissions=perms, colour=colour, hoist=hoist, mentionable=mentionable, reason="School manager managed role")
                 self.stats.roles_created += 1
             elif role.permissions != perms or role.colour != colour or role.hoist != hoist or role.mentionable != mentionable:
-                role = await self._api(
-                    f"edit role: {name}",
-                    role.edit(permissions=perms, colour=colour, hoist=hoist, mentionable=mentionable, reason="School manager reconciliation"),
-                )
-            self._remember_role(role)
+                role = await role.edit(permissions=perms, colour=colour, hoist=hoist, mentionable=mentionable, reason="School manager role reconciliation")
             roles[name] = role
+            self._remember_role(role)
         return roles
 
     async def _ensure_stream_role(self, level_name: str, stream_name: str) -> discord.Role:
         name = _stream_role_name(level_name, stream_name)
         role = discord.utils.get(self.guild.roles, name=name)
         if role is None:
-            role = await self._api(
-                f"create stream role: {name}",
-                self.guild.create_role(name=name, permissions=discord.Permissions.none(), colour=discord.Colour.teal(), mentionable=True, reason="School manager stream role"),
-            )
+            role = await self.guild.create_role(name=name, permissions=discord.Permissions.none(), colour=discord.Colour.teal(), mentionable=True, reason="School manager stream role")
             self.stats.roles_created += 1
         self._remember_role(role)
         return role
@@ -245,73 +196,58 @@ class ServerBuilder:
         name = _student_stream_role_name(level_name, stream_name)
         role = discord.utils.get(self.guild.roles, name=name)
         if role is None:
-            role = await self._api(
-                f"create student stream role: {name}",
-                self.guild.create_role(name=name, permissions=discord.Permissions.none(), colour=discord.Colour.green(), mentionable=False, reason="School manager student stream role"),
-            )
+            role = await self.guild.create_role(name=name, permissions=discord.Permissions.none(), colour=discord.Colour.green(), mentionable=False, reason="School manager student stream role")
             self.stats.roles_created += 1
         self._remember_role(role)
         return role
 
     async def _get_or_create_category(self, name: str, overwrites=None) -> discord.CategoryChannel:
-        category = discord.utils.find(lambda item: isinstance(item, discord.CategoryChannel) and item.name == name, self.guild.channels)
-        if category is None:
-            kwargs = {"name": name, "reason": "School manager automatic setup"}
-            if overwrites is not None:
-                kwargs["overwrites"] = overwrites
-            category = await self._api(f"create category: {name}", self.guild.create_category(**kwargs))
-            self.stats.categories_created += 1
-        elif overwrites is not None and category.overwrites != overwrites:
-            await self._api(f"edit category: {name}", category.edit(overwrites=overwrites, reason="School manager reconciliation"))
+        category = self._find_category(name)
+        if category is not None:
+            self._remember_category(category)
+            return category
+        kwargs = {"name": name, "reason": "School manager automatic setup"}
+        if overwrites is not None:
+            kwargs["overwrites"] = overwrites
+        category = await self.guild.create_category(**kwargs)
+        self.stats.categories_created += 1
         self._remember_category(category)
         return category
 
     async def _get_or_create_text(self, category: discord.CategoryChannel, name: str, *, topic: str, overwrites: dict) -> discord.TextChannel:
-        channel = discord.utils.find(lambda item: isinstance(item, discord.TextChannel) and item.name == name, category.channels)
-        if channel is None:
-            channel = await self._api(f"create text channel: {category.name}/{name}", category.create_text_channel(name=name, topic=topic, overwrites=overwrites, reason="School manager automatic setup"))
-            self.stats.text_channels_created += 1
-        else:
-            kwargs: dict[str, Any] = {}
-            if channel.topic != topic:
-                kwargs["topic"] = topic
-            if channel.overwrites != overwrites:
-                kwargs["overwrites"] = overwrites
-            if kwargs:
-                await self._api(f"edit text channel: {category.name}/{name}", channel.edit(reason="School manager reconciliation", **kwargs))
+        channel = self._find_text(category, name)
+        if channel is not None:
+            self._remember_channel(channel)
+            return channel
+        channel = await category.create_text_channel(name=name, topic=topic, overwrites=overwrites, reason="School manager automatic setup")
+        self.stats.text_channels_created += 1
         self._remember_channel(channel)
         return channel
 
     async def _get_or_create_voice(self, category: discord.CategoryChannel, name: str, overwrites: dict) -> discord.VoiceChannel:
-        channel = discord.utils.find(lambda item: isinstance(item, discord.VoiceChannel) and item.name == name, category.channels)
-        if channel is None:
-            channel = await self._api(f"create voice channel: {category.name}/{name}", category.create_voice_channel(name=name, overwrites=overwrites, reason="School manager automatic setup"))
-            self.stats.voice_channels_created += 1
-        elif channel.overwrites != overwrites:
-            await self._api(f"edit voice channel: {category.name}/{name}", channel.edit(overwrites=overwrites, reason="School manager reconciliation"))
+        channel = self._find_voice(category, name)
+        if channel is not None:
+            self._remember_channel(channel)
+            return channel
+        channel = await category.create_voice_channel(name=name, overwrites=overwrites, reason="School manager automatic setup")
+        self.stats.voice_channels_created += 1
         self._remember_channel(channel)
         return channel
 
-    async def _ensure_general_area(self, roles):
+    async def _ensure_general_area(self, roles) -> None:
         overwrites = general_area_overwrites(self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT])
         category = await self._get_or_create_category(CATEGORY_GENERAL, overwrites)
-        topics = {
-            "actualites": "Annonces et informations officielles de l'établissement.",
-            "absences": "Informations concernant les absences des professeurs.",
-            "results": "Résultats et communications scolaires importantes.",
-            "post_bac": "Orientation, études supérieures, bourses et opportunités post-bac.",
-            "contests": "Concours, clubs, activités et événements scolaires.",
-        }
+        topics = {"actualites": "Annonces et informations officielles de l'établissement.", "absences": "Informations concernant les absences des professeurs.", "results": "Résultats et communications scolaires importantes.", "post_bac": "Orientation, études supérieures, bourses et opportunités post-bac.", "contests": "Concours, clubs, activités et événements scolaires."}
         for key, name in GENERAL_CHANNELS.items():
             await self._get_or_create_text(category, name, topic=topics[key], overwrites=overwrites)
 
-    async def _ensure_professor_area(self, roles):
+    async def _ensure_professor_area(self, roles) -> None:
         overwrites = teacher_area_overwrites(self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT])
         category = await self._get_or_create_category(CATEGORY_PROFESSORS, overwrites)
         await self._get_or_create_text(category, PROFESSOR_CHANNELS["discussion"], topic="Espace privé de discussion et de coordination des professeurs.", overwrites=overwrites)
         await self._get_or_create_voice(category, PROFESSOR_CHANNELS["meeting"], overwrites)
 
-    async def _build_level(self, level, roles, voice_category):
+    async def _build_level(self, level: dict, roles, voice_category) -> None:
         level_name = level["name"]
         for stream in level.get("streams", []):
             stream_name = stream["name"]
@@ -325,25 +261,9 @@ class ServerBuilder:
             await self._get_or_create_text(category, f"📌-{code}・informations", topic=f"{code} — {stream_name}. Informations générales et organisation de la filière.", overwrites=announcement_overwrites)
             await self._get_or_create_text(category, f"🗓️-{code}・emploi-du-temps", topic=f"Emplois du temps de {stream_name} ({level_name}).", overwrites=announcement_overwrites)
             await self._get_or_create_text(category, f"📝-{code}・examens", topic=f"Dates, horaires et consignes des examens pour {stream_name} — {level_name}.", overwrites=announcement_overwrites)
+            subject_overwrites = _subject_channel_overwrites(self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], roles[ROLE_PROFESSOR_FEMALE], teacher_stream_role, student_stream_role)
             for subject in subjects:
-                overwrites = subject_channel_overwrites(
-                    self.guild.default_role,
-                    roles[ROLE_ADMIN],
-                    roles[ROLE_PROFESSOR],
-                    roles[ROLE_PROFESSOR_FEMALE],
-                    teacher_stream_role,
-                    student_stream_role,
-                )
-                await self._get_or_create_text(
-                    category,
-                    _subject_channel_name(code, subject),
-                    topic=f"Cours, devoirs, exercices, examens blancs et ressources de {get_subject_display_name(subject)} pour {stream_name} ({level_name}).",
-                    overwrites=overwrites,
-                )
-            await self._get_or_create_voice(
-                voice_category,
-                f"🔊-{_safe_name(code, 30)}-à-distance",
-                public_voice_overwrites(self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT], teacher_stream_role, student_stream_role),
-            )
+                await self._get_or_create_text(category, _subject_channel_name(code, subject), topic=f"Cours, devoirs, exercices, examens blancs et ressources de {get_subject_display_name(subject)} pour {stream_name} ({level_name}).", overwrites=subject_overwrites)
+            await self._get_or_create_voice(voice_category, f"🔊-{_safe_name(code, 30)}-à-distance", public_voice_overwrites(self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT], teacher_stream_role, student_stream_role))
             self.stats.streams_processed += 1
             print(f"[BUILD] Stream done: {level_name}/{code}", flush=True)
