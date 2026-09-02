@@ -14,7 +14,44 @@ from services.permissions import (
     SUBJECT_ROLE_PREFIX,
     management_check,
 )
-from services.storage import enroll_student, get_active_academic_year, get_student, get_student_history, mark_student_left, upsert_student
+from services.storage import (
+    enroll_student_record,
+    get_active_academic_year,
+    get_student,
+    get_student_history,
+    mark_student_left,
+)
+
+
+SCHOOL_ASSIGNMENT_PREFIXES = (
+    STUDENT_STREAM_ROLE_PREFIX,
+    STREAM_ROLE_PREFIX,
+    SUBJECT_ROLE_PREFIX,
+)
+
+
+def _school_roles(member: discord.Member) -> list[discord.Role]:
+    return [
+        role
+        for role in member.roles
+        if role.name == ROLE_STUDENT or role.name.startswith(SCHOOL_ASSIGNMENT_PREFIXES)
+    ]
+
+
+async def _restore_school_roles(member: discord.Member, original_roles: list[discord.Role]) -> None:
+    """Best-effort rollback of School Manager roles after a failed DB operation."""
+    current = _school_roles(member)
+    desired = [
+        role
+        for role in original_roles
+        if role.name == ROLE_STUDENT or role.name.startswith(SCHOOL_ASSIGNMENT_PREFIXES)
+    ]
+    to_remove = [role for role in current if role not in desired and not role.managed]
+    to_add = [role for role in desired if role not in current and not role.managed]
+    if to_remove:
+        await member.remove_roles(*to_remove, reason="School Manager rollback")
+    if to_add:
+        await member.add_roles(*to_add, reason="School Manager rollback")
 
 
 class StudentCommands(commands.Cog):
@@ -49,7 +86,7 @@ class StudentCommands(commands.Cog):
             await interaction.response.send_message("❌ Aucune année scolaire active.", ephemeral=True)
             return
 
-        db_student_id = upsert_student(interaction.guild.id, student.id, student.display_name)
+        original_school_roles = _school_roles(student)
         try:
             old_student_stream_roles = [
                 role for role in student.roles
@@ -64,15 +101,43 @@ class StudentCommands(commands.Cog):
                 await student.remove_roles(*cleanup_roles, reason="Student role normalization")
 
             await student.add_roles(student_role, student_stream_role, reason="Student stream assignment")
-            enroll_student(interaction.guild.id, db_student_id, int(year["id"]), level, stream)
+
+            # Database state is committed only after Discord role changes succeed.
+            # The helper itself performs the student upsert + enrollment atomically.
+            enroll_student_record(
+                interaction.guild.id,
+                student.id,
+                student.display_name,
+                int(year["id"]),
+                level,
+                stream,
+            )
         except discord.Forbidden:
+            try:
+                await _restore_school_roles(student, original_school_roles)
+            except discord.HTTPException:
+                pass
             await interaction.response.send_message(
                 "❌ Vérifie que le rôle du bot est assez haut dans la hiérarchie.",
                 ephemeral=True,
             )
             return
         except discord.HTTPException as exc:
+            try:
+                await _restore_school_roles(student, original_school_roles)
+            except discord.HTTPException:
+                pass
             await interaction.response.send_message(f"❌ Discord API : `{exc}`", ephemeral=True)
+            return
+        except Exception as exc:
+            try:
+                await _restore_school_roles(student, original_school_roles)
+            except discord.HTTPException:
+                pass
+            await interaction.response.send_message(
+                f"❌ Affectation annulée; les rôles Discord ont été restaurés si possible : `{type(exc).__name__}: {exc}`",
+                ephemeral=True,
+            )
             return
 
         await interaction.response.send_message(
@@ -110,7 +175,8 @@ class StudentCommands(commands.Cog):
         if row is None:
             await interaction.response.send_message("❌ Élève non enregistré.", ephemeral=True)
             return
-        mark_student_left(interaction.guild.id, int(row["id"]))
+
+        original_school_roles = _school_roles(student)
         school_roles = [
             role for role in student.roles
             if role.name.startswith(STUDENT_STREAM_ROLE_PREFIX)
@@ -119,16 +185,41 @@ class StudentCommands(commands.Cog):
         ]
         student_role = discord.utils.get(interaction.guild.roles, name=ROLE_STUDENT)
         try:
+            # Discord first; database is changed only after role removal succeeds.
             if school_roles:
                 await student.remove_roles(*school_roles, reason="Student left school")
             if student_role and student_role in student.roles:
                 await student.remove_roles(student_role, reason="Student left school")
+
+            mark_student_left(interaction.guild.id, int(row["id"]))
         except discord.Forbidden:
+            try:
+                await _restore_school_roles(student, original_school_roles)
+            except discord.HTTPException:
+                pass
             await interaction.response.send_message(
-                "⚠️ Historique enregistré, mais impossible de retirer les rôles. Vérifie la hiérarchie.",
+                "❌ Impossible de retirer les rôles. Vérifie la hiérarchie; l'historique n'a pas été modifié.",
                 ephemeral=True,
             )
             return
+        except discord.HTTPException as exc:
+            try:
+                await _restore_school_roles(student, original_school_roles)
+            except discord.HTTPException:
+                pass
+            await interaction.response.send_message(f"❌ Discord API : `{exc}`. L'historique n'a pas été modifié.", ephemeral=True)
+            return
+        except Exception as exc:
+            try:
+                await _restore_school_roles(student, original_school_roles)
+            except discord.HTTPException:
+                pass
+            await interaction.response.send_message(
+                f"❌ Opération annulée; les rôles ont été restaurés si possible et l'historique n'a pas été modifié : `{type(exc).__name__}: {exc}`",
+                ephemeral=True,
+            )
+            return
+
         await interaction.response.send_message(
             f"✅ {student.mention} est marqué **sorti de l'établissement**. Son historique est conservé.",
             ephemeral=True,
