@@ -4,26 +4,28 @@ A Discord bot for generating and managing a clean, role-driven school server for
 
 ## ✨ Current Discord architecture
 
-The server is organized by **level**, then streams are grouped visually inside that level. Discord does not support categories inside categories, so each stream uses compact channel names rather than a nested category.
+The server uses a **real Discord category for every stream**. This makes the stream name a true title instead of creating a fake writable/readonly title channel.
 
 ```text
-📘・TRONC COMMUN
-├── 📌🔬・TCS・informations
+📘・TC・🔬 TCS
+├── 📌-TCS・informations
 ├── 🗓️-TCS・emploi-du-temps
 ├── 📝-TCS・examens
 └── 📚-TCS・Math / PC / SVT / ...
 
-1️⃣・1BAC
-├── 📌🧪・1BACSE・informations
-├── 🗓️-1BACSE・emploi-du-temps
-├── 📝-1BACSE・examens
-└── 📚-1BACSE・Math / PC / SVT / ...
+📘・TC・📩 TCL
+├── 📌-TCL・informations
+├── 🗓️-TCL・emploi-du-temps
+├── 📝-TCL・examens
+└── 📚-TCL・...
 
-2️⃣・2BAC
+1️⃣・1BAC・🧪 1BACSE
 └── ...
 ```
 
 Each stream has one shared academic space for all of its classes/groups. No Discord channel or role is created per class.
+
+The builder is idempotent: running `/build` again reconciles only resources whose state actually differs. Discord operations are bounded and logged so a stalled API call is visible instead of looking like a silent freeze.
 
 ## 👥 Roles and permissions
 
@@ -40,13 +42,13 @@ For each stream, the bot creates separate roles for teachers and students:
 - `Élèves - 1BACSE` → student stream role
 - `Matière - 1BACSE - Math` → teacher role scoped to one subject and one stream
 
-This separation is important: a teacher can see all subject channels, but can publish in a subject only when they have that subject role. A teacher may teach several levels/streams/subjects at the same time.
-
-Teachers can publish in organizational channels such as information, exams and schedules, but they cannot manage channels or permissions. Administration manages the school structure and schedules. `/resetserver` is restricted to the Discord server owner.
+The management role is authorized by its **Discord role ID stored in the guild configuration**, not by role name alone. The server owner remains an emergency management path.
 
 ## 📅 Academic years and student history
 
 School data is separated from Discord channels. The bot stores academic years, students and enrollment history in local SQLite at `data/school.db`.
+
+Enrollment operations are idempotent: assigning a student to the same active stream again does not create a duplicate history record. SQLite also enforces one active enrollment per student.
 
 At the start of a new school year:
 
@@ -56,7 +58,7 @@ At the start of a new school year:
 /build
 ```
 
-Previous years remain stored for future archive/history features.
+Previous years remain stored for archive/history features.
 
 ## ⚙️ Setup and maintenance commands
 
@@ -73,12 +75,12 @@ Reconcile the current configuration without formatting the server.
 ```text
 /addstream
 ```
-Add one stream without rebuilding the whole server from scratch.
+Add one stream using the same locked/idempotent build pipeline.
 
 ```text
 /removestream
 ```
-Remove one stream and its resources without touching unrelated streams.
+Remove only one configured stream, its dedicated category, voice room and managed roles.
 
 ```text
 /status
@@ -101,15 +103,17 @@ Teacher/student administration:
 Dangerous maintenance:
 
 ```text
-/resetserver RESET
+/resetserver RESET SCHOOL MANAGER
 ```
-This performs a full server format and is restricted to the server owner.
+This is restricted to the Discord server owner and targets only resources recorded as School Manager managed resources. It does **not** format unrelated server channels/categories.
 
 ## 📚 Curriculum
 
 The academic catalogue lives in `config/curriculum.py`. The project currently includes only the configured streams in that catalogue; unsupported/unused streams such as `TCA` and Arts Appliqués are intentionally omitted for now.
 
-Subject display names are compact for Discord, while full canonical names remain available in the curriculum data.
+## 🧪 CI and tests
+
+GitHub Actions runs one test workflow on pushes and pull requests. Tests cover builder capacity, stream-category naming, permission authorization, configuration consistency, storage durability, enrollment idempotency and duplicate cleanup.
 
 ## 📁 Project structure
 
@@ -126,14 +130,17 @@ school-discord-manager/
 ├── cogs/
 │   ├── __init__.py
 │   ├── setup.py
-│   ├── server_v2.py
+│   ├── server_v3.py
 │   ├── students.py
 │   └── teachers.py
 ├── services/
 │   ├── __init__.py
+│   ├── audit.py
+│   ├── build_guard.py
 │   ├── permissions.py
 │   ├── server_builder.py
 │   └── storage.py
+├── tests/
 └── data/
     └── .gitkeep
 ```
