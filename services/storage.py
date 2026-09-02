@@ -38,13 +38,27 @@ def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
     return {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
 
 
+def _next_legacy_table_name(conn: sqlite3.Connection) -> str:
+    base = "enrollments_legacy_v1"
+    if not _table_exists(conn, base):
+        return base
+    index = 2
+    while _table_exists(conn, f"{base}_{index}"):
+        index += 1
+    return f"{base}_{index}"
+
+
 def _migrate_legacy_enrollments(conn: sqlite3.Connection) -> None:
+    """Keep the old class-based table as a backup instead of deleting data."""
     if not _table_exists(conn, "enrollments"):
         return
     columns = _table_columns(conn, "enrollments")
     if "stream_id" in columns or "class_id" not in columns:
         return
-    conn.execute("ALTER TABLE enrollments RENAME TO enrollments_legacy")
+
+    legacy_name = _next_legacy_table_name(conn)
+    # SQLite cannot parameterize identifiers, but legacy_name is generated locally.
+    conn.execute(f"ALTER TABLE enrollments RENAME TO {legacy_name}")
     conn.execute("""
         CREATE TABLE enrollments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,7 +71,6 @@ def _migrate_legacy_enrollments(conn: sqlite3.Connection) -> None:
             FOREIGN KEY(stream_id) REFERENCES streams(id) ON DELETE CASCADE
         )
     """)
-    conn.execute("DROP TABLE enrollments_legacy")
 
 
 def initialize_database() -> None:
