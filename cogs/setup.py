@@ -10,9 +10,9 @@ from discord import app_commands
 from discord.ext import commands
 
 from config.curriculum import get_level, get_levels, get_stream_abbreviation, get_stream_subjects, get_streams
+from services.build_diagnostics import DiagnosticServerBuilder
 from services.build_guard import get_build_lock
 from services.permissions import management_check
-from services.server_builder import ServerBuilder
 from services.storage import get_active_academic_year, save_guild_config
 
 
@@ -222,7 +222,7 @@ class SummaryView(SetupBaseView):
             async with lock:
                 # Discord is the source of truth for the build step. Only persist the
                 # configuration after the complete builder succeeds.
-                stats = await ServerBuilder(interaction.guild).build(self.config)
+                stats = await DiagnosticServerBuilder(interaction.guild).build(self.config)
                 save_guild_config(guild_id, self.config)
         except discord.Forbidden:
             await interaction.edit_original_response(content="❌ Permission refusée. Vérifie les permissions et la hiérarchie des rôles.")
