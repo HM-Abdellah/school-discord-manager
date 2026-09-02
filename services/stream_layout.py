@@ -1,16 +1,15 @@
 """Stream visual layout helpers for the compact level-category architecture.
 
-This keeps each level inside one category/suite while inserting a read-only
-TextChannel as a visual title for every stream. The compatibility patch is
-loaded by the bot before commands are used, so older server structures are
-reconciled without requiring a reset.
+This compatibility layer adds a read-only title channel for each stream while
+keeping every level inside one category/suite.  The title channel is counted
+as a real Discord resource so capacity checks and placement stay safe.
 """
 
 from __future__ import annotations
 
 import discord
 
-from config.curriculum import get_stream_abbreviation, get_stream_subjects
+from config.curriculum import get_stream_abbreviation
 from services.permissions import (
     ROLE_ADMIN,
     ROLE_PROFESSOR,
@@ -51,7 +50,7 @@ def _planned_channel_names_for_stream(stream: dict) -> set[str]:
 def _stream_in_category(category: discord.CategoryChannel, stream_code: str) -> bool:
     prefixes = _stream_channel_prefixes(stream_code)
     return any(
-        channel.name.endswith(f"・{stream_code}") and channel.name.startswith(HEADER_PREFIX)
+        (channel.name.startswith(HEADER_PREFIX) and channel.name.endswith(f"・{stream_code}"))
         or any(channel.name.startswith(prefix) for prefix in prefixes)
         for channel in category.channels
     )
@@ -87,6 +86,12 @@ def _validate_capacity(self: ServerBuilder, selected: dict) -> None:
 
 
 _original_build_level = ServerBuilder._build_level
+_original_category_for_stream = ServerBuilder._category_for_stream
+
+
+async def _category_for_stream_with_headers(self: ServerBuilder, level_name: str, stream_code: str, stream_channel_count: int):
+    """Reserve one extra slot for the read-only stream title channel."""
+    return await _original_category_for_stream(self, level_name, stream_code, stream_channel_count + 1)
 
 
 async def _build_level_with_headers(self: ServerBuilder, level, roles, voice_category):
@@ -138,8 +143,8 @@ async def _build_level_with_headers(self: ServerBuilder, level, roles, voice_cat
 
         stream_channels = [
             channel for channel in target_category.channels
-            if channel.id != header.id and (
-                any(channel.name.startswith(prefix) for prefix in _stream_channel_prefixes(stream_code))
+            if channel.id != header.id and any(
+                channel.name.startswith(prefix) for prefix in _stream_channel_prefixes(stream_code)
             )
         ]
         if stream_channels:
@@ -152,6 +157,7 @@ ServerBuilder._stream_channel_count = staticmethod(_stream_channel_count)
 ServerBuilder._planned_channel_names_for_stream = staticmethod(_planned_channel_names_for_stream)
 ServerBuilder._stream_in_category = staticmethod(_stream_in_category)
 ServerBuilder._validate_capacity = _validate_capacity
+ServerBuilder._category_for_stream = _category_for_stream_with_headers
 ServerBuilder._build_level = _build_level_with_headers
 
 
