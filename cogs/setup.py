@@ -208,8 +208,10 @@ class SummaryView(SetupBaseView):
             return
         await interaction.response.edit_message(content="🏗️ **Construction en cours...**", view=None)
         try:
-            save_guild_config(interaction.guild.id, self.config)
+            # Discord is the source of truth for the build step. Only persist the
+            # configuration after the complete builder succeeds.
             stats = await ServerBuilder(interaction.guild).build(self.config)
+            save_guild_config(interaction.guild.id, self.config)
         except discord.Forbidden:
             await interaction.edit_original_response(content="❌ Permission refusée. Vérifie les permissions et la hiérarchie des rôles.")
             return
