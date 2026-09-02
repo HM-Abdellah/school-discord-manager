@@ -26,7 +26,7 @@ def test_planned_channel_names_include_only_real_resources():
 
 
 def test_validate_capacity_rejects_stream_above_category_limit():
-    guild = SimpleNamespace(channels=[], categories=[])
+    guild = SimpleNamespace(channels=[], categories=[], text_channels=[])
     builder = ServerBuilder(guild)
     selected = {"levels": [{"name": "1ère Année Bac", "streams": [{"name": "Huge", "abbreviation": "HUGE", "subjects": [str(i) for i in range(48)]}]}]}
     with pytest.raises(ValueError, match="dépasse la limite de 50"):
