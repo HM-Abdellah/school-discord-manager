@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any
 
@@ -24,6 +25,10 @@ STREAM_EMOJIS = {
     "2ème Année Bac Lettres": "✉️", "2ème Année Bac Sciences Humaines": "🧠",
     "2ème Année Bac Sciences Économiques": "💼", "2ème Année Bac Sciences de Gestion Comptable": "📊",
 }
+
+# Discord can throttle role creation more aggressively than ordinary channel writes.
+# A tiny pause keeps setup predictable without adding a custom retry system.
+ROLE_CREATE_DELAY = 1.0
 
 
 def _safe_name(value: str, max_length: int = 80) -> str:
@@ -148,18 +153,32 @@ class ServerBuilder:
 
     async def build(self, selected: dict) -> BuildStats:
         print(f"[BUILD] Start guild={self.guild.id}", flush=True)
+        print("[BUILD] Phase: capacity check", flush=True)
         self._validate_capacity(selected)
+        print("[BUILD] Phase: main roles", flush=True)
         roles = await self._ensure_main_roles()
         selected["managed"] = self.managed
         selected["management_role_id"] = roles[ROLE_ADMIN].id
+        print("[BUILD] Phase: general area", flush=True)
         await self._ensure_general_area(roles)
+        print("[BUILD] Phase: professor area", flush=True)
         await self._ensure_professor_area(roles)
+        print("[BUILD] Phase: voice area", flush=True)
         voice_category = await self._get_or_create_category(CATEGORY_VOICE)
         for level in selected.get("levels", []):
+            print(f"[BUILD] Level start: {level.get('name')}", flush=True)
             await self._build_level(level, roles, voice_category)
             self.stats.levels_processed += 1
         print("[BUILD] Complete", flush=True)
         return self.stats
+
+    async def _create_role(self, name: str, *, permissions: discord.Permissions, colour: discord.Colour, hoist: bool = False, mentionable: bool = False, reason: str) -> discord.Role:
+        print(f"[BUILD] -> create role: {name}", flush=True)
+        role = await self.guild.create_role(name=name, permissions=permissions, colour=colour, hoist=hoist, mentionable=mentionable, reason=reason)
+        print(f"[BUILD] <- create role: {name}", flush=True)
+        self.stats.roles_created += 1
+        await asyncio.sleep(ROLE_CREATE_DELAY)
+        return role
 
     async def _ensure_main_roles(self) -> dict[str, discord.Role]:
         specs = {
@@ -171,14 +190,13 @@ class ServerBuilder:
         roles: dict[str, discord.Role] = {}
         for name, (colour, hoist, mentionable, permission_names) in specs.items():
             role = discord.utils.get(self.guild.roles, name=name)
-            perms = discord.Permissions.none()
-            for permission in permission_names:
-                setattr(perms, permission, True)
             if role is None:
-                role = await self.guild.create_role(name=name, permissions=perms, colour=colour, hoist=hoist, mentionable=mentionable, reason="School manager managed role")
-                self.stats.roles_created += 1
-            elif role.permissions != perms or role.colour != colour or role.hoist != hoist or role.mentionable != mentionable:
-                role = await role.edit(permissions=perms, colour=colour, hoist=hoist, mentionable=mentionable, reason="School manager role reconciliation")
+                perms = discord.Permissions.none()
+                for permission in permission_names:
+                    setattr(perms, permission, True)
+                role = await self._create_role(name, permissions=perms, colour=colour, hoist=hoist, mentionable=mentionable, reason="School manager managed role")
+            else:
+                print(f"[BUILD] reuse role: {name}", flush=True)
             roles[name] = role
             self._remember_role(role)
         return roles
@@ -187,8 +205,9 @@ class ServerBuilder:
         name = _stream_role_name(level_name, stream_name)
         role = discord.utils.get(self.guild.roles, name=name)
         if role is None:
-            role = await self.guild.create_role(name=name, permissions=discord.Permissions.none(), colour=discord.Colour.teal(), mentionable=True, reason="School manager stream role")
-            self.stats.roles_created += 1
+            role = await self._create_role(name, permissions=discord.Permissions.none(), colour=discord.Colour.teal(), mentionable=True, reason="School manager stream role")
+        else:
+            print(f"[BUILD] reuse role: {name}", flush=True)
         self._remember_role(role)
         return role
 
@@ -196,8 +215,9 @@ class ServerBuilder:
         name = _student_stream_role_name(level_name, stream_name)
         role = discord.utils.get(self.guild.roles, name=name)
         if role is None:
-            role = await self.guild.create_role(name=name, permissions=discord.Permissions.none(), colour=discord.Colour.green(), mentionable=False, reason="School manager student stream role")
-            self.stats.roles_created += 1
+            role = await self._create_role(name, permissions=discord.Permissions.none(), colour=discord.Colour.green(), mentionable=False, reason="School manager student stream role")
+        else:
+            print(f"[BUILD] reuse role: {name}", flush=True)
         self._remember_role(role)
         return role
 
