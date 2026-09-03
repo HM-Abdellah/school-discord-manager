@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 import discord
@@ -9,6 +10,9 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 load_dotenv()
+
+discord.utils.setup_logging(level=logging.INFO, root=False)
+logging.getLogger("discord.http").setLevel(logging.INFO)
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID_RAW = os.getenv("DISCORD_GUILD_ID", "").strip()
