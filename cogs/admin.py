@@ -41,6 +41,23 @@ async def stream_autocomplete(interaction: discord.Interaction, current: str) ->
     return [app_commands.Choice(name=stream, value=stream) for stream in get_streams(level) if _contains(stream, current)][:25]
 
 
+async def exam_content_autocomplete(
+    interaction: discord.Interaction, current: str
+) -> list[app_commands.Choice[str]]:
+    """Suggest curriculum subjects while keeping the exam field free-form."""
+    level = str(getattr(interaction.namespace, "level", ""))
+    stream = str(getattr(interaction.namespace, "stream", ""))
+    if level not in get_levels() or stream not in get_streams(level):
+        return []
+
+    choices: list[app_commands.Choice[str]] = []
+    for subject in get_stream_subjects(level, stream):
+        display = get_subject_display_name(subject)
+        if _contains(display, current):
+            choices.append(app_commands.Choice(name=display[:100], value=display))
+    return choices[:25]
+
+
 def _find_stream_channel(guild: discord.Guild, level: str, stream: str, kind: str) -> discord.TextChannel | None:
     """Resolve timetable/exam channel using the persisted managed ID first, then canonical name."""
     code = get_stream_abbreviation(level, stream)
@@ -244,7 +261,7 @@ class AdminCommands(commands.Cog):
 
     @app_commands.command(name="setexam", description="Mettre à jour les examens d'une filière sans créer de nouveau salon.")
     @app_commands.describe(level="Niveau", stream="Filière", content="Dates, horaires et consignes des examens")
-    @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete)
+    @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete, content=exam_content_autocomplete)
     @management_check()
     async def set_exam(self, interaction: discord.Interaction, level: str, stream: str, content: str) -> None:
         guild = interaction.guild
@@ -260,16 +277,12 @@ class AdminCommands(commands.Cog):
             return
         code = get_stream_abbreviation(level, stream)
         await interaction.response.defer(ephemeral=True)
-        embed = discord.Embed(title=f"📝 Examens — {code}", description=content[:4000], colour=discord.Colour.orange())
+        embed = discord.Embed(title=f"📝 Examens — {code}", description=content[:4000], colour=discord.Colour.red())
         embed.timestamp = discord.utils.utcnow()
         try:
             await _upsert_bot_embed(channel, marker=f"SchoolManager:E:{code}", embed=embed)
         except discord.HTTPException as exc:
             await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
             return
-        record_event(guild.id, interaction.user.id, interaction.user.display_name, "set_exam", code, "Exam schedule updated")
+        record_event(guild.id, interaction.user.id, interaction.user.display_name, "setexam", code, "Exam content updated")
         await interaction.followup.send(f"✅ Examens mis à jour dans {channel.mention}.", ephemeral=True)
-
-
-async def setup(bot: commands.Bot) -> None:
-    await bot.add_cog(AdminCommands(bot))
