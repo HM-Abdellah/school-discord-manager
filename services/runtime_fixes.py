@@ -226,21 +226,6 @@ def discover_managed_ids(config: dict[str, Any]) -> tuple[set[int], set[int], se
     return role_ids, channel_ids, category_ids
 
 
-def _subject_suggestions(interaction: discord.Interaction, current: str) -> list[discord.app_commands.Choice[str]]:
-    level = str(getattr(interaction.namespace, "level", ""))
-    stream = str(getattr(interaction.namespace, "stream", ""))
-    if level not in get_levels() or stream not in get_streams(level):
-        return []
-    return [
-        discord.app_commands.Choice(
-            name=get_subject_display_name(subject)[:100],
-            value=get_subject_display_name(subject),
-        )
-        for subject in get_stream_subjects(level, stream)
-        if current.casefold() in get_subject_display_name(subject).casefold()
-    ][:25]
-
-
 def apply_runtime_fixes(bot: Any) -> None:
     global _BOT
     _BOT = bot
@@ -255,12 +240,5 @@ def apply_runtime_fixes(bot: Any) -> None:
     teachers_module._find_managed_channel = find_subject_channel_compat
     admin_module._find_stream_channel = find_stream_channel_compat
     server_module._configured_managed_ids = discover_managed_ids
-
-    setexam_command = bot.tree.get_command("setexam")
-    if setexam_command is not None:
-        for parameter in setexam_command.parameters:
-            if parameter.name == "content":
-                parameter.autocomplete = _subject_suggestions
-                break
 
     print("[FIXES] Legacy resource discovery active.", flush=True)
