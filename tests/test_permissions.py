@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from services.permissions import ROLE_ADMIN, _hierarchy_error, management_check
+from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, _hierarchy_error, get_managed_role, management_check
 
 
 class FakeRole:
@@ -65,11 +65,42 @@ async def test_configured_admin_role_id_is_accepted(monkeypatch):
     assert await predicate(interaction) is True
 
 
-def test_hierarchy_error_identifies_low_bot_role():
+def test_same_name_role_with_different_id_is_not_managed(monkeypatch):
+    clone = role(ROLE_ADMIN, 5, 77)
+    guild = SimpleNamespace(id=123, get_role=lambda rid: clone if rid == 77 else None)
+    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {"management_role_id": 42, "managed": {"roles": {ROLE_ADMIN: 42}}})
+    assert get_managed_role(guild, ROLE_ADMIN) is None
+
+
+def test_exact_managed_role_id_is_resolved(monkeypatch):
+    managed_admin = role(ROLE_ADMIN, 5, 42)
+    guild = SimpleNamespace(id=123, get_role=lambda rid: managed_admin if rid == 42 else None)
+    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {"management_role_id": 42, "managed": {"roles": {ROLE_ADMIN: 42}}})
+    assert get_managed_role(guild, ROLE_ADMIN) is managed_admin
+
+
+def test_same_name_prof_role_is_not_used_without_managed_id(monkeypatch):
+    clone = role(ROLE_PROFESSOR, 5, 77)
+    guild = SimpleNamespace(id=123, get_role=lambda rid: clone if rid == 77 else None)
+    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {"managed": {"roles": {}}})
+    assert get_managed_role(guild, ROLE_PROFESSOR) is None
+
+
+def test_hierarchy_error_uses_recorded_role_ids_only(monkeypatch):
+    everyone = role("@everyone", 0, 1)
+    unrelated_clone = role(ROLE_ADMIN, 20, 77)
+    bot_role = role("Bot", 10, 99)
+    guild = SimpleNamespace(roles=[everyone, unrelated_clone, bot_role], id=123, default_role=everyone, me=SimpleNamespace(top_role=bot_role))
+    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {"managed": {"roles": {}}})
+    assert _hierarchy_error(guild) is None
+
+
+def test_hierarchy_error_identifies_low_bot_role(monkeypatch):
     everyone = role("@everyone", 0, 1)
     school_role = role("Filière - 1BACSE", 12, 55)
     bot_role = role("Bot", 10, 99)
-    guild = SimpleNamespace(roles=[everyone, school_role, bot_role], default_role=everyone, me=SimpleNamespace(top_role=bot_role))
+    guild = SimpleNamespace(roles=[everyone, school_role, bot_role], id=123, default_role=everyone, me=SimpleNamespace(top_role=bot_role))
+    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {"managed": {"roles": {"Filière - 1BACSE": 55}}})
     message = _hierarchy_error(guild)
     assert message is not None
     assert "Filière - 1BACSE" in message
