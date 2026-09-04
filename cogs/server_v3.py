@@ -12,7 +12,7 @@ from discord.ext import commands
 from config.curriculum import GENERAL_CHANNELS, PROFESSOR_CHANNELS, get_levels, get_stream_abbreviation, get_streams, get_stream_subjects
 from services.build_guard import get_build_lock
 from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT, STREAM_ROLE_PREFIX, STUDENT_STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX, management_check, owner_only_check
-from services.server_builder import CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE, ServerBuilder, _safe_name, _stream_category_name, _subject_role_name
+from services.server_builder import CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE, ServerBuilder, _safe_name, _stream_category_name, _subject_channel_name, _subject_role_name
 from services.storage import get_guild_config, list_academic_years, reset_guild_data, save_guild_config
 
 LEVEL_ABBREVIATIONS = {"Tronc Commun": "TC", "1ère Année Bac": "1BAC", "2ème Année Bac": "2BAC"}
@@ -65,7 +65,6 @@ def _configured_managed_ids(config: dict, guild: discord.Guild | None = None) ->
             expected_roles.update({f"{STREAM_ROLE_PREFIX}{code}", f"{STUDENT_STREAM_ROLE_PREFIX}{code}"})
             subjects = stream.get("subjects", []) or get_stream_subjects(level_name, stream_name)
             expected_roles.update(_subject_role_name(level_name, stream_name, subject) for subject in subjects)
-
     for category in guild.categories:
         if category.name in expected_categories:
             category_ids.add(category.id)
@@ -74,7 +73,14 @@ def _configured_managed_ids(config: dict, guild: discord.Guild | None = None) ->
     return role_ids, channel_ids, category_ids
 
 
-def _expected_structure_names(config: dict) -> tuple[set[str], set[str], dict[str, set[str]], set[str]]:
+def _stream_configured(config: dict, level: str, stream: str) -> bool:
+    for configured_level in config.get("levels", []):
+        if configured_level.get("name") == level:
+            return any(item.get("name") == stream for item in configured_level.get("streams", []))
+    return False
+
+
+def _expected_structure_names(config: dict) -> tuple[set[str], set[str], dict[str, set[str]]]:
     expected_roles = {ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT}
     expected_categories = {CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE}
     expected_channels_by_category: dict[str, set[str]] = {
@@ -95,20 +101,22 @@ def _expected_structure_names(config: dict) -> tuple[set[str], set[str], dict[st
             stream_name = stream["name"]
             code = str(stream.get("abbreviation") or get_stream_abbreviation(level_name, stream_name))
             stream_codes.add(code)
-            expected_categories.add(_stream_category_name(level_name, stream_name, code))
+            category_name = _stream_category_name(level_name, stream_name, code)
+            expected_categories.add(category_name)
             expected_roles.update({f"{STREAM_ROLE_PREFIX}{code}", f"{STUDENT_STREAM_ROLE_PREFIX}{code}"})
-            expected_channels_by_category[_stream_category_name(level_name, stream_name, code)] = {
+            subjects = stream.get("subjects", []) or get_stream_subjects(level_name, stream_name)
+            expected_channels_by_category[category_name] = {
                 f"📌-{code}・informations",
                 f"🗓️-{code}・emploi-du-temps",
                 f"📝-{code}・examens",
-                *{f"📚-{code}・{_safe_name(str(subject), 55)}" for subject in (stream.get("subjects", []) or get_stream_subjects(level_name, stream_name))},
+                *{_subject_channel_name(code, subject) for subject in subjects},
             }
     expected_channels_by_category[CATEGORY_VOICE] = {f"🔊-{_safe_name(code, 30)}-à-distance" for code in stream_codes}
-    return expected_roles, expected_categories, expected_channels_by_category, stream_codes
+    return expected_roles, expected_categories, expected_channels_by_category
 
 
 def _managed_resource_state(guild: discord.Guild, config: dict) -> tuple[bool, int, int, int]:
-    expected_roles, expected_categories, expected_channels_by_category, _ = _expected_structure_names(config)
+    expected_roles, expected_categories, expected_channels_by_category = _expected_structure_names(config)
     existing_roles = sum(1 for name in expected_roles if discord.utils.get(guild.roles, name=name, managed=False) is not None)
     existing_categories = sum(1 for name in expected_categories if discord.utils.get(guild.categories, name=name) is not None)
     existing_channels = 0
@@ -117,14 +125,8 @@ def _managed_resource_state(guild: discord.Guild, config: dict) -> tuple[bool, i
         category = discord.utils.get(guild.categories, name=category_name)
         if category is None:
             continue
-        existing_names = {channel.name for channel in category.channels}
-        existing_channels += len(expected_names & existing_names)
-    expected_category_count = len(expected_categories)
-    complete = (
-        existing_roles == len(expected_roles)
-        and existing_categories == expected_category_count
-        and existing_channels == expected_channel_count
-    )
+        existing_channels += len(expected_names & {channel.name for channel in category.channels})
+    complete = existing_roles == len(expected_roles) and existing_categories == len(expected_categories) and existing_channels == expected_channel_count
     return complete, existing_roles, existing_channels, existing_categories
 
 
