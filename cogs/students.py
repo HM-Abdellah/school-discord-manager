@@ -8,7 +8,7 @@ from discord.ext import commands
 
 from config.curriculum import get_levels, get_stream_abbreviation, get_streams
 from services.audit import record_event
-from services.permissions import ROLE_STUDENT, STUDENT_STREAM_ROLE_PREFIX, get_managed_role, management_check
+from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT, STUDENT_STREAM_ROLE_PREFIX, STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX, get_managed_role, management_check
 from services.storage import enroll_student_record, get_active_academic_year, get_guild_config, get_student, get_student_history, mark_student_left
 
 
@@ -17,29 +17,28 @@ def _contains(value: str, current: str) -> bool:
 
 
 async def level_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-    return [
-        app_commands.Choice(name=level, value=level)
-        for level in get_levels()
-        if _contains(level, current)
-    ][:25]
+    return [app_commands.Choice(name=level, value=level) for level in get_levels() if _contains(level, current)][:25]
 
 
 async def stream_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
     level = str(getattr(interaction.namespace, "level", ""))
     if level not in get_levels():
         return []
-    return [
-        app_commands.Choice(name=stream, value=stream)
-        for stream in get_streams(level)
-        if _contains(stream, current)
-    ][:25]
+    return [app_commands.Choice(name=stream, value=stream) for stream in get_streams(level) if _contains(stream, current)][:25]
+
+
+def _is_canonical_school_role(name: str) -> bool:
+    return name in {ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT} or name.startswith((STREAM_ROLE_PREFIX, STUDENT_STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX))
 
 
 def _school_role_ids(guild: discord.Guild) -> set[int]:
+    """Return configured IDs plus exact canonical legacy School Manager role IDs."""
     config = get_guild_config(guild.id) or {}
     managed = config.get("managed", {})
     roles = managed.get("roles", {}) if isinstance(managed, dict) else {}
-    return {value for value in roles.values() if isinstance(value, int)} if isinstance(roles, dict) else set()
+    ids = {value for value in roles.values() if isinstance(value, int) and value > 0} if isinstance(roles, dict) else set()
+    ids.update(role.id for role in guild.roles if not role.managed and _is_canonical_school_role(role.name))
+    return ids
 
 
 def _school_roles(member: discord.Member, guild: discord.Guild) -> list[discord.Role]:
@@ -48,7 +47,7 @@ def _school_roles(member: discord.Member, guild: discord.Guild) -> list[discord.
 
 
 def _student_assignment_roles(member: discord.Member, guild: discord.Guild) -> list[discord.Role]:
-    """Return only managed roles owned by student assignment, never admin/professor roles."""
+    """Return only managed student roles, never admin/professor roles."""
     managed_ids = _school_role_ids(guild)
     roles = []
     for role in member.roles:
@@ -96,15 +95,11 @@ class StudentCommands(commands.Cog):
         if year is None:
             await interaction.response.send_message("❌ Aucune année scolaire active.", ephemeral=True)
             return
-
         original_school_roles = _school_roles(student, guild)
         original_student_roles = _student_assignment_roles(student, guild)
         await interaction.response.defer(ephemeral=True)
         try:
-            cleanup_roles = [
-                role for role in original_student_roles
-                if role != student_role and role != student_stream_role
-            ]
+            cleanup_roles = [role for role in original_student_roles if role != student_role and role != student_stream_role]
             if cleanup_roles:
                 await student.remove_roles(*cleanup_roles, reason="Student role normalization")
             await student.add_roles(student_role, student_stream_role, reason="Student stream assignment")
@@ -130,7 +125,6 @@ class StudentCommands(commands.Cog):
                 pass
             await interaction.followup.send(f"❌ Affectation annulée; les rôles Discord ont été restaurés si possible : `{type(exc).__name__}: {exc}`", ephemeral=True)
             return
-
         code = get_stream_abbreviation(level, stream)
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "assignstudent", student.display_name, f"{level}: {code}")
         await interaction.followup.send(f"✅ {student.mention} est maintenant dans **{code}** ({level}).", ephemeral=True)
@@ -191,7 +185,6 @@ class StudentCommands(commands.Cog):
                 pass
             await interaction.followup.send(f"❌ Opération annulée; les rôles ont été restaurés si possible et l'historique n'a pas été modifié : `{type(exc).__name__}: {exc}`", ephemeral=True)
             return
-
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "leave_school", student.display_name, "Student marked left school")
         await interaction.followup.send(f"✅ {student.mention} est marqué **sorti de l'établissement**. Son historique est conservé.", ephemeral=True)
 
