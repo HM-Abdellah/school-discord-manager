@@ -29,7 +29,19 @@ def initialize_audit_log() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_guild_created ON audit_events(guild_id, created_at DESC)")
 
 
-def record_event(guild_id: int, actor_id: int, actor_name: str, action: str, *, target: str = "", details: str = "") -> None:
+def record_event(
+    guild_id: int,
+    actor_id: int,
+    actor_name: str,
+    action: str,
+    target: str = "",
+    details: str = "",
+) -> None:
+    """Persist an audit event.
+
+    ``target`` and ``details`` accept both positional and keyword arguments for
+    backward compatibility with existing command cogs.
+    """
     initialize_audit_log()
     with _connect() as conn:
         conn.execute(
