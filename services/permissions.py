@@ -24,29 +24,55 @@ def _bot_member(guild: discord.Guild) -> discord.Member | None:
     return guild.me
 
 
+def _managed_role_ids(guild: discord.Guild) -> set[int]:
+    """Return only role IDs explicitly recorded as School Manager resources."""
+    config = get_guild_config(guild.id) or {}
+    managed = config.get("managed", {})
+    roles = managed.get("roles", {}) if isinstance(managed, dict) else {}
+    ids: set[int] = set()
+    if isinstance(roles, dict):
+        for value in roles.values():
+            if isinstance(value, int):
+                ids.add(value)
+    management_role_id = config.get("management_role_id")
+    if isinstance(management_role_id, int):
+        ids.add(management_role_id)
+    return ids
+
+
+def get_managed_role(guild: discord.Guild, name: str) -> discord.Role | None:
+    """Resolve a School Manager role by its recorded ID, never by name alone."""
+    config = get_guild_config(guild.id) or {}
+    managed = config.get("managed", {})
+    roles = managed.get("roles", {}) if isinstance(managed, dict) else {}
+    role_id = roles.get(name) if isinstance(roles, dict) else None
+    if name == ROLE_ADMIN and not isinstance(role_id, int):
+        role_id = config.get("management_role_id")
+    if not isinstance(role_id, int):
+        return None
+    role = guild.get_role(role_id)
+    if role is None or role.name != name or role.managed:
+        return None
+    return role
+
+
 def _hierarchy_error(guild: discord.Guild) -> str | None:
     bot = _bot_member(guild)
     if bot is None:
         return "❌ Impossible de vérifier la hiérarchie du rôle du bot."
     if bot.top_role == guild.default_role:
         return "❌ Le bot n'a pas de rôle exploitable. Place son rôle au-dessus des rôles School Manager."
-    managed_prefixes = (STREAM_ROLE_PREFIX, STUDENT_STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX)
+    managed_ids = _managed_role_ids(guild)
     for role in guild.roles:
-        if role.is_default() or role.managed:
+        if role.id not in managed_ids or role.is_default() or role.managed:
             continue
-        if role.name in {ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT} or role.name.startswith(managed_prefixes):
-            if role >= bot.top_role:
-                return f"❌ Le rôle du bot est trop bas. Place-le au-dessus de `{role.name}`."
+        if role >= bot.top_role:
+            return f"❌ Le rôle du bot est trop bas. Place-le au-dessus de `{role.name}`."
     return None
 
 
 def _management_role(guild: discord.Guild) -> discord.Role | None:
-    config = get_guild_config(guild.id) or {}
-    role_id = config.get("management_role_id")
-    if not isinstance(role_id, int):
-        return None
-    role = guild.get_role(role_id)
-    return role if role is not None and role.name == ROLE_ADMIN and not role.managed else None
+    return get_managed_role(guild, ROLE_ADMIN)
 
 
 def _preflight_message(interaction: discord.Interaction, *, needs_channels: bool = False, needs_roles: bool = False) -> str | None:
