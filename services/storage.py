@@ -107,6 +107,22 @@ def _deduplicate_active_enrollments(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_one_active_enrollment_per_student ON enrollments(student_id) WHERE status='active'")
 
 
+def _deduplicate_active_academic_years(conn: sqlite3.Connection) -> None:
+    """Keep the newest active academic year per guild before adding the uniqueness constraint."""
+    conn.execute("""
+        UPDATE academic_years
+        SET is_active=0
+        WHERE is_active=1
+          AND id NOT IN (
+              SELECT MAX(id)
+              FROM academic_years
+              WHERE is_active=1
+              GROUP BY guild_id
+          )
+    """)
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_one_active_academic_year_per_guild ON academic_years(guild_id) WHERE is_active=1")
+
+
 def initialize_database() -> None:
     with _connect() as conn:
         conn.executescript("""
@@ -116,6 +132,7 @@ def initialize_database() -> None:
         """)
         _migrate_legacy_enrollments(conn)
         _deduplicate_active_enrollments(conn)
+        _deduplicate_active_academic_years(conn)
         conn.executescript("CREATE INDEX IF NOT EXISTS idx_students_guild_discord ON students(guild_id, discord_id); CREATE INDEX IF NOT EXISTS idx_streams_guild_year ON streams(guild_id, academic_year_id); CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id);")
 
 
@@ -150,18 +167,23 @@ def get_guild_config(guild_id: int) -> dict[str, Any] | None:
 
 
 def save_guild_config(guild_id: int, config: dict[str, Any]) -> None:
+    """Persist JSON and its relational representation with rollback on write failure."""
+    initialize_database()
     old_data = load_all()
     new_data = deepcopy(old_data)
     new_data[str(guild_id)] = deepcopy(config)
-    try:
-        sync_configuration_to_database(guild_id, config)
-        save_all(new_data)
-    except Exception:
+    with _connect() as conn:
         try:
-            save_all(old_data)
+            _sync_configuration_to_database_conn(conn, guild_id, config)
+            save_all(new_data)
+            conn.commit()
         except Exception:
-            pass
-        raise
+            conn.rollback()
+            try:
+                save_all(old_data)
+            except Exception:
+                pass
+            raise
 
 
 def delete_guild_config(guild_id: int) -> None:
@@ -219,22 +241,27 @@ def list_academic_years(guild_id: int) -> list[sqlite3.Row]:
         return conn.execute("SELECT * FROM academic_years WHERE guild_id=? ORDER BY name DESC", (guild_id,)).fetchall()
 
 
-def sync_configuration_to_database(guild_id: int, config: dict[str, Any]) -> None:
-    initialize_database()
+def _sync_configuration_to_database_conn(conn: sqlite3.Connection, guild_id: int, config: dict[str, Any]) -> None:
     year_name = config.get("academic_year") or f"{date.today().year}/{date.today().year + 1}"
     today = date.today().isoformat()
+    conn.execute("UPDATE academic_years SET is_active=0 WHERE guild_id=?", (guild_id,))
+    conn.execute("INSERT OR IGNORE INTO academic_years(guild_id,name,is_active,created_at) VALUES(?,?,1,?)", (guild_id, year_name, today))
+    conn.execute("UPDATE academic_years SET is_active=1 WHERE guild_id=? AND name=?", (guild_id, year_name))
+    year_id = int(conn.execute("SELECT id FROM academic_years WHERE guild_id=? AND name=?", (guild_id, year_name)).fetchone()[0])
+    for level in config.get("levels", []):
+        for stream in level.get("streams", []):
+            stream_name = str(stream["name"])
+            code = stream.get("abbreviation") or get_stream_abbreviation(level["name"], stream_name)
+            role_name = f"Filière - {code}"
+            conn.execute("INSERT OR IGNORE INTO streams(guild_id,academic_year_id,level_name,stream_name,role_name) VALUES(?,?,?,?,?)", (guild_id, year_id, level["name"], stream_name, role_name))
+            conn.execute("UPDATE streams SET role_name=? WHERE guild_id=? AND academic_year_id=? AND level_name=? AND stream_name=?", (role_name, guild_id, year_id, level["name"], stream_name))
+
+
+def sync_configuration_to_database(guild_id: int, config: dict[str, Any]) -> None:
+    initialize_database()
     with _connect() as conn:
-        conn.execute("UPDATE academic_years SET is_active=0 WHERE guild_id=?", (guild_id,))
-        conn.execute("INSERT OR IGNORE INTO academic_years(guild_id,name,is_active,created_at) VALUES(?,?,1,?)", (guild_id, year_name, today))
-        conn.execute("UPDATE academic_years SET is_active=1 WHERE guild_id=? AND name=?", (guild_id, year_name))
-        year_id = int(conn.execute("SELECT id FROM academic_years WHERE guild_id=? AND name=?", (guild_id, year_name)).fetchone()[0])
-        for level in config.get("levels", []):
-            for stream in level.get("streams", []):
-                stream_name = str(stream["name"])
-                code = stream.get("abbreviation") or get_stream_abbreviation(level["name"], stream_name)
-                role_name = f"Filière - {code}"
-                conn.execute("INSERT OR IGNORE INTO streams(guild_id,academic_year_id,level_name,stream_name,role_name) VALUES(?,?,?,?,?)", (guild_id, year_id, level["name"], stream_name, role_name))
-                conn.execute("UPDATE streams SET role_name=? WHERE guild_id=? AND academic_year_id=? AND level_name=? AND stream_name=?", (role_name, guild_id, year_id, level["name"], stream_name))
+        _sync_configuration_to_database_conn(conn, guild_id, config)
+        conn.commit()
 
 
 def get_stream(guild_id: int, academic_year_id: int, level_name: str, stream_name: str) -> sqlite3.Row | None:
