@@ -12,12 +12,9 @@ from discord.ext import commands
 from config.curriculum import get_levels, get_stream_abbreviation, get_streams, get_stream_subjects
 from services.build_guard import get_build_lock
 from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT, STREAM_ROLE_PREFIX, STUDENT_STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX, management_check, owner_only_check
-from services.server_builder import CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE, ServerBuilder, _level_category_name, _safe_name, _stream_category_name, _stream_channel_prefixes
+from services.server_builder import CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE, ServerBuilder, _safe_name, _stream_category_name
 from services.storage import create_academic_year, get_guild_config, list_academic_years, reset_guild_data, save_guild_config
 
-MAIN_ROLE_NAMES = {ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT}
-LEGACY_ROLE_NAMES = {"Professeur", "Professeur (F)"}
-LEGACY_SUBJECT_ROLE_PREFIXES = ("Professeur Matière - ", "Professeur Matiere - ")
 LEVEL_ABBREVIATIONS = {"Tronc Commun": "TC", "1ère Année Bac": "1BAC", "2ème Année Bac": "2BAC"}
 
 
@@ -32,39 +29,19 @@ async def stream_autocomplete(interaction: discord.Interaction, current: str) ->
     return [app_commands.Choice(name=stream, value=stream) for stream in get_streams(level) if current.lower() in stream.lower()][:25]
 
 
-def _reset_target_categories(guild: discord.Guild) -> set[int]:
-    """Return category IDs belonging to the current School Manager naming scheme."""
-    names = {CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE}
-    for level in get_levels():
-        for stream in get_streams(level):
-            names.add(_stream_category_name(level, stream, get_stream_abbreviation(level, stream)))
-    return {category.id for category in guild.categories if category.name in names}
+def _configured_managed_ids(config: dict) -> tuple[set[int], set[int], set[int]]:
+    """Return only persisted School Manager Discord IDs; names are never treated as ownership proof."""
+    managed = config.get("managed", {}) if isinstance(config, dict) else {}
+    if not isinstance(managed, dict):
+        return set(), set(), set()
 
+    def ids_for(kind: str) -> set[int]:
+        values = managed.get(kind, {})
+        if not isinstance(values, dict):
+            return set()
+        return {value for value in values.values() if isinstance(value, int) and value > 0}
 
-def _reset_target_roles(guild: discord.Guild) -> set[int]:
-    """Return role IDs belonging to School Manager, including partially-built resources."""
-    names = set(MAIN_ROLE_NAMES) | LEGACY_ROLE_NAMES
-    ids = {role.id for role in guild.roles if role.name in names}
-    for role in guild.roles:
-        if role.name.startswith(STREAM_ROLE_PREFIX) or role.name.startswith(STUDENT_STREAM_ROLE_PREFIX):
-            ids.add(role.id)
-        elif role.name.startswith(SUBJECT_ROLE_PREFIX) or any(role.name.startswith(prefix) for prefix in LEGACY_SUBJECT_ROLE_PREFIXES):
-            ids.add(role.id)
-    return ids
-
-
-def _reset_target_channels(guild: discord.Guild, category_ids: set[int]) -> set[int]:
-    """Return channels inside School Manager categories, plus known global managed channels."""
-    ids: set[int] = set()
-    global_names = set()
-    from config.curriculum import GENERAL_CHANNELS, PROFESSOR_CHANNELS
-    global_names.update(GENERAL_CHANNELS.values())
-    global_names.add(PROFESSOR_CHANNELS["discussion"])
-    global_names.add(PROFESSOR_CHANNELS["meeting"])
-    for channel in guild.channels:
-        if channel.category_id in category_ids or channel.name in global_names:
-            ids.add(channel.id)
-    return ids
+    return ids_for("roles"), ids_for("channels"), ids_for("categories")
 
 
 async def _run_build(guild: discord.Guild, config: dict) -> object:
@@ -181,8 +158,8 @@ class ServerCommands(commands.Cog):
                     voice = discord.utils.get(voice_category.voice_channels, name=f"🔊-{_safe_name(code, 30)}-à-distance")
                     if voice is not None:
                         await voice.delete(reason="School manager stream removal")
-                role_names = {f"{STREAM_ROLE_PREFIX}{code}", f"{STUDENT_STREAM_ROLE_PREFIX}{code}"}
-                role_names.update(role.name for role in guild.roles if role.name.startswith(f"{SUBJECT_ROLE_PREFIX}{code} - "))
+                role_names = {f"Filière - {code}", f"Élèves - {code}"}
+                role_names.update(role.name for role in guild.roles if role.name.startswith(f"Professeur Matière - {code} - "))
                 for role in list(guild.roles):
                     if role.name in role_names and not role.managed and role < guild.me.top_role:
                         await role.delete(reason="School manager stream role cleanup")
@@ -255,13 +232,15 @@ class ServerCommands(commands.Cog):
             return
         await interaction.response.send_message("🧹 **RESET SCHOOL MANAGER EN COURS...**", ephemeral=True)
         config = get_guild_config(guild.id) or {}
-        managed = config.get("managed", {}) if isinstance(config, dict) else {}
-        configured_role_ids = {int(value) for value in managed.get("roles", {}).values() if isinstance(value, int)}
-        configured_channel_ids = {int(value) for value in managed.get("channels", {}).values() if isinstance(value, int)}
-        configured_category_ids = {int(value) for value in managed.get("categories", {}).values() if isinstance(value, int)}
-        category_ids = _reset_target_categories(guild) | configured_category_ids
-        channel_ids = _reset_target_channels(guild, category_ids) | configured_channel_ids
-        role_ids = _reset_target_roles(guild) | configured_role_ids
+        role_ids, channel_ids, category_ids = _configured_managed_ids(config)
+        if not role_ids and not channel_ids and not category_ids:
+            try:
+                reset_guild_data(guild.id)
+            except (OSError, RuntimeError) as exc:
+                await interaction.followup.send(f"❌ Reset des données locales interrompu : `{type(exc).__name__}: {exc}`", ephemeral=True)
+                return
+            await interaction.followup.send("✅ Aucune ressource Discord gérée enregistrée. Rien n'a été supprimé sur Discord; les données School Manager locales ont été réinitialisées.", ephemeral=True)
+            return
         deleted_channels = deleted_categories = deleted_roles = 0
         try:
             async with lock:
