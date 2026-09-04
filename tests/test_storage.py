@@ -1,3 +1,5 @@
+import pytest
+
 from services import storage
 
 
@@ -124,7 +126,7 @@ def test_save_guild_config_rolls_back_database_when_json_write_fails(tmp_path, m
     monkeypatch.setattr(storage, "save_all", fail_save)
     with pytest.raises(OSError, match="simulated JSON failure"):
         storage.save_guild_config(1, new_config)
-    monkeypatch.setattr(storage, "save_all", storage.save_all)
+    monkeypatch.undo()
 
     assert storage.get_guild_config(1) == old_config
     assert storage.get_active_academic_year(1)["name"] == "2025/2026"
@@ -136,7 +138,6 @@ def test_legacy_enrollments_migrate_only_safe_same_guild_rows(tmp_path, monkeypa
     monkeypatch.setattr(storage, "DATABASE_FILE", data_dir / "school.db")
     storage.initialize_database()
     with storage._connect() as conn:
-        conn.execute("CREATE TABLE streams_legacy_seed (id INTEGER PRIMARY KEY, guild_id INTEGER NOT NULL)")
         conn.execute("DROP TABLE enrollments")
         conn.execute("CREATE TABLE enrollments (id INTEGER PRIMARY KEY AUTOINCREMENT, student_id INTEGER NOT NULL, class_id INTEGER NOT NULL, start_date TEXT, end_date TEXT, status TEXT)")
         conn.execute("CREATE TABLE classes (id INTEGER PRIMARY KEY, stream_id INTEGER NOT NULL)")
@@ -154,7 +155,9 @@ def test_legacy_enrollments_migrate_only_safe_same_guild_rows(tmp_path, monkeypa
     storage.initialize_database()
     with storage._connect() as conn:
         rows = conn.execute("SELECT student_id,stream_id,start_date,status FROM enrollments ORDER BY id").fetchall()
-        assert len(rows) == 2
+        assert len(rows) == 3
         assert {(row["student_id"], row["stream_id"]) for row in rows} == {(student1, stream1), (student2, stream2)}
+        assert sum(row["status"] == "active" for row in rows if row["student_id"] == student1) == 1
+        assert sum(row["status"] == "transferred" for row in rows if row["student_id"] == student1) == 1
         assert all(row["status"] in {"active", "transferred", "left_school"} for row in rows)
         assert conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='enrollments_legacy_v1'").fetchone()[0] == 1
