@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 
 import discord
@@ -31,6 +32,8 @@ from services.permissions import (
 )
 from services.server_builder import _subject_channel_name, _subject_role_name, _stream_role_name
 from services.storage import get_guild_config, save_guild_config
+
+MENTION_RE = re.compile(r"<@!?(\d+)>")
 
 
 def _contains(value: str, current: str) -> bool:
