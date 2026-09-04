@@ -37,7 +37,7 @@ def _school_role_ids(guild: discord.Guild) -> set[int]:
     managed = config.get("managed", {})
     roles = managed.get("roles", {}) if isinstance(managed, dict) else {}
     ids = {value for value in roles.values() if isinstance(value, int) and value > 0} if isinstance(roles, dict) else set()
-    ids.update(role.id for role in guild.roles if not role.managed and _is_canonical_school_role(role.name))
+    ids.update(role.id for role in getattr(guild, "roles", []) if not role.managed and _is_canonical_school_role(role.name))
     return ids
 
 
