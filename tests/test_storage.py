@@ -81,7 +81,7 @@ def test_active_academic_year_migration_deduplicates_before_unique_index(tmp_pat
     with storage._connect() as conn:
         conn.execute("DROP INDEX uq_one_active_academic_year_per_guild")
         old_id = conn.execute("INSERT INTO academic_years(guild_id,name,is_active,created_at) VALUES(1,'2025/2026',1,'2025-09-01')").lastrowid
-        new_id = conn.execute("INSERT INTO academic_years(guild_id,name,is_active,created_at) VALUES(1,'2026/2027',1,'2026-09-02')").lastrowid
+        new_id = conn.execute("INSERT INTO academic_years(guild_id,name,is_active,created_at) VALUES(1,'2026/2027',1,'2025-09-02')").lastrowid
     storage.initialize_database()
     with storage._connect() as conn:
         rows = conn.execute("SELECT id,name,is_active FROM academic_years WHERE guild_id=1 ORDER BY id").fetchall()
@@ -119,6 +119,7 @@ def test_save_guild_config_rolls_back_database_when_json_write_fails(tmp_path, m
     old_config = {"academic_year": "2025/2026", "levels": []}
     new_config = {"academic_year": "2026/2027", "levels": []}
     storage.save_guild_config(1, old_config)
+    original_save_all = storage.save_all
 
     def fail_save(_data):
         raise OSError("simulated JSON failure")
@@ -126,7 +127,7 @@ def test_save_guild_config_rolls_back_database_when_json_write_fails(tmp_path, m
     monkeypatch.setattr(storage, "save_all", fail_save)
     with pytest.raises(OSError, match="simulated JSON failure"):
         storage.save_guild_config(1, new_config)
-    monkeypatch.undo()
+    monkeypatch.setattr(storage, "save_all", original_save_all)
 
     assert storage.get_guild_config(1) == old_config
     assert storage.get_active_academic_year(1)["name"] == "2025/2026"
