@@ -11,30 +11,9 @@ from discord.ext import commands
 
 from config.curriculum import GENERAL_CHANNELS, PROFESSOR_CHANNELS, get_levels, get_stream_abbreviation, get_streams, get_stream_subjects
 from services.build_guard import get_build_lock
-from services.permissions import (
-    ROLE_ADMIN,
-    ROLE_PROFESSOR,
-    ROLE_PROFESSOR_FEMALE,
-    ROLE_STUDENT,
-    STREAM_ROLE_PREFIX,
-    STUDENT_STREAM_ROLE_PREFIX,
-    SUBJECT_ROLE_PREFIX,
-    management_check,
-    owner_only_check,
-)
-from services.server_builder import (
-    CATEGORY_GENERAL,
-    CATEGORY_PROFESSORS,
-    CATEGORY_VOICE,
-    ServerBuilder,
-    _safe_name,
-    _stream_category_name,
-    _subject_channel_name,
-    _subject_role_name,
-    _stream_role_name,
-    _student_stream_role_name,
-)
-from services.storage import create_academic_year, get_guild_config, list_academic_years, reset_guild_data, save_guild_config
+from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT, STREAM_ROLE_PREFIX, STUDENT_STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX, management_check, owner_only_check
+from services.server_builder import CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE, ServerBuilder, _safe_name, _stream_category_name, _subject_role_name
+from services.storage import get_guild_config, list_academic_years, reset_guild_data, save_guild_config
 
 LEVEL_ABBREVIATIONS = {"Tronc Commun": "TC", "1ère Année Bac": "1BAC", "2ème Année Bac": "2BAC"}
 
@@ -55,10 +34,9 @@ async def stream_autocomplete(interaction: discord.Interaction, current: str) ->
 
 
 def _configured_managed_ids(config: dict, guild: discord.Guild | None = None) -> tuple[set[int], set[int], set[int]]:
-    """Return registered IDs and exact canonical legacy IDs when a guild is supplied."""
+    """Return registered IDs and exact canonical legacy IDs for a supplied guild."""
     managed = config.get("managed", {}) if isinstance(config, dict) else {}
-    if not isinstance(managed, dict):
-        managed = {}
+    managed = managed if isinstance(managed, dict) else {}
 
     def ids_for(kind: str) -> set[int]:
         values = managed.get(kind, {})
@@ -76,12 +54,12 @@ def _configured_managed_ids(config: dict, guild: discord.Guild | None = None) ->
         if not isinstance(level, dict):
             continue
         level_name = level.get("name")
+        if not isinstance(level_name, str):
+            continue
         for stream in level.get("streams", []) or []:
-            if not isinstance(stream, dict):
+            if not isinstance(stream, dict) or not isinstance(stream.get("name"), str):
                 continue
-            stream_name = stream.get("name")
-            if not isinstance(level_name, str) or not isinstance(stream_name, str):
-                continue
+            stream_name = stream["name"]
             code = str(stream.get("abbreviation") or get_stream_abbreviation(level_name, stream_name))
             expected_categories.add(_stream_category_name(level_name, stream_name, code))
             expected_roles.update({f"{STREAM_ROLE_PREFIX}{code}", f"{STUDENT_STREAM_ROLE_PREFIX}{code}"})
@@ -92,27 +70,61 @@ def _configured_managed_ids(config: dict, guild: discord.Guild | None = None) ->
         if category.name in expected_categories:
             category_ids.add(category.id)
             channel_ids.update(channel.id for channel in category.channels)
-
-    fixed_channels = set(GENERAL_CHANNELS.values()) | set(PROFESSOR_CHANNELS.values())
-    channel_ids.update(channel.id for channel in guild.channels if getattr(channel, "name", None) in fixed_channels)
     role_ids.update(role.id for role in guild.roles if not role.managed and role.name in expected_roles)
     return role_ids, channel_ids, category_ids
 
 
-def _stream_configured(config: dict, level: str, stream: str) -> bool:
-    for configured_level in config.get("levels", []):
-        if configured_level.get("name") != level:
+def _expected_structure_names(config: dict) -> tuple[set[str], set[str], dict[str, set[str]], set[str]]:
+    expected_roles = {ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT}
+    expected_categories = {CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE}
+    expected_channels_by_category: dict[str, set[str]] = {
+        CATEGORY_GENERAL: set(GENERAL_CHANNELS.values()),
+        CATEGORY_PROFESSORS: {PROFESSOR_CHANNELS["discussion"], PROFESSOR_CHANNELS["meeting"]},
+        CATEGORY_VOICE: set(),
+    }
+    stream_codes: set[str] = set()
+    for level in config.get("levels", []):
+        if not isinstance(level, dict):
             continue
-        return any(item.get("name") == stream for item in configured_level.get("streams", []))
-    return False
+        level_name = level.get("name")
+        if not isinstance(level_name, str):
+            continue
+        for stream in level.get("streams", []) or []:
+            if not isinstance(stream, dict) or not isinstance(stream.get("name"), str):
+                continue
+            stream_name = stream["name"]
+            code = str(stream.get("abbreviation") or get_stream_abbreviation(level_name, stream_name))
+            stream_codes.add(code)
+            expected_categories.add(_stream_category_name(level_name, stream_name, code))
+            expected_roles.update({f"{STREAM_ROLE_PREFIX}{code}", f"{STUDENT_STREAM_ROLE_PREFIX}{code}"})
+            expected_channels_by_category[_stream_category_name(level_name, stream_name, code)] = {
+                f"📌-{code}・informations",
+                f"🗓️-{code}・emploi-du-temps",
+                f"📝-{code}・examens",
+                *{f"📚-{code}・{_safe_name(str(subject), 55)}" for subject in (stream.get("subjects", []) or get_stream_subjects(level_name, stream_name))},
+            }
+    expected_channels_by_category[CATEGORY_VOICE] = {f"🔊-{_safe_name(code, 30)}-à-distance" for code in stream_codes}
+    return expected_roles, expected_categories, expected_channels_by_category, stream_codes
 
 
 def _managed_resource_state(guild: discord.Guild, config: dict) -> tuple[bool, int, int, int]:
-    role_ids, channel_ids, category_ids = _configured_managed_ids(config, guild)
-    existing_roles = sum(1 for role_id in role_ids if guild.get_role(role_id) is not None)
-    existing_channels = sum(1 for channel_id in channel_ids if guild.get_channel(channel_id) is not None)
-    existing_categories = sum(1 for category_id in category_ids if isinstance(guild.get_channel(category_id), discord.CategoryChannel))
-    complete = bool(role_ids or channel_ids or category_ids) and existing_roles == len(role_ids) and existing_channels == len(channel_ids) and existing_categories == len(category_ids)
+    expected_roles, expected_categories, expected_channels_by_category, _ = _expected_structure_names(config)
+    existing_roles = sum(1 for name in expected_roles if discord.utils.get(guild.roles, name=name, managed=False) is not None)
+    existing_categories = sum(1 for name in expected_categories if discord.utils.get(guild.categories, name=name) is not None)
+    existing_channels = 0
+    expected_channel_count = sum(len(names) for names in expected_channels_by_category.values())
+    for category_name, expected_names in expected_channels_by_category.items():
+        category = discord.utils.get(guild.categories, name=category_name)
+        if category is None:
+            continue
+        existing_names = {channel.name for channel in category.channels}
+        existing_channels += len(expected_names & existing_names)
+    expected_category_count = len(expected_categories)
+    complete = (
+        existing_roles == len(expected_roles)
+        and existing_categories == expected_category_count
+        and existing_channels == expected_channel_count
+    )
     return complete, existing_roles, existing_channels, existing_categories
 
 
