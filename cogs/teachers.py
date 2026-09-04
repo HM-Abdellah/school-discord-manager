@@ -11,8 +11,9 @@ from discord.ext import commands
 
 from config.curriculum import GENERAL_CHANNELS, get_levels, get_stream_abbreviation, get_streams, get_stream_subjects
 from services.audit import record_event
-from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, SUBJECT_ROLE_PREFIX, management_check, professor_subject_member_overwrite, professor_subject_view_overwrite, administrator_overwrite, hidden_overwrite, student_overwrite
+from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, SUBJECT_ROLE_PREFIX, get_managed_role, management_check, professor_subject_member_overwrite, professor_subject_view_overwrite, administrator_overwrite, hidden_overwrite, student_overwrite
 from services.server_builder import _subject_channel_name, _subject_role_name, _stream_role_name
+from services.storage import get_guild_config, save_guild_config
 
 MENTION_RE = re.compile(r"<@!?(\d+)>")
 
@@ -31,13 +32,13 @@ class TeacherCommands(commands.Cog):
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
         role_name = ROLE_PROFESSOR_FEMALE if gender.value == "female" else ROLE_PROFESSOR
-        role = discord.utils.get(guild.roles, name=role_name)
+        role = get_managed_role(guild, role_name)
         if role is None:
-            await interaction.response.send_message(f"❌ Le rôle `{role_name}` n'existe pas encore. Lance `/setup` puis `/build`.", ephemeral=True)
+            await interaction.response.send_message(f"❌ Le rôle géré `{role_name}` n'existe pas encore. Lance `/setup` puis `/build`.", ephemeral=True)
             return
         try:
             other_name = ROLE_PROFESSOR if gender.value == "female" else ROLE_PROFESSOR_FEMALE
-            other_role = discord.utils.get(guild.roles, name=other_name)
+            other_role = get_managed_role(guild, other_name)
             if other_role is not None and other_role in teacher.roles:
                 await teacher.remove_roles(other_role, reason="Teacher gender role normalization")
             await teacher.add_roles(role, reason="School manager teacher assignment")
@@ -76,11 +77,11 @@ class TeacherCommands(commands.Cog):
         code = get_stream_abbreviation(level, stream)
         stream_role_name = _stream_role_name(level, stream)
         subject_role_name = _subject_role_name(level, stream, subject)
-        stream_role = discord.utils.get(guild.roles, name=stream_role_name)
+        stream_role = get_managed_role(guild, stream_role_name)
         if stream_role is None:
-            await interaction.response.send_message("❌ Le rôle de cette filière n'existe pas encore. Lance `/build`.", ephemeral=True)
+            await interaction.response.send_message("❌ Le rôle géré de cette filière n'existe pas encore. Lance `/build`.", ephemeral=True)
             return
-        subject_role = discord.utils.get(guild.roles, name=subject_role_name)
+        subject_role = get_managed_role(guild, subject_role_name)
         ids: list[int] = []
         for match in MENTION_RE.finditer(teachers):
             member_id = int(match.group(1))
@@ -88,10 +89,17 @@ class TeacherCommands(commands.Cog):
                 ids.append(member_id)
         members = [guild.get_member(member_id) for member_id in ids]
         members = [member for member in members if member is not None]
-        prof_role_ids = {role.id for role in guild.roles if role.name in {ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE}}
+        prof_role_ids = {
+            role.id
+            for role in (
+                get_managed_role(guild, ROLE_PROFESSOR),
+                get_managed_role(guild, ROLE_PROFESSOR_FEMALE),
+            )
+            if role is not None
+        }
         members = [member for member in members if any(role.id in prof_role_ids for role in member.roles)]
         if not members:
-            await interaction.response.send_message("❌ Aucun membre valide avec le rôle `Prof` ou `Prof (F)` n'a été détecté.", ephemeral=True)
+            await interaction.response.send_message("❌ Aucun membre valide avec le rôle géré `Prof` ou `Prof (F)` n'a été détecté.", ephemeral=True)
             return
         try:
             if subject_role is None:
@@ -102,14 +110,18 @@ class TeacherCommands(commands.Cog):
                     mentionable=False,
                     reason="School manager subject role created on demand",
                 )
+                config = get_guild_config(guild.id) or {}
+                managed = config.setdefault("managed", {})
+                managed_roles = managed.setdefault("roles", {})
+                managed_roles[subject_role_name] = subject_role.id
             overwrites = {
                 guild.default_role: hidden_overwrite(),
                 stream_role: professor_subject_view_overwrite(),
             }
-            admin_role = discord.utils.get(guild.roles, name="Administration")
-            prof_role = discord.utils.get(guild.roles, name=ROLE_PROFESSOR)
-            prof_f_role = discord.utils.get(guild.roles, name=ROLE_PROFESSOR_FEMALE)
-            student_stream_role = discord.utils.get(guild.roles, name=f"Élèves - {code}")
+            admin_role = get_managed_role(guild, "Administration")
+            prof_role = get_managed_role(guild, ROLE_PROFESSOR)
+            prof_f_role = get_managed_role(guild, ROLE_PROFESSOR_FEMALE)
+            student_stream_role = get_managed_role(guild, f"Élèves - {code}")
             if admin_role is not None:
                 overwrites[admin_role] = administrator_overwrite()
             if prof_role is not None:
@@ -122,6 +134,7 @@ class TeacherCommands(commands.Cog):
             await channel.edit(overwrites=overwrites, reason="School manager subject teacher access")
             for member in members:
                 await member.add_roles(stream_role, subject_role, reason=f"School manager teacher assignment: {code} / {subject}")
+            save_guild_config(guild.id, config)
         except discord.Forbidden:
             await interaction.response.send_message("❌ Permission refusée. Vérifie Manage Roles, Manage Channels et la hiérarchie.", ephemeral=True)
             return
