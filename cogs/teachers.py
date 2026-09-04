@@ -22,6 +22,8 @@ from services.permissions import (
     ROLE_ADMIN,
     ROLE_PROFESSOR,
     ROLE_PROFESSOR_FEMALE,
+    ROLE_STUDENT,
+    STUDENT_STREAM_ROLE_PREFIX,
     get_managed_role,
     management_check,
     professor_subject_member_overwrite,
@@ -64,17 +66,32 @@ async def subject_autocomplete(interaction: discord.Interaction, current: str) -
     return choices[:25]
 
 
-def _find_managed_channel(guild: discord.Guild, expected_name: str) -> discord.TextChannel | None:
+async def _find_managed_channel(guild: discord.Guild, expected_name: str) -> discord.TextChannel | None:
+    """Resolve the channel from fresh Discord state, not only the local cache."""
     config = get_guild_config(guild.id) or {}
     managed = config.get("managed", {})
     channels = managed.get("channels", {}) if isinstance(managed, dict) else {}
     channel_id = channels.get(expected_name) if isinstance(channels, dict) else None
     if isinstance(channel_id, int):
-        channel = guild.get_channel(channel_id)
-        if isinstance(channel, discord.TextChannel):
+        try:
+            channel = await guild.fetch_channel(channel_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            channel = None
+        if isinstance(channel, discord.TextChannel) and channel.name == expected_name:
             return channel
-    channel = discord.utils.get(guild.text_channels, name=expected_name)
-    return channel if isinstance(channel, discord.TextChannel) else None
+
+    try:
+        channels_now = await guild.fetch_channels()
+    except (discord.Forbidden, discord.HTTPException):
+        channels_now = guild.text_channels
+    for channel in channels_now:
+        if isinstance(channel, discord.TextChannel) and channel.name == expected_name:
+            return channel
+    return None
+
+
+def _member_has_school_student_role(member: discord.Member) -> bool:
+    return any(role.name == ROLE_STUDENT or role.name.startswith(STUDENT_STREAM_ROLE_PREFIX) for role in member.roles if not role.managed)
 
 
 class TeacherCommands(commands.Cog):
@@ -89,6 +106,9 @@ class TeacherCommands(commands.Cog):
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
+        if _member_has_school_student_role(teacher):
+            await interaction.response.send_message("❌ Cet utilisateur possède encore un rôle **Élève**. Retire d'abord son rôle élève, puis relance l'affectation professeur.", ephemeral=True)
             return
         role_name = ROLE_PROFESSOR_FEMALE if gender.value == "female" else ROLE_PROFESSOR
         role = get_managed_role(guild, role_name)
@@ -138,7 +158,7 @@ class TeacherCommands(commands.Cog):
             return
         code = get_stream_abbreviation(level, stream)
         channel_name = _subject_channel_name(code, curriculum_subject)
-        channel = _find_managed_channel(guild, channel_name)
+        channel = await _find_managed_channel(guild, channel_name)
         if channel is None:
             await interaction.response.send_message(f"❌ Le salon de matière **{channel_name}** n'existe pas. Vérifie `/status` avant tout nouveau build.", ephemeral=True)
             return
@@ -155,10 +175,10 @@ class TeacherCommands(commands.Cog):
                 seen_ids.add(member.id)
                 selected_members.append(member)
         prof_role_ids = {role.id for role in (get_managed_role(guild, ROLE_PROFESSOR), get_managed_role(guild, ROLE_PROFESSOR_FEMALE)) if role is not None}
-        invalid = [member for member in selected_members if not any(role.id in prof_role_ids for role in member.roles)]
+        invalid = [member for member in selected_members if _member_has_school_student_role(member) or not any(role.id in prof_role_ids for role in member.roles)]
         if invalid:
             names = ", ".join(member.display_name for member in invalid)
-            await interaction.response.send_message(f"❌ Ces membres n'ont pas le rôle géré `Prof` ou `Prof (F)` : {names}", ephemeral=True)
+            await interaction.response.send_message(f"❌ Ces membres ne sont pas des professeurs valides (ou possèdent encore un rôle Élève) : {names}", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
         config = get_guild_config(guild.id) or {}
