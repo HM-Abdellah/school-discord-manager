@@ -57,7 +57,7 @@ def test_validate_capacity_rejects_stream_above_category_limit():
 @pytest.mark.asyncio
 async def test_existing_main_roles_are_reused_without_create_calls():
     role_names = ("Administration", "Prof", "Prof (F)", "Élève")
-    roles = [MagicMock(name=name, id=index + 1) for index, name in enumerate(role_names)]
+    roles = [SimpleNamespace(name=name, id=index + 1) for index, name in enumerate(role_names)]
     guild = SimpleNamespace(roles=roles)
     guild.create_role = AsyncMock()
 
