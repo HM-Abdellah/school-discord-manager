@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from services import storage
-from services.server_builder import CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE, PROFESSOR_CHANNELS, ServerBuilder
+from services.server_builder import CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE, ServerBuilder
 
 
 def test_reset_guild_data_rolls_back_sqlite_when_json_replace_fails(tmp_path, monkeypatch):
@@ -38,8 +38,7 @@ def test_builder_capacity_counts_only_resources_that_will_actually_be_created():
     category_general = SimpleNamespace(name=CATEGORY_GENERAL, text_channels=[], voice_channels=[])
     category_professors = SimpleNamespace(name=CATEGORY_PROFESSORS, text_channels=[], voice_channels=[])
     category_voice = SimpleNamespace(name=CATEGORY_VOICE, text_channels=[], voice_channels=[])
-    existing_channels = list(category_general.text_channels) + list(category_professors.text_channels)
-    guild = SimpleNamespace(channels=existing_channels, categories=[category_general, category_professors, category_voice])
+    guild = SimpleNamespace(channels=[], categories=[category_general, category_professors, category_voice])
     builder = ServerBuilder(guild)
     selected = {
         "levels": [
@@ -59,7 +58,7 @@ def test_builder_capacity_counts_only_resources_that_will_actually_be_created():
 
 
 def test_builder_capacity_rejects_exact_projected_501_channels():
-    existing = [SimpleNamespace(name=f"channel-{index}") for index in range(499)]
+    existing = [SimpleNamespace(name=f"channel-{index}") for index in range(494)]
     guild = SimpleNamespace(channels=existing, categories=[])
     builder = ServerBuilder(guild)
     selected = {"levels": []}
