@@ -41,16 +41,12 @@ async def stream_autocomplete(interaction: discord.Interaction, current: str) ->
     return [app_commands.Choice(name=stream, value=stream) for stream in get_streams(level) if _contains(stream, current)][:25]
 
 
-async def exam_content_autocomplete(
-    interaction: discord.Interaction, current: str
-) -> list[app_commands.Choice[str]]:
-    """Suggest curriculum subjects while keeping the exam field free-form."""
+async def exam_content_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
     level = str(getattr(interaction.namespace, "level", ""))
     stream = str(getattr(interaction.namespace, "stream", ""))
     if level not in get_levels() or stream not in get_streams(level):
         return []
-
-    choices: list[app_commands.Choice[str]] = []
+    choices = []
     for subject in get_stream_subjects(level, stream):
         display = get_subject_display_name(subject)
         if _contains(display, current):
@@ -59,12 +55,8 @@ async def exam_content_autocomplete(
 
 
 def _find_stream_channel(guild: discord.Guild, level: str, stream: str, kind: str) -> discord.TextChannel | None:
-    """Resolve timetable/exam channel using the persisted managed ID first, then canonical name."""
     code = get_stream_abbreviation(level, stream)
-    expected_name = {
-        "timetable": f"🗓️-{code}・emploi-du-temps",
-        "exams": f"📝-{code}・examens",
-    }[kind]
+    expected_name = {"timetable": f"🗓️-{code}・emploi-du-temps", "exams": f"📝-{code}・examens"}[kind]
     config = get_guild_config(guild.id) or {}
     managed = config.get("managed", {})
     channels = managed.get("channels", {}) if isinstance(managed, dict) else {}
@@ -77,10 +69,7 @@ def _find_stream_channel(guild: discord.Guild, level: str, stream: str, kind: st
     if isinstance(exact, discord.TextChannel):
         return exact
     prefix = expected_name.split("・", 1)[0] + "・"
-    return discord.utils.find(
-        lambda channel: isinstance(channel, discord.TextChannel) and channel.name.startswith(prefix),
-        guild.text_channels,
-    )
+    return discord.utils.find(lambda channel: isinstance(channel, discord.TextChannel) and channel.name.startswith(prefix), guild.text_channels)
 
 
 def _find_managed_role_by_name(guild: discord.Guild, role_name: str) -> discord.Role | None:
@@ -91,16 +80,9 @@ async def _ensure_subject_role(guild: discord.Guild, role_name: str, config: dic
     role = _find_managed_role_by_name(guild, role_name)
     if role is not None:
         return role
-    role = await guild.create_role(
-        name=role_name,
-        permissions=discord.Permissions.none(),
-        colour=discord.Colour.dark_blue(),
-        mentionable=False,
-        reason="School manager subject role created on demand",
-    )
+    role = await guild.create_role(name=role_name, permissions=discord.Permissions.none(), colour=discord.Colour.dark_blue(), mentionable=False, reason="School Manager subject role created on demand")
     managed = config.setdefault("managed", {})
-    managed_roles = managed.setdefault("roles", {})
-    managed_roles[role_name] = role.id
+    managed.setdefault("roles", {})[role_name] = role.id
     return role
 
 
@@ -154,14 +136,14 @@ class AdminCommands(commands.Cog):
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
-        checks: list[str] = []
-        bot = guild.me
-        if bot is None:
+        checks = []
+        bot_member = guild.me
+        if bot_member is None:
             checks.append("❌ Bot introuvable dans le serveur.")
         else:
             checks.append("✅ Bot connecté")
-            checks.append("✅ Manage Channels" if bot.guild_permissions.manage_channels else "❌ Manage Channels manquant")
-            checks.append("✅ Manage Roles" if bot.guild_permissions.manage_roles else "❌ Manage Roles manquant")
+            checks.append("✅ Manage Channels" if bot_member.guild_permissions.manage_channels else "❌ Manage Channels manquant")
+            checks.append("✅ Manage Roles" if bot_member.guild_permissions.manage_roles else "❌ Manage Roles manquant")
             hierarchy = _preflight_message(interaction, needs_channels=False, needs_roles=True)
             checks.append("✅ Role hierarchy" if hierarchy is None else hierarchy)
         total = len(guild.channels)
@@ -188,29 +170,25 @@ class AdminCommands(commands.Cog):
             await interaction.response.send_message("❌ Niveau ou filière invalide.", ephemeral=True)
             return
         requested = [item.strip().casefold() for item in subjects.split(",") if item.strip()]
-        curriculum_subjects = get_stream_subjects(level, stream)
-        chosen = [subject for subject in curriculum_subjects if get_subject_display_name(subject).casefold() in requested or subject.casefold() in requested]
+        chosen = [subject for subject in get_stream_subjects(level, stream) if get_subject_display_name(subject).casefold() in requested or subject.casefold() in requested]
         if not chosen:
             await interaction.response.send_message("❌ Aucune matière reconnue. Sépare les noms par des virgules.", ephemeral=True)
             return
         stream_code = get_stream_abbreviation(level, stream)
         stream_role = _find_managed_role_by_name(guild, f"Filière - {stream_code}")
         if stream_role is None:
-            await interaction.response.send_message("❌ Cette filière n'est pas encore construite. Aucun `/build` supplémentaire n'est nécessaire si elle est déjà configurée; vérifie `/status`.", ephemeral=True)
+            await interaction.response.send_message("❌ Cette filière n'est pas encore construite. Vérifie `/status`.", ephemeral=True)
             return
         desired_base = ROLE_PROFESSOR_FEMALE if gender.value == "female" else ROLE_PROFESSOR
         desired_role = _find_managed_role_by_name(guild, desired_base)
         if desired_role is None:
-            await interaction.response.send_message(f"❌ Le rôle géré `{desired_base}` est introuvable. Reconstruis la configuration uniquement si ce rôle n'existe vraiment plus.", ephemeral=True)
+            await interaction.response.send_message(f"❌ Le rôle géré `{desired_base}` est introuvable.", ephemeral=True)
             return
         other_role = _find_managed_role_by_name(guild, ROLE_PROFESSOR if gender.value == "female" else ROLE_PROFESSOR_FEMALE)
-
         await interaction.response.defer(ephemeral=True)
         config = get_guild_config(guild.id) or {}
-        subject_roles: list[discord.Role] = []
         try:
-            for subject in chosen:
-                subject_roles.append(await _ensure_subject_role(guild, _subject_role_name(level, stream, subject), config))
+            subject_roles = [await _ensure_subject_role(guild, _subject_role_name(level, stream, subject), config) for subject in chosen]
             if other_role is not None and other_role in teacher.roles:
                 await teacher.remove_roles(other_role, reason="Teacher role normalization")
             if desired_role not in teacher.roles:
@@ -226,7 +204,6 @@ class AdminCommands(commands.Cog):
         except OSError as exc:
             await interaction.followup.send(f"❌ Stockage local : `{exc}`", ephemeral=True)
             return
-
         subject_names = ", ".join(get_subject_display_name(subject) for subject in chosen)
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "assignteacherfull", teacher.display_name, f"{stream_code}: {subject_names}")
         await interaction.followup.send(f"✅ {teacher.mention} est affecté à **{stream_code}** pour: {subject_names}.", ephemeral=True)
@@ -245,7 +222,7 @@ class AdminCommands(commands.Cog):
             return
         channel = _find_stream_channel(guild, level, stream, "timetable")
         if channel is None:
-            await interaction.response.send_message("❌ Channel d'emploi du temps introuvable pour cette filière. Vérifie `/status`; aucun nouveau `/build` ne doit être lancé aveuglément.", ephemeral=True)
+            await interaction.response.send_message("❌ Channel d'emploi du temps introuvable pour cette filière. Vérifie `/status`.", ephemeral=True)
             return
         code = get_stream_abbreviation(level, stream)
         await interaction.response.defer(ephemeral=True)
@@ -273,7 +250,7 @@ class AdminCommands(commands.Cog):
             return
         channel = _find_stream_channel(guild, level, stream, "exams")
         if channel is None:
-            await interaction.response.send_message("❌ Channel d'examens introuvable pour cette filière. Vérifie `/status`; aucun nouveau `/build` ne doit être lancé aveuglément.", ephemeral=True)
+            await interaction.response.send_message("❌ Channel d'examens introuvable pour cette filière. Vérifie `/status`.", ephemeral=True)
             return
         code = get_stream_abbreviation(level, stream)
         await interaction.response.defer(ephemeral=True)
@@ -286,3 +263,7 @@ class AdminCommands(commands.Cog):
             return
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "setexam", code, "Exam content updated")
         await interaction.followup.send(f"✅ Examens mis à jour dans {channel.mention}.", ephemeral=True)
+
+
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(AdminCommands(bot))
