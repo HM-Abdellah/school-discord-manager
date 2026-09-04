@@ -41,20 +41,21 @@ async def stream_autocomplete(interaction: discord.Interaction, current: str) ->
     return [app_commands.Choice(name=stream, value=stream) for stream in get_streams(level) if _contains(stream, current)][:25]
 
 
-async def exam_content_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+async def subject_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
     level = str(getattr(interaction.namespace, "level", ""))
     stream = str(getattr(interaction.namespace, "stream", ""))
     if level not in get_levels() or stream not in get_streams(level):
         return []
-    choices = []
+    choices: list[app_commands.Choice[str]] = []
     for subject in get_stream_subjects(level, stream):
         display = get_subject_display_name(subject)
-        if _contains(display, current):
-            choices.append(app_commands.Choice(name=display[:100], value=display))
+        if _contains(display, current) or _contains(subject, current):
+            choices.append(app_commands.Choice(name=display[:100], value=subject))
     return choices[:25]
 
 
-def _find_stream_channel(guild: discord.Guild, level: str, stream: str, kind: str) -> discord.TextChannel | None:
+async def _find_stream_channel(guild: discord.Guild, level: str, stream: str, kind: str) -> discord.TextChannel | None:
+    """Resolve from the managed ID first, then from fresh Discord channel state."""
     code = get_stream_abbreviation(level, stream)
     expected_name = {"timetable": f"🗓️-{code}・emploi-du-temps", "exams": f"📝-{code}・examens"}[kind]
     config = get_guild_config(guild.id) or {}
@@ -62,14 +63,20 @@ def _find_stream_channel(guild: discord.Guild, level: str, stream: str, kind: st
     channels = managed.get("channels", {}) if isinstance(managed, dict) else {}
     channel_id = channels.get(expected_name) if isinstance(channels, dict) else None
     if isinstance(channel_id, int):
-        channel = guild.get_channel(channel_id)
-        if isinstance(channel, discord.TextChannel):
+        try:
+            channel = await guild.fetch_channel(channel_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            channel = None
+        if isinstance(channel, discord.TextChannel) and channel.name == expected_name:
             return channel
-    exact = discord.utils.get(guild.text_channels, name=expected_name)
-    if isinstance(exact, discord.TextChannel):
-        return exact
-    prefix = expected_name.split("・", 1)[0] + "・"
-    return discord.utils.find(lambda channel: isinstance(channel, discord.TextChannel) and channel.name.startswith(prefix), guild.text_channels)
+    try:
+        channels_now = await guild.fetch_channels()
+    except (discord.Forbidden, discord.HTTPException):
+        channels_now = guild.text_channels
+    for channel in channels_now:
+        if isinstance(channel, discord.TextChannel) and channel.name == expected_name:
+            return channel
+    return None
 
 
 def _find_managed_role_by_name(guild: discord.Guild, role_name: str) -> discord.Role | None:
@@ -169,6 +176,9 @@ class AdminCommands(commands.Cog):
         if level not in get_levels() or stream not in get_streams(level):
             await interaction.response.send_message("❌ Niveau ou filière invalide.", ephemeral=True)
             return
+        if any(role.name == "Élève" or role.name.startswith("Élèves - ") for role in teacher.roles if not role.managed):
+            await interaction.response.send_message("❌ Cet utilisateur possède encore un rôle **Élève**. Retire d'abord son rôle élève, puis relance `/assignteacherfull`.", ephemeral=True)
+            return
         requested = [item.strip().casefold() for item in subjects.split(",") if item.strip()]
         chosen = [subject for subject in get_stream_subjects(level, stream) if get_subject_display_name(subject).casefold() in requested or subject.casefold() in requested]
         if not chosen:
@@ -209,10 +219,10 @@ class AdminCommands(commands.Cog):
         await interaction.followup.send(f"✅ {teacher.mention} est affecté à **{stream_code}** pour: {subject_names}.", ephemeral=True)
 
     @app_commands.command(name="set_timetable", description="Mettre à jour l'emploi du temps d'une filière sans créer de nouveau salon.")
-    @app_commands.describe(level="Niveau", stream="Filière", content="Contenu de l'emploi du temps")
-    @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete)
+    @app_commands.describe(level="Niveau", stream="Filière", subject="Matière concernée", content="Horaire et détails de la séance")
+    @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete, subject=subject_autocomplete)
     @management_check()
-    async def set_timetable(self, interaction: discord.Interaction, level: str, stream: str, content: str) -> None:
+    async def set_timetable(self, interaction: discord.Interaction, level: str, stream: str, subject: str, content: str) -> None:
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
@@ -220,27 +230,32 @@ class AdminCommands(commands.Cog):
         if level not in get_levels() or stream not in get_streams(level):
             await interaction.response.send_message("❌ Niveau ou filière invalide.", ephemeral=True)
             return
-        channel = _find_stream_channel(guild, level, stream, "timetable")
+        curriculum_subject = next((candidate for candidate in get_stream_subjects(level, stream) if candidate == subject or get_subject_display_name(candidate).casefold() == subject.casefold()), None)
+        if curriculum_subject is None:
+            await interaction.response.send_message("❌ Matière invalide pour cette filière.", ephemeral=True)
+            return
+        channel = await _find_stream_channel(guild, level, stream, "timetable")
         if channel is None:
             await interaction.response.send_message("❌ Channel d'emploi du temps introuvable pour cette filière. Vérifie `/status`.", ephemeral=True)
             return
         code = get_stream_abbreviation(level, stream)
+        subject_display = get_subject_display_name(curriculum_subject)
         await interaction.response.defer(ephemeral=True)
-        embed = discord.Embed(title=f"🗓️ Emploi du temps — {code}", description=content[:4000], colour=discord.Colour.blue())
+        embed = discord.Embed(title=f"🗓️ Emploi du temps — {code} / {subject_display}", description=content[:4000], colour=discord.Colour.blue())
         embed.timestamp = discord.utils.utcnow()
         try:
-            await _upsert_bot_embed(channel, marker=f"SchoolManager:T:{code}", embed=embed)
+            await _upsert_bot_embed(channel, marker=f"SchoolManager:T:{code}:{curriculum_subject}", embed=embed)
         except discord.HTTPException as exc:
             await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
             return
-        record_event(guild.id, interaction.user.id, interaction.user.display_name, "set_timetable", code, "Timetable updated")
-        await interaction.followup.send(f"✅ Emploi du temps mis à jour dans {channel.mention}.", ephemeral=True)
+        record_event(guild.id, interaction.user.id, interaction.user.display_name, "set_timetable", code, f"{subject_display} timetable updated")
+        await interaction.followup.send(f"✅ Emploi du temps de **{subject_display}** mis à jour dans {channel.mention}.", ephemeral=True)
 
     @app_commands.command(name="setexam", description="Mettre à jour les examens d'une filière sans créer de nouveau salon.")
-    @app_commands.describe(level="Niveau", stream="Filière", content="Dates, horaires et consignes des examens")
-    @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete, content=exam_content_autocomplete)
+    @app_commands.describe(level="Niveau", stream="Filière", subject="Matière concernée", content="Dates, horaires et consignes des examens")
+    @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete, subject=subject_autocomplete)
     @management_check()
-    async def set_exam(self, interaction: discord.Interaction, level: str, stream: str, content: str) -> None:
+    async def set_exam(self, interaction: discord.Interaction, level: str, stream: str, subject: str, content: str) -> None:
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
@@ -248,21 +263,26 @@ class AdminCommands(commands.Cog):
         if level not in get_levels() or stream not in get_streams(level):
             await interaction.response.send_message("❌ Niveau ou filière invalide.", ephemeral=True)
             return
-        channel = _find_stream_channel(guild, level, stream, "exams")
+        curriculum_subject = next((candidate for candidate in get_stream_subjects(level, stream) if candidate == subject or get_subject_display_name(candidate).casefold() == subject.casefold()), None)
+        if curriculum_subject is None:
+            await interaction.response.send_message("❌ Matière invalide pour cette filière.", ephemeral=True)
+            return
+        channel = await _find_stream_channel(guild, level, stream, "exams")
         if channel is None:
             await interaction.response.send_message("❌ Channel d'examens introuvable pour cette filière. Vérifie `/status`.", ephemeral=True)
             return
         code = get_stream_abbreviation(level, stream)
+        subject_display = get_subject_display_name(curriculum_subject)
         await interaction.response.defer(ephemeral=True)
-        embed = discord.Embed(title=f"📝 Examens — {code}", description=content[:4000], colour=discord.Colour.red())
+        embed = discord.Embed(title=f"📝 Examens — {code} / {subject_display}", description=content[:4000], colour=discord.Colour.red())
         embed.timestamp = discord.utils.utcnow()
         try:
-            await _upsert_bot_embed(channel, marker=f"SchoolManager:E:{code}", embed=embed)
+            await _upsert_bot_embed(channel, marker=f"SchoolManager:E:{code}:{curriculum_subject}", embed=embed)
         except discord.HTTPException as exc:
             await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
             return
-        record_event(guild.id, interaction.user.id, interaction.user.display_name, "setexam", code, "Exam content updated")
-        await interaction.followup.send(f"✅ Examens mis à jour dans {channel.mention}.", ephemeral=True)
+        record_event(guild.id, interaction.user.id, interaction.user.display_name, "setexam", code, f"{subject_display} exam content updated")
+        await interaction.followup.send(f"✅ Examens de **{subject_display}** mis à jour dans {channel.mention}.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:
