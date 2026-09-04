@@ -8,8 +8,8 @@ from discord.ext import commands
 
 from config.curriculum import get_levels, get_stream_abbreviation, get_streams
 from services.audit import record_event
-from services.permissions import ROLE_STUDENT, STUDENT_STREAM_ROLE_PREFIX, STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX, get_managed_role, management_check
-from services.storage import enroll_student_record, get_active_academic_year, get_student, get_student_history, mark_student_left
+from services.permissions import ROLE_STUDENT, STUDENT_STREAM_ROLE_PREFIX, get_managed_role, management_check
+from services.storage import enroll_student_record, get_active_academic_year, get_guild_config, get_student, get_student_history, mark_student_left
 
 
 def _school_role_ids(guild: discord.Guild) -> set[int]:
@@ -158,9 +158,6 @@ class StudentCommands(commands.Cog):
 
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "leave_school", student.display_name, "Student marked left school")
         await interaction.response.send_message(f"✅ {student.mention} est marqué **sorti de l'établissement**. Son historique est conservé.", ephemeral=True)
-
-
-from services.storage import get_guild_config
 
 
 async def setup(bot: commands.Bot) -> None:
