@@ -203,12 +203,17 @@ def student_overwrite(*, can_send: bool = True) -> discord.PermissionOverwrite:
     return discord.PermissionOverwrite(view_channel=True, send_messages=can_send, read_message_history=True, create_public_threads=can_send, send_messages_in_threads=can_send, connect=True, speak=True)
 
 
+def student_view_overwrite() -> discord.PermissionOverwrite:
+    """Let every enrolled school student see a stream while its stream role controls posting."""
+    return discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True, create_public_threads=False, create_private_threads=False, send_messages_in_threads=False, connect=True)
+
+
 def hidden_overwrite() -> discord.PermissionOverwrite:
     return discord.PermissionOverwrite(view_channel=False)
 
 
 def stream_area_overwrites(everyone, admin_role, professor_role, female_professor_role, student_role, teacher_stream_role, student_stream_role):
-    return {everyone: hidden_overwrite(), student_role: hidden_overwrite(), professor_role: professor_subject_view_overwrite(), female_professor_role: professor_subject_view_overwrite(), admin_role: administrator_overwrite(), teacher_stream_role: professor_subject_view_overwrite(), student_stream_role: student_overwrite(can_send=True)}
+    return {everyone: hidden_overwrite(), student_role: student_view_overwrite(), professor_role: professor_subject_view_overwrite(), female_professor_role: professor_subject_view_overwrite(), admin_role: administrator_overwrite(), teacher_stream_role: professor_subject_view_overwrite(), student_stream_role: student_overwrite(can_send=True)}
 
 
 def stream_announcement_overwrites(everyone, admin_role, professor_role, female_professor_role, student_role, teacher_stream_role, student_stream_role):
@@ -228,8 +233,10 @@ def teacher_area_overwrites(everyone, admin_role, professor_role, female_profess
     return {everyone: hidden_overwrite(), student_role: hidden_overwrite(), professor_role: professor_general_overwrite(), female_professor_role: professor_general_overwrite(), admin_role: administrator_overwrite()}
 
 
-def subject_channel_overwrites(everyone, admin_role, professor_role, female_professor_role, teacher_stream_role, student_stream_role, subject_role=None):
+def subject_channel_overwrites(everyone, admin_role, professor_role, female_professor_role, teacher_stream_role, student_stream_role, subject_role=None, student_role=None):
     overwrites = {everyone: hidden_overwrite(), admin_role: administrator_overwrite(), professor_role: professor_subject_view_overwrite(), female_professor_role: professor_subject_view_overwrite(), teacher_stream_role: professor_subject_view_overwrite(), student_stream_role: student_overwrite(can_send=True)}
+    if student_role is not None:
+        overwrites[student_role] = student_view_overwrite()
     if subject_role is not None:
         overwrites[subject_role] = professor_subject_member_overwrite()
     return overwrites
@@ -237,4 +244,5 @@ def subject_channel_overwrites(everyone, admin_role, professor_role, female_prof
 
 def public_voice_overwrites(everyone, admin_role, professor_role, female_professor_role, student_role, teacher_stream_role, student_stream_role):
     voice = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, stream=True)
-    return {everyone: hidden_overwrite(), student_role: hidden_overwrite(), professor_role: voice, female_professor_role: voice, admin_role: voice, teacher_stream_role: voice, student_stream_role: voice}
+    student_view = discord.PermissionOverwrite(view_channel=True, connect=True, speak=False)
+    return {everyone: hidden_overwrite(), student_role: student_view, professor_role: voice, female_professor_role: voice, admin_role: voice, teacher_stream_role: voice, student_stream_role: voice}
