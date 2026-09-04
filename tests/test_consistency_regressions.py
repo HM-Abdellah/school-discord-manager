@@ -40,6 +40,7 @@ def test_builder_capacity_counts_only_resources_that_will_actually_be_created():
     category_voice = SimpleNamespace(name=CATEGORY_VOICE, text_channels=[], voice_channels=[])
     guild = SimpleNamespace(channels=[], categories=[category_general, category_professors, category_voice])
     builder = ServerBuilder(guild)
+    builder._channel_snapshot = [category_general, category_professors, category_voice]
     selected = {
         "levels": [
             {
@@ -61,6 +62,7 @@ def test_builder_capacity_rejects_exact_projected_501_channels():
     existing = [SimpleNamespace(name=f"channel-{index}") for index in range(494)]
     guild = SimpleNamespace(channels=existing, categories=[])
     builder = ServerBuilder(guild)
+    builder._channel_snapshot = existing
     selected = {"levels": []}
     with pytest.raises(ValueError, match="501"):
         builder._validate_capacity(selected)
