@@ -1,6 +1,6 @@
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
+import discord
 import pytest
 
 from services.server_builder import (
@@ -30,7 +30,9 @@ def test_planned_channel_names_include_only_real_resources():
 
 
 def test_validate_capacity_rejects_stream_above_category_limit():
-    guild = SimpleNamespace(channels=[], categories=[], text_channels=[])
+    guild = MagicMock()
+    guild.channels = []
+    guild.categories = []
     builder = ServerBuilder(guild)
     selected = {
         "levels": [
@@ -46,6 +48,7 @@ def test_validate_capacity_rejects_stream_above_category_limit():
             }
         ]
     }
+    builder._channel_snapshot = []
     with pytest.raises(ValueError, match="dépasse la limite de 50"):
         builder._validate_capacity(selected)
 
@@ -53,7 +56,7 @@ def test_validate_capacity_rejects_stream_above_category_limit():
 @pytest.mark.asyncio
 async def test_existing_main_roles_are_reused_without_create_calls():
     role_names = ("Administration", "Prof", "Prof (F)", "Élève")
-    roles = [SimpleNamespace(name=name, id=index + 1) for index, name in enumerate(role_names)]
+    roles = [MagicMock(name=name, id=index + 1) for index, name in enumerate(role_names)]
     guild = SimpleNamespace(roles=roles)
     guild.create_role = AsyncMock()
 
@@ -67,7 +70,9 @@ async def test_existing_main_roles_are_reused_without_create_calls():
 
 @pytest.mark.asyncio
 async def test_existing_category_is_reused_without_create_call():
-    category = SimpleNamespace(name="Test Category", id=123)
+    category = MagicMock(spec=discord.CategoryChannel)
+    category.name = "Test Category"
+    category.id = 123
     guild = SimpleNamespace(categories=[category])
     guild.create_category = AsyncMock()
 
@@ -81,14 +86,18 @@ async def test_existing_category_is_reused_without_create_call():
 
 @pytest.mark.asyncio
 async def test_existing_text_channel_is_reused_without_edit_or_create():
-    channel = SimpleNamespace(name="test-channel", id=456)
-    category = SimpleNamespace(text_channels=[channel], id=123)
-    guild = SimpleNamespace()
-
-    builder = ServerBuilder(guild)
-    builder._channel_snapshot = [channel]
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.name = "test-channel"
+    channel.id = 456
+    channel.parent_id = 123
+    category = MagicMock(spec=discord.CategoryChannel)
+    category.text_channels = [channel]
+    category.id = 123
     category.create_text_channel = AsyncMock()
     channel.edit = AsyncMock()
+
+    builder = ServerBuilder(SimpleNamespace())
+    builder._channel_snapshot = [channel]
 
     result = await builder._get_or_create_text(
         category,
@@ -104,14 +113,18 @@ async def test_existing_text_channel_is_reused_without_edit_or_create():
 
 @pytest.mark.asyncio
 async def test_existing_voice_channel_is_reused_without_edit_or_create():
-    channel = SimpleNamespace(name="test-voice", id=789)
-    category = SimpleNamespace(voice_channels=[channel], id=123)
-    guild = SimpleNamespace()
-
-    builder = ServerBuilder(guild)
-    builder._channel_snapshot = [channel]
+    channel = MagicMock(spec=discord.VoiceChannel)
+    channel.name = "test-voice"
+    channel.id = 789
+    channel.parent_id = 123
+    category = MagicMock(spec=discord.CategoryChannel)
+    category.voice_channels = [channel]
+    category.id = 123
     category.create_voice_channel = AsyncMock()
     channel.edit = AsyncMock()
+
+    builder = ServerBuilder(SimpleNamespace())
+    builder._channel_snapshot = [channel]
 
     result = await builder._get_or_create_voice(category, "test-voice", {})
 
