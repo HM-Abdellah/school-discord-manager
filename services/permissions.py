@@ -5,6 +5,7 @@ from __future__ import annotations
 import discord
 from discord import app_commands
 
+from config.curriculum import get_stream_abbreviation, get_stream_subjects, get_subject_internal_code
 from services.storage import get_guild_config
 
 ROLE_ADMIN = "Administration"
@@ -24,39 +25,57 @@ def _bot_member(guild: discord.Guild) -> discord.Member | None:
     return guild.me
 
 
-def _is_canonical_school_role(name: str) -> bool:
-    return name in {ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT} or name.startswith((STREAM_ROLE_PREFIX, STUDENT_STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX))
+def _legacy_role_names(config: dict) -> set[str]:
+    """Return canonical legacy role names only when the guild has configured streams."""
+    levels = config.get("levels", []) if isinstance(config, dict) else []
+    if not levels:
+        return set()
+    names = {ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT}
+    for level in levels:
+        if not isinstance(level, dict) or not isinstance(level.get("name"), str):
+            continue
+        level_name = level["name"]
+        for stream in level.get("streams", []) or []:
+            if not isinstance(stream, dict) or not isinstance(stream.get("name"), str):
+                continue
+            stream_name = stream["name"]
+            code = str(stream.get("abbreviation") or get_stream_abbreviation(level_name, stream_name))
+            names.update({f"{STREAM_ROLE_PREFIX}{code}", f"{STUDENT_STREAM_ROLE_PREFIX}{code}"})
+            subjects = stream.get("subjects", []) or get_stream_subjects(level_name, stream_name)
+            names.update(f"{SUBJECT_ROLE_PREFIX}{code} - {get_subject_internal_code(subject)}" for subject in subjects)
+    return names
 
 
 def _managed_role_ids(guild: discord.Guild) -> set[int]:
-    """Return configured managed role IDs plus exact canonical legacy roles present in the guild."""
+    """Return configured role IDs plus exact legacy role names for configured streams."""
     config = get_guild_config(guild.id) or {}
     managed = config.get("managed", {})
     roles = managed.get("roles", {}) if isinstance(managed, dict) else {}
-    ids: set[int] = set()
-    if isinstance(roles, dict):
-        ids.update(value for value in roles.values() if isinstance(value, int) and value > 0)
+    ids = {value for value in roles.values() if isinstance(value, int) and value > 0} if isinstance(roles, dict) else set()
     management_role_id = config.get("management_role_id")
     if isinstance(management_role_id, int) and management_role_id > 0:
         ids.add(management_role_id)
-    ids.update(role.id for role in guild.roles if not role.managed and _is_canonical_school_role(role.name))
+    expected = _legacy_role_names(config)
+    ids.update(role.id for role in getattr(guild, "roles", []) if not role.managed and role.name in expected)
     return ids
 
 
 def get_managed_role(guild: discord.Guild, name: str) -> discord.Role | None:
-    """Resolve a managed role by recorded ID, then by exact canonical name for legacy resources."""
+    """Resolve by recorded ID first; adopt an exact canonical name only for configured streams."""
     config = get_guild_config(guild.id) or {}
     managed = config.get("managed", {})
     roles = managed.get("roles", {}) if isinstance(managed, dict) else {}
     role_id = roles.get(name) if isinstance(roles, dict) else None
     if name == ROLE_ADMIN and not isinstance(role_id, int):
         role_id = config.get("management_role_id")
-    if isinstance(role_id, int) and role_id > 0:
+    explicit_id = isinstance(role_id, int) and role_id > 0
+    if explicit_id:
         role = guild.get_role(role_id)
         if role is not None and role.name == name and not role.managed:
             return role
-    if _is_canonical_school_role(name):
-        role = discord.utils.get(guild.roles, name=name)
+        return None
+    if name in _legacy_role_names(config):
+        role = discord.utils.get(getattr(guild, "roles", []), name=name)
         if role is not None and not role.managed:
             return role
     return None
