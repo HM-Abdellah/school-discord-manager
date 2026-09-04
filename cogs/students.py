@@ -8,7 +8,7 @@ from discord.ext import commands
 
 from config.curriculum import get_levels, get_stream_abbreviation, get_streams
 from services.audit import record_event
-from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT, STUDENT_STREAM_ROLE_PREFIX, STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX, get_managed_role, management_check
+from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT, STUDENT_STREAM_ROLE_PREFIX, STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX, get_managed_role, management_check, student_view_overwrite
 from services.storage import enroll_student_record, get_active_academic_year, get_guild_config, get_student, get_student_history, mark_student_left
 
 
@@ -70,6 +70,40 @@ async def _restore_school_roles(member: discord.Member, guild: discord.Guild, or
         await member.add_roles(*to_add, reason="School Manager rollback")
 
 
+async def _grant_student_global_stream_view(guild: discord.Guild, student_role: discord.Role) -> None:
+    """Make the base student role read-only in every configured stream channel."""
+    config = get_guild_config(guild.id) or {}
+    codes: set[str] = set()
+    for level in config.get("levels", []):
+        if not isinstance(level, dict):
+            continue
+        level_name = level.get("name")
+        if not isinstance(level_name, str):
+            continue
+        for stream in level.get("streams", []) or []:
+            if not isinstance(stream, dict) or not isinstance(stream.get("name"), str):
+                continue
+            codes.add(str(stream.get("abbreviation") or get_stream_abbreviation(level_name, stream["name"])))
+    if not codes:
+        return
+    try:
+        channels = await guild.fetch_channels()
+    except (discord.Forbidden, discord.HTTPException):
+        channels = guild.channels
+    view = student_view_overwrite()
+    for channel in channels:
+        name = getattr(channel, "name", "")
+        is_stream_text = any(name.startswith(prefix) for code in codes for prefix in (f"📌-{code}・", f"🗓️-{code}・", f"📝-{code}・", f"📚-{code}・"))
+        is_stream_voice = any(name == f"🔊-{code}-à-distance" for code in codes)
+        if not (is_stream_text or is_stream_voice):
+            continue
+        if not isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+            continue
+        overwrites = dict(channel.overwrites)
+        overwrites[student_role] = view
+        await channel.edit(overwrites=overwrites, reason="School Manager student global stream visibility")
+
+
 class StudentCommands(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -104,6 +138,7 @@ class StudentCommands(commands.Cog):
                 await student.remove_roles(*cleanup_roles, reason="Student role normalization")
             await student.add_roles(student_role, student_stream_role, reason="Student stream assignment")
             enroll_student_record(guild.id, student.id, student.display_name, int(year["id"]), level, stream)
+            await _grant_student_global_stream_view(guild, student_role)
         except discord.Forbidden:
             try:
                 await _restore_school_roles(student, guild, original_school_roles)
@@ -127,7 +162,7 @@ class StudentCommands(commands.Cog):
             return
         code = get_stream_abbreviation(level, stream)
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "assignstudent", student.display_name, f"{level}: {code}")
-        await interaction.followup.send(f"✅ {student.mention} est maintenant dans **{code}** ({level}).", ephemeral=True)
+        await interaction.followup.send(f"✅ {student.mention} est maintenant dans **{code}** ({level}). Les autres filières restent visibles en lecture seule.", ephemeral=True)
 
     @app_commands.command(name="studenthistory", description="Voir l'historique scolaire d'un élève.")
     @app_commands.describe(student="Élève")
