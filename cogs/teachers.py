@@ -11,7 +11,7 @@ from discord.ext import commands
 
 from config.curriculum import GENERAL_CHANNELS, get_levels, get_stream_abbreviation, get_streams, get_stream_subjects
 from services.audit import record_event
-from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, SUBJECT_ROLE_PREFIX, get_managed_role, management_check, professor_subject_member_overwrite, professor_subject_view_overwrite, administrator_overwrite, hidden_overwrite, student_overwrite
+from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, get_managed_role, management_check, professor_subject_member_overwrite, professor_subject_view_overwrite, administrator_overwrite, hidden_overwrite, student_overwrite
 from services.server_builder import _subject_channel_name, _subject_role_name, _stream_role_name
 from services.storage import get_guild_config, save_guild_config
 
@@ -101,6 +101,7 @@ class TeacherCommands(commands.Cog):
         if not members:
             await interaction.response.send_message("❌ Aucun membre valide avec le rôle géré `Prof` ou `Prof (F)` n'a été détecté.", ephemeral=True)
             return
+        config = get_guild_config(guild.id) or {}
         try:
             if subject_role is None:
                 subject_role = await guild.create_role(
@@ -110,7 +111,6 @@ class TeacherCommands(commands.Cog):
                     mentionable=False,
                     reason="School manager subject role created on demand",
                 )
-                config = get_guild_config(guild.id) or {}
                 managed = config.setdefault("managed", {})
                 managed_roles = managed.setdefault("roles", {})
                 managed_roles[subject_role_name] = subject_role.id
@@ -118,7 +118,7 @@ class TeacherCommands(commands.Cog):
                 guild.default_role: hidden_overwrite(),
                 stream_role: professor_subject_view_overwrite(),
             }
-            admin_role = get_managed_role(guild, "Administration")
+            admin_role = get_managed_role(guild, ROLE_ADMIN)
             prof_role = get_managed_role(guild, ROLE_PROFESSOR)
             prof_f_role = get_managed_role(guild, ROLE_PROFESSOR_FEMALE)
             student_stream_role = get_managed_role(guild, f"Élèves - {code}")
@@ -140,6 +140,9 @@ class TeacherCommands(commands.Cog):
             return
         except discord.HTTPException as exc:
             await interaction.response.send_message(f"❌ Discord API : `{exc}`", ephemeral=True)
+            return
+        except OSError as exc:
+            await interaction.response.send_message(f"❌ Stockage local : `{exc}`", ephemeral=True)
             return
         mentions = ", ".join(member.mention for member in members)
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "assignsubjectteachers", ", ".join(member.display_name for member in members), f"{code} / {subject}")
