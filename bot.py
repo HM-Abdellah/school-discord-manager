@@ -9,6 +9,8 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+from services.runtime_fixes import apply_runtime_fixes
+
 load_dotenv()
 
 discord.utils.setup_logging(level=logging.INFO, root=False)
@@ -42,6 +44,8 @@ class SchoolBot(commands.Bot):
     async def setup_hook(self) -> None:
         for extension in self.EXTENSIONS:
             await self.load_extension(extension)
+
+        apply_runtime_fixes(self)
 
         if GUILD_ID_RAW:
             try:
