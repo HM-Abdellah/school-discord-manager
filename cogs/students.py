@@ -139,11 +139,11 @@ class StudentCommands(commands.Cog):
             await interaction.response.send_message("❌ Élève non enregistré.", ephemeral=True)
             return
         original_school_roles = _school_roles(student, guild)
-        school_roles = _school_roles(student, guild)
+        student_assignment_roles = _student_assignment_roles(student, guild)
         student_role = get_managed_role(guild, ROLE_STUDENT)
         try:
-            if school_roles:
-                await student.remove_roles(*school_roles, reason="Student left school")
+            if student_assignment_roles:
+                await student.remove_roles(*student_assignment_roles, reason="Student left school")
             if student_role and student_role in student.roles:
                 await student.remove_roles(student_role, reason="Student left school")
             mark_student_left(guild.id, int(row["id"]))
