@@ -72,6 +72,7 @@ async def test_existing_category_is_reused_without_create_call():
     guild.create_category = AsyncMock()
 
     builder = ServerBuilder(guild)
+    builder._channel_snapshot = [category]
     result = await builder._get_or_create_category("Test Category")
 
     assert result is category
@@ -81,10 +82,11 @@ async def test_existing_category_is_reused_without_create_call():
 @pytest.mark.asyncio
 async def test_existing_text_channel_is_reused_without_edit_or_create():
     channel = SimpleNamespace(name="test-channel", id=456)
-    category = SimpleNamespace(text_channels=[channel])
+    category = SimpleNamespace(text_channels=[channel], id=123)
     guild = SimpleNamespace()
 
     builder = ServerBuilder(guild)
+    builder._channel_snapshot = [channel]
     category.create_text_channel = AsyncMock()
     channel.edit = AsyncMock()
 
@@ -103,10 +105,11 @@ async def test_existing_text_channel_is_reused_without_edit_or_create():
 @pytest.mark.asyncio
 async def test_existing_voice_channel_is_reused_without_edit_or_create():
     channel = SimpleNamespace(name="test-voice", id=789)
-    category = SimpleNamespace(voice_channels=[channel])
+    category = SimpleNamespace(voice_channels=[channel], id=123)
     guild = SimpleNamespace()
 
     builder = ServerBuilder(guild)
+    builder._channel_snapshot = [channel]
     category.create_voice_channel = AsyncMock()
     channel.edit = AsyncMock()
 
