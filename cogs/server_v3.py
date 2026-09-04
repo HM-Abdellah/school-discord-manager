@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config.curriculum import get_levels, get_stream_abbreviation, get_streams, get_stream_subjects
+from config.curriculum import GENERAL_CHANNELS, PROFESSOR_CHANNELS, get_levels, get_stream_abbreviation, get_streams, get_stream_subjects
 from services.build_guard import get_build_lock
 from services.permissions import (
     ROLE_ADMIN,
@@ -54,11 +54,11 @@ async def stream_autocomplete(interaction: discord.Interaction, current: str) ->
     return [app_commands.Choice(name=stream, value=stream) for stream in get_streams(level) if _contains(stream, current)][:25]
 
 
-def _configured_managed_ids(config: dict) -> tuple[set[int], set[int], set[int]]:
-    """Return only persisted School Manager Discord IDs; names are never ownership proof."""
+def _configured_managed_ids(config: dict, guild: discord.Guild | None = None) -> tuple[set[int], set[int], set[int]]:
+    """Return registered IDs and exact canonical legacy IDs when a guild is supplied."""
     managed = config.get("managed", {}) if isinstance(config, dict) else {}
     if not isinstance(managed, dict):
-        return set(), set(), set()
+        managed = {}
 
     def ids_for(kind: str) -> set[int]:
         values = managed.get(kind, {})
@@ -66,7 +66,37 @@ def _configured_managed_ids(config: dict) -> tuple[set[int], set[int], set[int]]
             return set()
         return {value for value in values.values() if isinstance(value, int) and value > 0}
 
-    return ids_for("roles"), ids_for("channels"), ids_for("categories")
+    role_ids, channel_ids, category_ids = ids_for("roles"), ids_for("channels"), ids_for("categories")
+    if guild is None:
+        return role_ids, channel_ids, category_ids
+
+    expected_categories = {CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE}
+    expected_roles = {ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT}
+    for level in config.get("levels", []):
+        if not isinstance(level, dict):
+            continue
+        level_name = level.get("name")
+        for stream in level.get("streams", []) or []:
+            if not isinstance(stream, dict):
+                continue
+            stream_name = stream.get("name")
+            if not isinstance(level_name, str) or not isinstance(stream_name, str):
+                continue
+            code = str(stream.get("abbreviation") or get_stream_abbreviation(level_name, stream_name))
+            expected_categories.add(_stream_category_name(level_name, stream_name, code))
+            expected_roles.update({f"{STREAM_ROLE_PREFIX}{code}", f"{STUDENT_STREAM_ROLE_PREFIX}{code}"})
+            subjects = stream.get("subjects", []) or get_stream_subjects(level_name, stream_name)
+            expected_roles.update(_subject_role_name(level_name, stream_name, subject) for subject in subjects)
+
+    for category in guild.categories:
+        if category.name in expected_categories:
+            category_ids.add(category.id)
+            channel_ids.update(channel.id for channel in category.channels)
+
+    fixed_channels = set(GENERAL_CHANNELS.values()) | set(PROFESSOR_CHANNELS.values())
+    channel_ids.update(channel.id for channel in guild.channels if getattr(channel, "name", None) in fixed_channels)
+    role_ids.update(role.id for role in guild.roles if not role.managed and role.name in expected_roles)
+    return role_ids, channel_ids, category_ids
 
 
 def _stream_configured(config: dict, level: str, stream: str) -> bool:
@@ -78,16 +108,11 @@ def _stream_configured(config: dict, level: str, stream: str) -> bool:
 
 
 def _managed_resource_state(guild: discord.Guild, config: dict) -> tuple[bool, int, int, int]:
-    role_ids, channel_ids, category_ids = _configured_managed_ids(config)
+    role_ids, channel_ids, category_ids = _configured_managed_ids(config, guild)
     existing_roles = sum(1 for role_id in role_ids if guild.get_role(role_id) is not None)
     existing_channels = sum(1 for channel_id in channel_ids if guild.get_channel(channel_id) is not None)
     existing_categories = sum(1 for category_id in category_ids if isinstance(guild.get_channel(category_id), discord.CategoryChannel))
-    complete = (
-        bool(role_ids or channel_ids or category_ids)
-        and existing_roles == len(role_ids)
-        and existing_channels == len(channel_ids)
-        and existing_categories == len(category_ids)
-    )
+    complete = bool(role_ids or channel_ids or category_ids) and existing_roles == len(role_ids) and existing_channels == len(channel_ids) and existing_categories == len(category_ids)
     return complete, existing_roles, existing_channels, existing_categories
 
 
@@ -116,15 +141,10 @@ class ServerCommands(commands.Cog):
         if not config:
             await interaction.response.send_message("❌ Utilise d'abord `/setup`.", ephemeral=True)
             return
-
         complete, existing_roles, existing_channels, existing_categories = _managed_resource_state(guild, config)
         if complete:
-            await interaction.response.send_message(
-                f"✅ **Déjà construit.** Rien à recréer : {existing_roles} rôles · {existing_categories} catégories · {existing_channels} channels gérés sont déjà présents.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message(f"✅ **Déjà construit.** Rien à recréer : {existing_roles} rôles · {existing_categories} catégories · {existing_channels} channels gérés sont déjà présents.", ephemeral=True)
             return
-
         await interaction.response.send_message("🏗️ Synchronisation sécurisée en cours...", ephemeral=True)
         try:
             stats = await _run_build(guild, config)
@@ -137,10 +157,7 @@ class ServerCommands(commands.Cog):
         except Exception as exc:
             await interaction.followup.send(f"❌ Erreur : `{type(exc).__name__}: {exc}`", ephemeral=True)
             return
-        await interaction.followup.send(
-            f"✅ Structure synchronisée. Niveaux: {stats.levels_processed} · Filières: {stats.streams_processed} · Rôles créés: {stats.roles_created} · Catégories créées: {stats.categories_created} · Texte créé: {stats.text_channels_created} · Vocaux créés: {stats.voice_channels_created}",
-            ephemeral=True,
-        )
+        await interaction.followup.send(f"✅ Structure synchronisée. Niveaux: {stats.levels_processed} · Filières: {stats.streams_processed} · Rôles créés: {stats.roles_created} · Catégories créées: {stats.categories_created} · Texte créé: {stats.text_channels_created} · Vocaux créés: {stats.voice_channels_created}", ephemeral=True)
 
     @app_commands.command(name="addstream", description="Ajouter une seule filière sans reconstruire les filières existantes.")
     @app_commands.describe(level="Niveau", stream="Filière à ajouter")
@@ -154,7 +171,6 @@ class ServerCommands(commands.Cog):
         if level not in get_levels() or stream not in get_streams(level):
             await interaction.response.send_message("❌ Niveau ou filière invalide.", ephemeral=True)
             return
-
         config = get_guild_config(guild.id)
         if not config:
             await interaction.response.send_message("❌ Lance `/setup` d'abord.", ephemeral=True)
@@ -163,25 +179,17 @@ class ServerCommands(commands.Cog):
             code = get_stream_abbreviation(level, stream)
             await interaction.response.send_message(f"ℹ️ **{code} — {stream}** est déjà configurée. Aucun build ne sera lancé.", ephemeral=True)
             return
-
         code = get_stream_abbreviation(level, stream)
         category_name = _stream_category_name(level, stream, code)
         existing_category = discord.utils.get(guild.categories, name=category_name)
-        if existing_category is not None:
-            await interaction.response.send_message(
-                f"⚠️ **{code} — {stream}** n'est pas enregistrée dans la configuration, mais sa catégorie **{category_name}** existe déjà. Aucun doublon ne sera créé; vérifie `/status` avant de poursuivre.",
-                ephemeral=True,
-            )
-            return
-
+        adoption_note = " Une catégorie existante sera adoptée et complétée." if existing_category is not None else ""
         candidate = deepcopy(config)
         target = next((item for item in candidate.get("levels", []) if item.get("name") == level), None)
         if target is None:
             target = {"name": level, "abbreviation": LEVEL_ABBREVIATIONS[level], "streams": []}
             candidate.setdefault("levels", []).append(target)
         target.setdefault("streams", []).append({"name": stream, "abbreviation": code, "subjects": get_stream_subjects(level, stream)})
-
-        await interaction.response.send_message(f"🏗️ Ajout de **{code} — {stream}** en cours...", ephemeral=True)
+        await interaction.response.send_message(f"🏗️ Ajout de **{code} — {stream}** en cours...{adoption_note}", ephemeral=True)
         try:
             await _run_build(guild, candidate)
         except discord.Forbidden:
@@ -196,13 +204,9 @@ class ServerCommands(commands.Cog):
         except Exception as exc:
             await interaction.followup.send(f"❌ Ajout annulé : `{type(exc).__name__}: {exc}`", ephemeral=True)
             return
-
         category = discord.utils.get(guild.categories, name=category_name)
         if category is None:
-            await interaction.followup.send(
-                f"❌ Sécurité : **{code} — {stream}** a été demandée mais sa catégorie attendue `{category_name}` n'a pas été trouvée après construction. La configuration n'est pas considérée comme validée.",
-                ephemeral=True,
-            )
+            await interaction.followup.send(f"❌ Sécurité : **{code} — {stream}** a été demandée mais sa catégorie attendue `{category_name}` n'a pas été trouvée après construction. La configuration n'est pas considérée comme validée.", ephemeral=True)
             return
         await interaction.followup.send(f"✅ **{code} — {stream}** ajoutée. Catégorie créée/utilisée : {category.mention}", ephemeral=True)
 
@@ -227,12 +231,10 @@ class ServerCommands(commands.Cog):
         if target is None or not any(item.get("name") == stream for item in target.get("streams", [])):
             await interaction.response.send_message(f"ℹ️ **{get_stream_abbreviation(level, stream)}** n'est pas configurée.", ephemeral=True)
             return
-
         code = get_stream_abbreviation(level, stream)
         target["streams"] = [item for item in target.get("streams", []) if item.get("name") != stream]
         candidate["levels"] = [item for item in candidate.get("levels", []) if item.get("streams")]
         await interaction.response.send_message(f"🗑️ Suppression de **{code}** en cours...", ephemeral=True)
-
         lock = get_build_lock(guild.id)
         if lock.locked():
             await interaction.followup.send("⏳ Une construction est déjà en cours sur ce serveur.", ephemeral=True)
@@ -245,29 +247,20 @@ class ServerCommands(commands.Cog):
                     for channel in list(category.channels):
                         await channel.delete(reason="School manager stream removal")
                     await category.delete(reason="School manager stream category removal")
-
                 voice_category = discord.utils.get(guild.categories, name=CATEGORY_VOICE)
                 if voice_category is not None:
                     voice = discord.utils.get(voice_category.voice_channels, name=f"🔊-{_safe_name(code, 30)}-à-distance")
                     if voice is not None:
                         await voice.delete(reason="School manager stream removal")
-
-                managed = config.get("managed", {}) if isinstance(config, dict) else {}
-                managed_roles = managed.get("roles", {}) if isinstance(managed, dict) else {}
-                ids_to_delete = {
-                    managed_roles.get(f"{STREAM_ROLE_PREFIX}{code}"),
-                    managed_roles.get(f"{STUDENT_STREAM_ROLE_PREFIX}{code}"),
-                }
-                for name, role_id in managed_roles.items():
-                    if isinstance(role_id, int) and (
-                        name.startswith(f"{SUBJECT_ROLE_PREFIX}{code} -") or name.startswith(f"{SUBJECT_ROLE_PREFIX}{code}-")
-                    ):
-                        ids_to_delete.add(role_id)
+                managed_roles = config.get("managed", {}).get("roles", {}) if isinstance(config.get("managed", {}), dict) else {}
+                role_names = {f"{STREAM_ROLE_PREFIX}{code}", f"{STUDENT_STREAM_ROLE_PREFIX}{code}"}
+                role_names.update(_subject_role_name(level, stream, subject) for subject in get_stream_subjects(level, stream))
+                ids_to_delete = {value for name, value in managed_roles.items() if name in role_names and isinstance(value, int)}
+                ids_to_delete.update(role.id for role in guild.roles if not role.managed and role.name in role_names)
+                top_role = guild.me.top_role if guild.me is not None else None
                 for role_id in ids_to_delete:
-                    if not isinstance(role_id, int):
-                        continue
                     role = guild.get_role(role_id)
-                    if role is not None and not role.managed and role < guild.me.top_role:
+                    if role is not None and not role.managed and not role.is_default() and (top_role is None or role < top_role):
                         await role.delete(reason="School manager stream role cleanup")
                 save_guild_config(guild.id, candidate)
         except discord.NotFound:
@@ -290,7 +283,13 @@ class ServerCommands(commands.Cog):
         if not match or int(match.group(2)) != int(match.group(1)) + 1:
             await interaction.response.send_message("❌ Format attendu : `2026/2027`.", ephemeral=True)
             return
-        create_academic_year(guild.id, year, activate=True)
+        config = deepcopy(get_guild_config(guild.id) or {"levels": []})
+        config["academic_year"] = year
+        try:
+            save_guild_config(guild.id, config)
+        except OSError as exc:
+            await interaction.response.send_message(f"❌ Impossible d'enregistrer l'année scolaire : `{exc}`", ephemeral=True)
+            return
         await interaction.response.send_message(f"✅ **{year}** est maintenant l'année scolaire active.", ephemeral=True)
 
     @app_commands.command(name="years", description="Afficher les années scolaires enregistrées.")
@@ -300,10 +299,7 @@ class ServerCommands(commands.Cog):
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
         rows = list_academic_years(interaction.guild.id)
-        await interaction.response.send_message(
-            "## 📅 Années scolaires\n\n" + ("\n".join(f"• **{row['name']}**" + (" 🟢 ACTIVE" if row["is_active"] else "") for row in rows) or "Aucune année enregistrée."),
-            ephemeral=True,
-        )
+        await interaction.response.send_message("## 📅 Années scolaires\n\n" + ("\n".join(f"• **{row['name']}**" + (" 🟢 ACTIVE" if row["is_active"] else "") for row in rows) or "Aucune année enregistrée."), ephemeral=True)
 
     @app_commands.command(name="status", description="Afficher la configuration scolaire enregistrée.")
     @management_check()
@@ -322,10 +318,7 @@ class ServerCommands(commands.Cog):
             for stream in level.get("streams", []):
                 total += 1
                 lines.append(f"• **{stream.get('abbreviation', stream['name'])}** — {stream['name']}")
-        await interaction.response.send_message(
-            "\n".join(lines + ["", f"**Total filières :** {total}", "**Architecture :** une vraie catégorie Discord par filière; aucune catégorie-titre artificielle."]),
-            ephemeral=True,
-        )
+        await interaction.response.send_message("\n".join(lines + ["", f"**Total filières :** {total}", "**Architecture :** une vraie catégorie Discord par filière; aucune catégorie-titre artificielle."]), ephemeral=True)
 
     @app_commands.command(name="resetserver", description="Supprimer uniquement les ressources School Manager gérées.")
     @app_commands.describe(confirm="Écris RESET SCHOOL MANAGER pour confirmer. Réservé au propriétaire.")
@@ -344,16 +337,7 @@ class ServerCommands(commands.Cog):
             return
         await interaction.response.send_message("🧹 **RESET SCHOOL MANAGER EN COURS...**", ephemeral=True)
         config = get_guild_config(guild.id) or {}
-        role_ids, channel_ids, category_ids = _configured_managed_ids(config)
-        if not role_ids and not channel_ids and not category_ids:
-            try:
-                reset_guild_data(guild.id)
-            except (OSError, RuntimeError) as exc:
-                await interaction.followup.send(f"❌ Reset des données locales interrompu : `{type(exc).__name__}: {exc}`", ephemeral=True)
-                return
-            await interaction.followup.send("✅ Aucune ressource Discord gérée enregistrée. Rien n'a été supprimé sur Discord; les données School Manager locales ont été réinitialisées.", ephemeral=True)
-            return
-
+        role_ids, channel_ids, category_ids = _configured_managed_ids(config, guild)
         deleted_channels = deleted_categories = deleted_roles = 0
         try:
             async with lock:
@@ -378,10 +362,7 @@ class ServerCommands(commands.Cog):
         except (discord.Forbidden, discord.HTTPException, OSError) as exc:
             await interaction.followup.send(f"❌ Reset interrompu : `{type(exc).__name__}: {exc}`. Les ressources non supprimées restent intactes.", ephemeral=True)
             return
-        await interaction.followup.send(
-            f"✅ Reset School Manager terminé. Channels: **{deleted_channels}** · Catégories: **{deleted_categories}** · Rôles: **{deleted_roles}**. Les autres ressources du serveur n'ont pas été ciblées.",
-            ephemeral=True,
-        )
+        await interaction.followup.send(f"✅ Reset School Manager terminé. Channels: **{deleted_channels}** · Catégories: **{deleted_categories}** · Rôles: **{deleted_roles}**. Les autres ressources du serveur n'ont pas été ciblées.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:
