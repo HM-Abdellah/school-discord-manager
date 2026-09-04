@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextvars
 import re
 from typing import Any
 
@@ -30,9 +29,7 @@ from services.server_builder import (
     _student_stream_role_name,
 )
 
-_CURRENT_GUILD: contextvars.ContextVar[discord.Guild | None] = contextvars.ContextVar(
-    "school_manager_current_guild", default=None
-)
+_BOT: Any | None = None
 
 
 def _token(text: str, value: str) -> bool:
@@ -94,14 +91,25 @@ def find_subject_channel_compat(guild: discord.Guild, expected_name: str) -> dis
             if get_stream_abbreviation(level, stream).casefold() != code.casefold():
                 continue
             for subject in get_stream_subjects(level, stream):
-                if subject_tail in {subject.casefold(), get_subject_display_name(subject).casefold(), get_subject_internal_code(subject).casefold()}:
-                    variants.update({subject.casefold(), get_subject_display_name(subject).casefold(), get_subject_internal_code(subject).casefold()})
+                if subject_tail in {
+                    subject.casefold(),
+                    get_subject_display_name(subject).casefold(),
+                    get_subject_internal_code(subject).casefold(),
+                }:
+                    variants.update({
+                        subject.casefold(),
+                        get_subject_display_name(subject).casefold(),
+                        get_subject_internal_code(subject).casefold(),
+                    })
             category = _find_stream_category(guild, level, stream)
             if category:
                 for channel in category.text_channels:
                     if any(v and v in channel.name.casefold() for v in variants):
                         return channel
-    return next((c for c in guild.text_channels if code.casefold() in c.name.casefold() and subject_tail in c.name.casefold()), None)
+    return next(
+        (c for c in guild.text_channels if code.casefold() in c.name.casefold() and subject_tail in c.name.casefold()),
+        None,
+    )
 
 
 def find_stream_channel_compat(guild: discord.Guild, level: str, stream: str, kind: str) -> discord.TextChannel | None:
@@ -122,62 +130,100 @@ def find_stream_channel_compat(guild: discord.Guild, level: str, stream: str, ki
     if exact:
         return exact
 
-    keywords = ("exam", "examen", "épreuve") if kind == "exams" else ("emploi", "horaire", "planning", "timetable")
+    keywords = (
+        ("exam", "examen", "épreuve")
+        if kind == "exams"
+        else ("emploi", "horaire", "planning", "timetable")
+    )
     category = _find_stream_category(guild, level, stream)
     if category:
         for channel in category.text_channels:
             name = channel.name.casefold()
             if code.casefold() in name and any(k in name for k in keywords):
                 return channel
-    return next((c for c in guild.text_channels if code.casefold() in c.name.casefold() and any(k in c.name.casefold() for k in keywords)), None)
+    return next(
+        (
+            c
+            for c in guild.text_channels
+            if code.casefold() in c.name.casefold()
+            and any(k in c.name.casefold() for k in keywords)
+        ),
+        None,
+    )
+
+
+def _resolve_guild_for_config(config: dict[str, Any]) -> discord.Guild | None:
+    """Resolve the guild owning a configuration without mutating Discord Command objects."""
+    bot = _BOT
+    if bot is None:
+        return None
+    guilds = list(getattr(bot, "guilds", []))
+    if len(guilds) == 1:
+        return guilds[0]
+    for guild in guilds:
+        if storage.get_guild_config(guild.id) == config:
+            return guild
+    return None
 
 
 def discover_managed_ids(config: dict[str, Any]) -> tuple[set[int], set[int], set[int]]:
-    guild = _CURRENT_GUILD.get()
+    """Return registered IDs plus safely identifiable legacy School Manager IDs."""
+    guild = _resolve_guild_for_config(config)
     role_ids = _configured_ids(config, "roles")
     channel_ids = _configured_ids(config, "channels")
     category_ids = _configured_ids(config, "categories")
     if guild is None:
         return role_ids, channel_ids, category_ids
 
-    codes = {get_stream_abbreviation(level, stream) for level in get_levels() for stream in get_streams(level)}
+    codes = {
+        get_stream_abbreviation(level, stream)
+        for level in get_levels()
+        for stream in get_streams(level)
+    }
     fixed_categories = {CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE}
     for category in guild.categories:
         if category.name in fixed_categories or any(_token(category.name, code) for code in codes):
             category_ids.add(category.id)
+
     for category in guild.categories:
         if category.id in category_ids:
             channel_ids.update(channel.id for channel in category.channels)
 
     fixed_channels = set(GENERAL_CHANNELS.values()) | set(PROFESSOR_CHANNELS.values())
-    channel_ids.update(channel.id for channel in guild.channels if getattr(channel, "name", None) in fixed_channels)
+    channel_ids.update(
+        channel.id
+        for channel in guild.channels
+        if getattr(channel, "name", None) in fixed_channels
+    )
 
-    role_names = {permissions_module.ROLE_ADMIN, permissions_module.ROLE_PROFESSOR, permissions_module.ROLE_PROFESSOR_FEMALE, permissions_module.ROLE_STUDENT}
+    role_names = {
+        permissions_module.ROLE_ADMIN,
+        permissions_module.ROLE_PROFESSOR,
+        permissions_module.ROLE_PROFESSOR_FEMALE,
+        permissions_module.ROLE_STUDENT,
+    }
     for level in get_levels():
         for stream in get_streams(level):
             code = get_stream_abbreviation(level, stream)
-            role_names.update({_stream_role_name(level, stream), _student_stream_role_name(level, stream), f"{permissions_module.STREAM_ROLE_PREFIX}{code}", f"{permissions_module.STUDENT_STREAM_ROLE_PREFIX}{code}"})
-            role_names.update(_subject_role_name(level, stream, subject) for subject in get_stream_subjects(level, stream))
+            role_names.update({
+                _stream_role_name(level, stream),
+                _student_stream_role_name(level, stream),
+                f"{permissions_module.STREAM_ROLE_PREFIX}{code}",
+                f"{permissions_module.STUDENT_STREAM_ROLE_PREFIX}{code}",
+            })
+            role_names.update(
+                _subject_role_name(level, stream, subject)
+                for subject in get_stream_subjects(level, stream)
+            )
+
     for role in guild.roles:
-        if role.name in role_names or (role.name.startswith(permissions_module.SUBJECT_ROLE_PREFIX) and any(_token(role.name, code) for code in codes)):
+        if role.name in role_names:
+            role_ids.add(role.id)
+        elif role.name.startswith(permissions_module.SUBJECT_ROLE_PREFIX) and any(
+            _token(role.name, code) for code in codes
+        ):
             role_ids.add(role.id)
     return role_ids, channel_ids, category_ids
-
-
-def _wrap_reset(command: Any) -> None:
-    original = command.callback
-    if getattr(original, "__school_manager_runtime_fix__", False):
-        return
-
-    async def wrapped(*args: Any, **kwargs: Any) -> Any:
-        interaction = next((v for v in (*args, *kwargs.values()) if isinstance(v, discord.Interaction)), None)
-        marker = _CURRENT_GUILD.set(interaction.guild if interaction else None)
-        try:
-            return await original(*args, **kwargs)
-        finally:
-            _CURRENT_GUILD.reset(marker)
-    wrapped.__school_manager_runtime_fix__ = True
-    command.callback = wrapped
 
 
 def _subject_suggestions(interaction: discord.Interaction, current: str) -> list[discord.app_commands.Choice[str]]:
@@ -186,13 +232,19 @@ def _subject_suggestions(interaction: discord.Interaction, current: str) -> list
     if level not in get_levels() or stream not in get_streams(level):
         return []
     return [
-        discord.app_commands.Choice(name=get_subject_display_name(subject)[:100], value=get_subject_display_name(subject))
+        discord.app_commands.Choice(
+            name=get_subject_display_name(subject)[:100],
+            value=get_subject_display_name(subject),
+        )
         for subject in get_stream_subjects(level, stream)
         if current.casefold() in get_subject_display_name(subject).casefold()
     ][:25]
 
 
 def apply_runtime_fixes(bot: Any) -> None:
+    global _BOT
+    _BOT = bot
+
     import cogs.admin as admin_module
     import cogs.server_v3 as server_module
     import cogs.teachers as teachers_module
@@ -203,10 +255,6 @@ def apply_runtime_fixes(bot: Any) -> None:
     teachers_module._find_managed_channel = find_subject_channel_compat
     admin_module._find_stream_channel = find_stream_channel_compat
     server_module._configured_managed_ids = discover_managed_ids
-
-    reset_command = bot.tree.get_command("resetserver")
-    if reset_command is not None:
-        _wrap_reset(reset_command)
 
     setexam_command = bot.tree.get_command("setexam")
     if setexam_command is not None:
