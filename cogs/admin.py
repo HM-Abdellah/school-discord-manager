@@ -6,28 +6,85 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config.curriculum import get_levels, get_stream_abbreviation, get_streams, get_stream_subjects, get_subject_display_name
+from config.curriculum import (
+    get_levels,
+    get_stream_abbreviation,
+    get_stream_subjects,
+    get_streams,
+    get_subject_display_name,
+)
 from services.audit import recent_events, record_event
-from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, _preflight_message, management_check
+from services.permissions import (
+    ROLE_ADMIN,
+    ROLE_PROFESSOR,
+    ROLE_PROFESSOR_FEMALE,
+    _preflight_message,
+    get_managed_role,
+    management_check,
+)
 from services.server_builder import _subject_role_name
-from services.storage import get_guild_config, list_academic_years
+from services.storage import get_guild_config, list_academic_years, save_guild_config
+
+
+def _contains(value: str, current: str) -> bool:
+    return current.casefold() in value.casefold()
 
 
 async def level_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-    return [app_commands.Choice(name=level, value=level) for level in get_levels() if current.lower() in level.lower()][:25]
+    return [app_commands.Choice(name=level, value=level) for level in get_levels() if _contains(level, current)][:25]
 
 
 async def stream_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
     level = str(getattr(interaction.namespace, "level", ""))
     if level not in get_levels():
         return []
-    return [app_commands.Choice(name=stream, value=stream) for stream in get_streams(level) if current.lower() in stream.lower()][:25]
+    return [app_commands.Choice(name=stream, value=stream) for stream in get_streams(level) if _contains(stream, current)][:25]
 
 
 def _find_stream_channel(guild: discord.Guild, level: str, stream: str, kind: str) -> discord.TextChannel | None:
+    """Resolve timetable/exam channel using the persisted managed ID first, then canonical name."""
     code = get_stream_abbreviation(level, stream)
-    prefix = {"timetable": f"🗓️-{code}・", "exams": f"📝-{code}・"}[kind]
-    return discord.utils.find(lambda channel: isinstance(channel, discord.TextChannel) and channel.name.startswith(prefix), guild.text_channels)
+    expected_name = {
+        "timetable": f"🗓️-{code}・emploi-du-temps",
+        "exams": f"📝-{code}・examens",
+    }[kind]
+    config = get_guild_config(guild.id) or {}
+    managed = config.get("managed", {})
+    channels = managed.get("channels", {}) if isinstance(managed, dict) else {}
+    channel_id = channels.get(expected_name) if isinstance(channels, dict) else None
+    if isinstance(channel_id, int):
+        channel = guild.get_channel(channel_id)
+        if isinstance(channel, discord.TextChannel):
+            return channel
+    exact = discord.utils.get(guild.text_channels, name=expected_name)
+    if isinstance(exact, discord.TextChannel):
+        return exact
+    prefix = expected_name.split("・", 1)[0] + "・"
+    return discord.utils.find(
+        lambda channel: isinstance(channel, discord.TextChannel) and channel.name.startswith(prefix),
+        guild.text_channels,
+    )
+
+
+def _find_managed_role_by_name(guild: discord.Guild, role_name: str) -> discord.Role | None:
+    return get_managed_role(guild, role_name)
+
+
+async def _ensure_subject_role(guild: discord.Guild, role_name: str, config: dict) -> discord.Role:
+    role = _find_managed_role_by_name(guild, role_name)
+    if role is not None:
+        return role
+    role = await guild.create_role(
+        name=role_name,
+        permissions=discord.Permissions.none(),
+        colour=discord.Colour.dark_blue(),
+        mentionable=False,
+        reason="School manager subject role created on demand",
+    )
+    managed = config.setdefault("managed", {})
+    managed_roles = managed.setdefault("roles", {})
+    managed_roles[role_name] = role.id
+    return role
 
 
 async def _upsert_bot_embed(channel: discord.TextChannel, *, marker: str, embed: discord.Embed) -> discord.Message:
@@ -120,44 +177,42 @@ class AdminCommands(commands.Cog):
             await interaction.response.send_message("❌ Aucune matière reconnue. Sépare les noms par des virgules.", ephemeral=True)
             return
         stream_code = get_stream_abbreviation(level, stream)
-        stream_role = discord.utils.get(guild.roles, name=f"Filière - {stream_code}")
+        stream_role = _find_managed_role_by_name(guild, f"Filière - {stream_code}")
         if stream_role is None:
-            await interaction.response.send_message("❌ Lance `/build` avant d'affecter ce professeur.", ephemeral=True)
+            await interaction.response.send_message("❌ Cette filière n'est pas encore construite. Aucun `/build` supplémentaire n'est nécessaire si elle est déjà configurée; vérifie `/status`.", ephemeral=True)
             return
-        subject_roles = []
-        for subject in chosen:
-            role_name = _subject_role_name(level, stream, subject)
-            role = discord.utils.get(guild.roles, name=role_name)
-            if role is None:
-                await interaction.response.send_message(f"❌ Rôle matière manquant: `{role_name}`. Lance `/build`.", ephemeral=True)
-                return
-            subject_roles.append(role)
         desired_base = ROLE_PROFESSOR_FEMALE if gender.value == "female" else ROLE_PROFESSOR
-        desired_role = discord.utils.get(guild.roles, name=desired_base)
-        other_role = discord.utils.get(guild.roles, name=ROLE_PROFESSOR if gender.value == "female" else ROLE_PROFESSOR_FEMALE)
-        original_roles = list(teacher.roles)
+        desired_role = _find_managed_role_by_name(guild, desired_base)
+        if desired_role is None:
+            await interaction.response.send_message(f"❌ Le rôle géré `{desired_base}` est introuvable. Reconstruis la configuration uniquement si ce rôle n'existe vraiment plus.", ephemeral=True)
+            return
+        other_role = _find_managed_role_by_name(guild, ROLE_PROFESSOR if gender.value == "female" else ROLE_PROFESSOR_FEMALE)
+
+        await interaction.response.defer(ephemeral=True)
+        config = get_guild_config(guild.id) or {}
+        subject_roles: list[discord.Role] = []
         try:
+            for subject in chosen:
+                subject_roles.append(await _ensure_subject_role(guild, _subject_role_name(level, stream, subject), config))
             if other_role is not None and other_role in teacher.roles:
                 await teacher.remove_roles(other_role, reason="Teacher role normalization")
-            if desired_role is not None and desired_role not in teacher.roles:
+            if desired_role not in teacher.roles:
                 await teacher.add_roles(desired_role, reason="School manager teacher assignment")
             await teacher.add_roles(stream_role, *subject_roles, reason="School manager full teacher assignment")
+            save_guild_config(guild.id, config)
         except discord.Forbidden:
-            try:
-                current = [role for role in teacher.roles if role in original_roles]
-                to_remove = [role for role in teacher.roles if role not in original_roles and not role.managed]
-                to_add = [role for role in original_roles if role not in teacher.roles and not role.managed]
-                if to_remove:
-                    await teacher.remove_roles(*to_remove, reason="School Manager rollback")
-                if to_add:
-                    await teacher.add_roles(*to_add, reason="School Manager rollback")
-            except discord.HTTPException:
-                pass
-            await interaction.response.send_message("❌ Impossible d'attribuer les rôles. Vérifie la hiérarchie du bot.", ephemeral=True)
+            await interaction.followup.send("❌ Impossible d'attribuer les rôles. Vérifie la hiérarchie du bot.", ephemeral=True)
             return
+        except discord.HTTPException as exc:
+            await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
+            return
+        except OSError as exc:
+            await interaction.followup.send(f"❌ Stockage local : `{exc}`", ephemeral=True)
+            return
+
         subject_names = ", ".join(get_subject_display_name(subject) for subject in chosen)
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "assignteacherfull", teacher.display_name, f"{stream_code}: {subject_names}")
-        await interaction.response.send_message(f"✅ {teacher.mention} est affecté à **{stream_code}** pour: {subject_names}.", ephemeral=True)
+        await interaction.followup.send(f"✅ {teacher.mention} est affecté à **{stream_code}** pour: {subject_names}.", ephemeral=True)
 
     @app_commands.command(name="set_timetable", description="Mettre à jour l'emploi du temps d'une filière sans créer de nouveau salon.")
     @app_commands.describe(level="Niveau", stream="Filière", content="Contenu de l'emploi du temps")
@@ -168,16 +223,24 @@ class AdminCommands(commands.Cog):
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
+        if level not in get_levels() or stream not in get_streams(level):
+            await interaction.response.send_message("❌ Niveau ou filière invalide.", ephemeral=True)
+            return
         channel = _find_stream_channel(guild, level, stream, "timetable")
         if channel is None:
-            await interaction.response.send_message("❌ Channel d'emploi du temps introuvable. Lance `/build`.", ephemeral=True)
+            await interaction.response.send_message("❌ Channel d'emploi du temps introuvable pour cette filière. Vérifie `/status`; aucun nouveau `/build` ne doit être lancé aveuglément.", ephemeral=True)
             return
         code = get_stream_abbreviation(level, stream)
+        await interaction.response.defer(ephemeral=True)
         embed = discord.Embed(title=f"🗓️ Emploi du temps — {code}", description=content[:4000], colour=discord.Colour.blue())
         embed.timestamp = discord.utils.utcnow()
-        await _upsert_bot_embed(channel, marker=f"SchoolManager:T:{code}", embed=embed)
+        try:
+            await _upsert_bot_embed(channel, marker=f"SchoolManager:T:{code}", embed=embed)
+        except discord.HTTPException as exc:
+            await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
+            return
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "set_timetable", code, "Timetable updated")
-        await interaction.response.send_message(f"✅ Emploi du temps mis à jour dans {channel.mention}.", ephemeral=True)
+        await interaction.followup.send(f"✅ Emploi du temps mis à jour dans {channel.mention}.", ephemeral=True)
 
     @app_commands.command(name="setexam", description="Mettre à jour les examens d'une filière sans créer de nouveau salon.")
     @app_commands.describe(level="Niveau", stream="Filière", content="Dates, horaires et consignes des examens")
@@ -188,16 +251,24 @@ class AdminCommands(commands.Cog):
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
+        if level not in get_levels() or stream not in get_streams(level):
+            await interaction.response.send_message("❌ Niveau ou filière invalide.", ephemeral=True)
+            return
         channel = _find_stream_channel(guild, level, stream, "exams")
         if channel is None:
-            await interaction.response.send_message("❌ Channel d'examens introuvable. Lance `/build`.", ephemeral=True)
+            await interaction.response.send_message("❌ Channel d'examens introuvable pour cette filière. Vérifie `/status`; aucun nouveau `/build` ne doit être lancé aveuglément.", ephemeral=True)
             return
         code = get_stream_abbreviation(level, stream)
+        await interaction.response.defer(ephemeral=True)
         embed = discord.Embed(title=f"📝 Examens — {code}", description=content[:4000], colour=discord.Colour.orange())
         embed.timestamp = discord.utils.utcnow()
-        await _upsert_bot_embed(channel, marker=f"SchoolManager:E:{code}", embed=embed)
+        try:
+            await _upsert_bot_embed(channel, marker=f"SchoolManager:E:{code}", embed=embed)
+        except discord.HTTPException as exc:
+            await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
+            return
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "set_exam", code, "Exam schedule updated")
-        await interaction.response.send_message(f"✅ Examens mis à jour dans {channel.mention}.", ephemeral=True)
+        await interaction.followup.send(f"✅ Examens mis à jour dans {channel.mention}.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:
