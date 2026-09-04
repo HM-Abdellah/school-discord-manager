@@ -24,6 +24,18 @@ def _school_roles(member: discord.Member, guild: discord.Guild) -> list[discord.
     return [role for role in member.roles if role.id in managed_ids]
 
 
+def _student_assignment_roles(member: discord.Member, guild: discord.Guild) -> list[discord.Role]:
+    """Return only managed roles owned by student assignment, never admin/professor roles."""
+    managed_ids = _school_role_ids(guild)
+    roles = []
+    for role in member.roles:
+        if role.id not in managed_ids:
+            continue
+        if role.name == ROLE_STUDENT or role.name.startswith(STUDENT_STREAM_ROLE_PREFIX):
+            roles.append(role)
+    return roles
+
+
 async def _restore_school_roles(member: discord.Member, guild: discord.Guild, original_roles: list[discord.Role]) -> None:
     managed_ids = _school_role_ids(guild)
     current = [role for role in member.roles if role.id in managed_ids]
@@ -62,9 +74,10 @@ class StudentCommands(commands.Cog):
             return
 
         original_school_roles = _school_roles(student, guild)
+        original_student_roles = _student_assignment_roles(student, guild)
         try:
             cleanup_roles = [
-                role for role in _school_roles(student, guild)
+                role for role in original_student_roles
                 if role != student_role and role != student_stream_role
             ]
             if cleanup_roles:
