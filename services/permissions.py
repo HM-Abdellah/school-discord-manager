@@ -92,8 +92,21 @@ def _preflight_message(interaction: discord.Interaction, *, needs_channels: bool
     return None
 
 
+def _apply_default_permission(decorator, *, manage_roles: bool = False, administrator: bool = False):
+    """Add Discord-side command visibility while keeping the exact role check below."""
+    if administrator:
+        return app_commands.default_permissions(administrator=True)(decorator)
+    if manage_roles:
+        return app_commands.default_permissions(manage_roles=True)(decorator)
+    return decorator
+
+
 def management_check() -> app_commands.check:
-    """Allow the guild owner or the exact Administration role recorded by the bot."""
+    """Allow the guild owner or the exact Administration role recorded by the bot.
+
+    The decorator also sets a Discord-side default permission gate so Student/Prof roles
+    do not receive these management commands in normal command discovery.
+    """
     async def predicate(interaction: discord.Interaction) -> bool:
         guild = interaction.guild
         if guild is None:
@@ -118,10 +131,18 @@ def management_check() -> app_commands.check:
                 await interaction.response.send_message(message, ephemeral=True)
             return False
         return True
-    return app_commands.check(predicate)
+
+    check_decorator = app_commands.check(predicate)
+
+    def decorator(command):
+        command = check_decorator(command)
+        return _apply_default_permission(command, manage_roles=True)
+
+    return decorator
 
 
 def owner_only_check() -> app_commands.check:
+    """Allow only the server owner; Discord-side gate further hides the command from ordinary roles."""
     async def predicate(interaction: discord.Interaction) -> bool:
         guild = interaction.guild
         if guild is None or interaction.user.id != guild.owner_id:
@@ -134,7 +155,14 @@ def owner_only_check() -> app_commands.check:
                 await interaction.response.send_message(message, ephemeral=True)
             return False
         return True
-    return app_commands.check(predicate)
+
+    check_decorator = app_commands.check(predicate)
+
+    def decorator(command):
+        command = check_decorator(command)
+        return _apply_default_permission(command, administrator=True)
+
+    return decorator
 
 
 def administrator_overwrite() -> discord.PermissionOverwrite:
