@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 
 import discord
@@ -32,28 +33,22 @@ from services.permissions import (
 from services.server_builder import _subject_channel_name, _subject_role_name, _stream_role_name
 from services.storage import get_guild_config, save_guild_config
 
+MENTION_RE = re.compile(r"<@!?(\d+)>")
+
 
 def _contains(value: str, current: str) -> bool:
     return current.casefold() in value.casefold()
 
 
 async def level_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-    return [
-        app_commands.Choice(name=level, value=level)
-        for level in get_levels()
-        if _contains(level, current)
-    ][:25]
+    return [app_commands.Choice(name=level, value=level) for level in get_levels() if _contains(level, current)][:25]
 
 
 async def stream_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
     level = str(getattr(interaction.namespace, "level", ""))
     if level not in get_levels():
         return []
-    return [
-        app_commands.Choice(name=stream, value=stream)
-        for stream in get_streams(level)
-        if _contains(stream, current)
-    ][:25]
+    return [app_commands.Choice(name=stream, value=stream) for stream in get_streams(level) if _contains(stream, current)][:25]
 
 
 async def subject_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
@@ -70,7 +65,6 @@ async def subject_autocomplete(interaction: discord.Interaction, current: str) -
 
 
 def _find_managed_channel(guild: discord.Guild, expected_name: str) -> discord.TextChannel | None:
-    """Resolve a managed channel by persisted ID first, then by exact name."""
     config = get_guild_config(guild.id) or {}
     managed = config.get("managed", {})
     channels = managed.get("channels", {}) if isinstance(managed, dict) else {}
@@ -96,13 +90,11 @@ class TeacherCommands(commands.Cog):
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
-
         role_name = ROLE_PROFESSOR_FEMALE if gender.value == "female" else ROLE_PROFESSOR
         role = get_managed_role(guild, role_name)
         if role is None:
             await interaction.response.send_message(f"❌ Le rôle géré `{role_name}` n'existe pas encore. Lance `/setup` puis `/build`.", ephemeral=True)
             return
-
         await interaction.response.defer(ephemeral=True)
         try:
             other_name = ROLE_PROFESSOR if gender.value == "female" else ROLE_PROFESSOR_FEMALE
@@ -116,7 +108,6 @@ class TeacherCommands(commands.Cog):
         except discord.HTTPException as exc:
             await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
             return
-
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "assignteacher", teacher.display_name, role_name)
         await interaction.followup.send(f"✅ {teacher.mention} a reçu le rôle **{role_name}**.", ephemeral=True)
 
@@ -133,18 +124,7 @@ class TeacherCommands(commands.Cog):
     )
     @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete, subject=subject_autocomplete)
     @management_check()
-    async def assign_subject_teachers(
-        self,
-        interaction: discord.Interaction,
-        level: str,
-        stream: str,
-        subject: str,
-        teacher1: discord.Member,
-        teacher2: discord.Member | None = None,
-        teacher3: discord.Member | None = None,
-        teacher4: discord.Member | None = None,
-        teacher5: discord.Member | None = None,
-    ) -> None:
+    async def assign_subject_teachers(self, interaction: discord.Interaction, level: str, stream: str, subject: str, teacher1: discord.Member, teacher2: discord.Member | None = None, teacher3: discord.Member | None = None, teacher4: discord.Member | None = None, teacher5: discord.Member | None = None) -> None:
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
@@ -152,79 +132,42 @@ class TeacherCommands(commands.Cog):
         if level not in get_levels() or stream not in get_streams(level):
             await interaction.response.send_message("❌ Niveau ou filière invalide.", ephemeral=True)
             return
-
-        curriculum_subject = next(
-            (
-                candidate
-                for candidate in get_stream_subjects(level, stream)
-                if candidate == subject
-                or get_subject_display_name(candidate).casefold() == subject.casefold()
-            ),
-            None,
-        )
+        curriculum_subject = next((candidate for candidate in get_stream_subjects(level, stream) if candidate == subject or get_subject_display_name(candidate).casefold() == subject.casefold()), None)
         if curriculum_subject is None:
             await interaction.response.send_message("❌ Matière invalide pour cette filière.", ephemeral=True)
             return
-
         code = get_stream_abbreviation(level, stream)
         channel_name = _subject_channel_name(code, curriculum_subject)
         channel = _find_managed_channel(guild, channel_name)
         if channel is None:
-            await interaction.response.send_message(
-                f"❌ Le salon de matière **{channel_name}** n'existe pas. Lance `/setup` puis utilise `/build` uniquement si cette filière n'est pas encore construite.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message(f"❌ Le salon de matière **{channel_name}** n'existe pas. Vérifie `/status` avant tout nouveau build.", ephemeral=True)
             return
-
         stream_role_name = _stream_role_name(level, stream)
         subject_role_name = _subject_role_name(level, stream, curriculum_subject)
         stream_role = get_managed_role(guild, stream_role_name)
         if stream_role is None:
-            await interaction.response.send_message("❌ Le rôle géré de cette filière n'existe pas. Cette filière doit être présente dans la configuration construite.", ephemeral=True)
+            await interaction.response.send_message("❌ Le rôle géré de cette filière n'existe pas. Vérifie `/status`.", ephemeral=True)
             return
-
         selected_members: list[discord.Member] = []
         seen_ids: set[int] = set()
         for member in (teacher1, teacher2, teacher3, teacher4, teacher5):
-            if member is None or member.id in seen_ids:
-                continue
-            seen_ids.add(member.id)
-            selected_members.append(member)
-
-        prof_role_ids = {
-            role.id
-            for role in (
-                get_managed_role(guild, ROLE_PROFESSOR),
-                get_managed_role(guild, ROLE_PROFESSOR_FEMALE),
-            )
-            if role is not None
-        }
+            if member is not None and member.id not in seen_ids:
+                seen_ids.add(member.id)
+                selected_members.append(member)
+        prof_role_ids = {role.id for role in (get_managed_role(guild, ROLE_PROFESSOR), get_managed_role(guild, ROLE_PROFESSOR_FEMALE)) if role is not None}
         invalid = [member for member in selected_members if not any(role.id in prof_role_ids for role in member.roles)]
         if invalid:
             names = ", ".join(member.display_name for member in invalid)
             await interaction.response.send_message(f"❌ Ces membres n'ont pas le rôle géré `Prof` ou `Prof (F)` : {names}", ephemeral=True)
             return
-
         await interaction.response.defer(ephemeral=True)
         config = get_guild_config(guild.id) or {}
         subject_role = get_managed_role(guild, subject_role_name)
         try:
             if subject_role is None:
-                subject_role = await guild.create_role(
-                    name=subject_role_name,
-                    permissions=discord.Permissions.none(),
-                    colour=discord.Colour.dark_blue(),
-                    mentionable=False,
-                    reason="School manager subject role created on demand",
-                )
-                managed = config.setdefault("managed", {})
-                managed_roles = managed.setdefault("roles", {})
-                managed_roles[subject_role_name] = subject_role.id
-
-            overwrites = {
-                guild.default_role: hidden_overwrite(),
-                stream_role: professor_subject_view_overwrite(),
-            }
+                subject_role = await guild.create_role(name=subject_role_name, permissions=discord.Permissions.none(), colour=discord.Colour.dark_blue(), mentionable=False, reason="School manager subject role created on demand")
+                config.setdefault("managed", {}).setdefault("roles", {})[subject_role_name] = subject_role.id
+            overwrites = {guild.default_role: hidden_overwrite(), stream_role: professor_subject_view_overwrite()}
             admin_role = get_managed_role(guild, ROLE_ADMIN)
             prof_role = get_managed_role(guild, ROLE_PROFESSOR)
             prof_f_role = get_managed_role(guild, ROLE_PROFESSOR_FEMALE)
@@ -238,7 +181,6 @@ class TeacherCommands(commands.Cog):
             if student_stream_role is not None:
                 overwrites[student_stream_role] = student_overwrite(can_send=True)
             overwrites[subject_role] = professor_subject_member_overwrite()
-
             await channel.edit(overwrites=overwrites, reason="School manager subject teacher access")
             for member in selected_members:
                 await member.add_roles(stream_role, subject_role, reason=f"School manager teacher assignment: {code} / {curriculum_subject}")
@@ -252,16 +194,10 @@ class TeacherCommands(commands.Cog):
         except OSError as exc:
             await interaction.followup.send(f"❌ Stockage local : `{exc}`", ephemeral=True)
             return
-
-        mentions = ", ".join(member.mention for member in selected_members)
         subject_display = get_subject_display_name(curriculum_subject)
+        mentions = ", ".join(member.mention for member in selected_members)
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "assignsubjectteachers", ", ".join(member.display_name for member in selected_members), f"{code} / {subject_display}")
-        await interaction.followup.send(
-            f"✅ **{len(selected_members)} professeur(s)** affecté(s) à **{code} / {subject_display}**.\n"
-            f"Salon : {channel.mention}\nRôles ajoutés : `{stream_role_name}` + `{subject_role_name}`\n"
-            f"Professeurs : {mentions}",
-            ephemeral=True,
-        )
+        await interaction.followup.send(f"✅ **{len(selected_members)} professeur(s)** affecté(s) à **{code} / {subject_display}**.\nSalon : {channel.mention}\nRôles ajoutés : `{stream_role_name}` + `{subject_role_name}`\nProfesseurs : {mentions}", ephemeral=True)
 
     @app_commands.command(name="reportabsence", description="Publier une annonce d'absence d'un professeur.")
     @app_commands.describe(teacher="Professeur absent", duration="Durée de l'absence, par exemple : 3 jours", classes="Classes concernées, par exemple : 1BACSE C1/C2")
