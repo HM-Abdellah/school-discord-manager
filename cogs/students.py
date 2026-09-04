@@ -12,6 +12,29 @@ from services.permissions import ROLE_STUDENT, STUDENT_STREAM_ROLE_PREFIX, get_m
 from services.storage import enroll_student_record, get_active_academic_year, get_guild_config, get_student, get_student_history, mark_student_left
 
 
+def _contains(value: str, current: str) -> bool:
+    return current.casefold() in value.casefold()
+
+
+async def level_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    return [
+        app_commands.Choice(name=level, value=level)
+        for level in get_levels()
+        if _contains(level, current)
+    ][:25]
+
+
+async def stream_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    level = str(getattr(interaction.namespace, "level", ""))
+    if level not in get_levels():
+        return []
+    return [
+        app_commands.Choice(name=stream, value=stream)
+        for stream in get_streams(level)
+        if _contains(stream, current)
+    ][:25]
+
+
 def _school_role_ids(guild: discord.Guild) -> set[int]:
     config = get_guild_config(guild.id) or {}
     managed = config.get("managed", {})
@@ -54,6 +77,7 @@ class StudentCommands(commands.Cog):
 
     @app_commands.command(name="assignstudent", description="Affecter un élève à une filière.")
     @app_commands.describe(student="Élève", level="Niveau scolaire", stream="Filière scolaire")
+    @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete)
     @management_check()
     async def assign_student(self, interaction: discord.Interaction, student: discord.Member, level: str, stream: str) -> None:
         guild = interaction.guild
@@ -75,6 +99,7 @@ class StudentCommands(commands.Cog):
 
         original_school_roles = _school_roles(student, guild)
         original_student_roles = _student_assignment_roles(student, guild)
+        await interaction.response.defer(ephemeral=True)
         try:
             cleanup_roles = [
                 role for role in original_student_roles
@@ -89,26 +114,26 @@ class StudentCommands(commands.Cog):
                 await _restore_school_roles(student, guild, original_school_roles)
             except discord.HTTPException:
                 pass
-            await interaction.response.send_message("❌ Vérifie que le rôle du bot est assez haut dans la hiérarchie.", ephemeral=True)
+            await interaction.followup.send("❌ Vérifie que le rôle du bot est assez haut dans la hiérarchie.", ephemeral=True)
             return
         except discord.HTTPException as exc:
             try:
                 await _restore_school_roles(student, guild, original_school_roles)
             except discord.HTTPException:
                 pass
-            await interaction.response.send_message(f"❌ Discord API : `{exc}`", ephemeral=True)
+            await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
             return
         except Exception as exc:
             try:
                 await _restore_school_roles(student, guild, original_school_roles)
             except discord.HTTPException:
                 pass
-            await interaction.response.send_message(f"❌ Affectation annulée; les rôles Discord ont été restaurés si possible : `{type(exc).__name__}: {exc}`", ephemeral=True)
+            await interaction.followup.send(f"❌ Affectation annulée; les rôles Discord ont été restaurés si possible : `{type(exc).__name__}: {exc}`", ephemeral=True)
             return
 
         code = get_stream_abbreviation(level, stream)
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "assignstudent", student.display_name, f"{level}: {code}")
-        await interaction.response.send_message(f"✅ {student.mention} est maintenant dans **{code}** ({level}).", ephemeral=True)
+        await interaction.followup.send(f"✅ {student.mention} est maintenant dans **{code}** ({level}).", ephemeral=True)
 
     @app_commands.command(name="studenthistory", description="Voir l'historique scolaire d'un élève.")
     @app_commands.describe(student="Élève")
@@ -140,6 +165,7 @@ class StudentCommands(commands.Cog):
             return
         original_school_roles = _school_roles(student, guild)
         student_assignment_roles = _student_assignment_roles(student, guild)
+        await interaction.response.defer(ephemeral=True)
         try:
             if student_assignment_roles:
                 await student.remove_roles(*student_assignment_roles, reason="Student left school")
@@ -149,25 +175,25 @@ class StudentCommands(commands.Cog):
                 await _restore_school_roles(student, guild, original_school_roles)
             except discord.HTTPException:
                 pass
-            await interaction.response.send_message("❌ Impossible de retirer les rôles. Vérifie la hiérarchie; l'historique n'a pas été modifié.", ephemeral=True)
+            await interaction.followup.send("❌ Impossible de retirer les rôles. Vérifie la hiérarchie; l'historique n'a pas été modifié.", ephemeral=True)
             return
         except discord.HTTPException as exc:
             try:
                 await _restore_school_roles(student, guild, original_school_roles)
             except discord.HTTPException:
                 pass
-            await interaction.response.send_message(f"❌ Discord API : `{exc}`. L'historique n'a pas été modifié.", ephemeral=True)
+            await interaction.followup.send(f"❌ Discord API : `{exc}`. L'historique n'a pas été modifié.", ephemeral=True)
             return
         except Exception as exc:
             try:
                 await _restore_school_roles(student, guild, original_school_roles)
             except discord.HTTPException:
                 pass
-            await interaction.response.send_message(f"❌ Opération annulée; les rôles ont été restaurés si possible et l'historique n'a pas été modifié : `{type(exc).__name__}: {exc}`", ephemeral=True)
+            await interaction.followup.send(f"❌ Opération annulée; les rôles ont été restaurés si possible et l'historique n'a pas été modifié : `{type(exc).__name__}: {exc}`", ephemeral=True)
             return
 
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "leave_school", student.display_name, "Student marked left school")
-        await interaction.response.send_message(f"✅ {student.mention} est marqué **sorti de l'établissement**. Son historique est conservé.", ephemeral=True)
+        await interaction.followup.send(f"✅ {student.mention} est marqué **sorti de l'établissement**. Son historique est conservé.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:
