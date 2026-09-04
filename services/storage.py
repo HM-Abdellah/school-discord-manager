@@ -68,7 +68,6 @@ def _create_enrollments_table(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_legacy_enrollments(conn: sqlite3.Connection) -> None:
-    """Migrate legacy class-based rows when a safe class->stream mapping exists; otherwise retain a backup."""
     if not _table_exists(conn, "enrollments"):
         _create_enrollments_table(conn)
         return
@@ -77,7 +76,6 @@ def _migrate_legacy_enrollments(conn: sqlite3.Connection) -> None:
         return
     if "class_id" not in columns or "student_id" not in columns:
         return
-
     legacy_name = _next_legacy_name(conn)
     conn.execute(f"ALTER TABLE enrollments RENAME TO {legacy_name}")
     _create_enrollments_table(conn)
@@ -108,16 +106,12 @@ def _deduplicate_active_enrollments(conn: sqlite3.Connection) -> None:
 
 
 def _deduplicate_active_academic_years(conn: sqlite3.Connection) -> None:
-    """Keep the newest active academic year per guild before adding the uniqueness constraint."""
     conn.execute("""
         UPDATE academic_years
         SET is_active=0
         WHERE is_active=1
           AND id NOT IN (
-              SELECT MAX(id)
-              FROM academic_years
-              WHERE is_active=1
-              GROUP BY guild_id
+              SELECT MAX(id) FROM academic_years WHERE is_active=1 GROUP BY guild_id
           )
     """)
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_one_active_academic_year_per_guild ON academic_years(guild_id) WHERE is_active=1")
@@ -167,7 +161,6 @@ def get_guild_config(guild_id: int) -> dict[str, Any] | None:
 
 
 def save_guild_config(guild_id: int, config: dict[str, Any]) -> None:
-    """Persist JSON and its relational representation with rollback on write failure."""
     initialize_database()
     old_data = load_all()
     new_data = deepcopy(old_data)
@@ -192,25 +185,47 @@ def delete_guild_config(guild_id: int) -> None:
     save_all(data)
 
 
+def _write_json_temp(data: dict[str, Any]) -> str:
+    _ensure_storage()
+    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{CONFIG_FILE.name}.transaction.", dir=DATA_DIR, text=True)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return temp_name
+
+
 def reset_guild_data(guild_id: int) -> None:
-    """Delete all persisted application data belonging to one guild in one transaction."""
+    """Reset JSON and SQLite state with coordinated rollback on persistence failure."""
     old_data = load_all()
     new_data = deepcopy(old_data)
     new_data.pop(str(guild_id), None)
+    old_config_temp = _write_json_temp(old_data)
+    new_config_temp = _write_json_temp(new_data)
     try:
         with _connect() as conn:
-            conn.execute("DELETE FROM students WHERE guild_id=?", (guild_id,))
-            conn.execute("DELETE FROM streams WHERE guild_id=?", (guild_id,))
-            conn.execute("DELETE FROM academic_years WHERE guild_id=?", (guild_id,))
-            if _table_exists(conn, "audit_events"):
-                conn.execute("DELETE FROM audit_events WHERE guild_id=?", (guild_id,))
-        save_all(new_data)
-    except Exception:
-        try:
-            save_all(old_data)
-        except Exception:
-            pass
-        raise
+            try:
+                conn.execute("DELETE FROM students WHERE guild_id=?", (guild_id,))
+                conn.execute("DELETE FROM streams WHERE guild_id=?", (guild_id,))
+                conn.execute("DELETE FROM academic_years WHERE guild_id=?", (guild_id,))
+                if _table_exists(conn, "audit_events"):
+                    conn.execute("DELETE FROM audit_events WHERE guild_id=?", (guild_id,))
+                os.replace(new_config_temp, CONFIG_FILE)
+                new_config_temp = ""
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                try:
+                    os.replace(old_config_temp, CONFIG_FILE)
+                    old_config_temp = ""
+                except OSError:
+                    pass
+                raise
+    finally:
+        for path in (old_config_temp, new_config_temp):
+            if path and os.path.exists(path):
+                os.unlink(path)
 
 
 def ensure_academic_year(guild_id: int, name: str, *, active: bool = False) -> int:
