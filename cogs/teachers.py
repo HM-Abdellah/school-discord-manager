@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from datetime import date
 
 import discord
@@ -32,8 +31,6 @@ from services.permissions import (
 )
 from services.server_builder import _subject_channel_name, _subject_role_name, _stream_role_name
 from services.storage import get_guild_config, save_guild_config
-
-MENTION_RE = re.compile(r"<@!?(\d+)>")
 
 
 def _contains(value: str, current: str) -> bool:
@@ -70,6 +67,20 @@ async def subject_autocomplete(interaction: discord.Interaction, current: str) -
         if _contains(display, current) or _contains(subject, current):
             choices.append(app_commands.Choice(name=display[:100], value=subject))
     return choices[:25]
+
+
+def _find_managed_channel(guild: discord.Guild, expected_name: str) -> discord.TextChannel | None:
+    """Resolve a managed channel by persisted ID first, then by exact name."""
+    config = get_guild_config(guild.id) or {}
+    managed = config.get("managed", {})
+    channels = managed.get("channels", {}) if isinstance(managed, dict) else {}
+    channel_id = channels.get(expected_name) if isinstance(channels, dict) else None
+    if isinstance(channel_id, int):
+        channel = guild.get_channel(channel_id)
+        if isinstance(channel, discord.TextChannel):
+            return channel
+    channel = discord.utils.get(guild.text_channels, name=expected_name)
+    return channel if isinstance(channel, discord.TextChannel) else None
 
 
 class TeacherCommands(commands.Cog):
@@ -157,16 +168,19 @@ class TeacherCommands(commands.Cog):
 
         code = get_stream_abbreviation(level, stream)
         channel_name = _subject_channel_name(code, curriculum_subject)
-        channel = discord.utils.get(guild.text_channels, name=channel_name)
+        channel = _find_managed_channel(guild, channel_name)
         if channel is None:
-            await interaction.response.send_message("❌ Le salon de matière n'existe pas encore. Lance `/build`.", ephemeral=True)
+            await interaction.response.send_message(
+                f"❌ Le salon de matière **{channel_name}** n'existe pas. Lance `/setup` puis utilise `/build` uniquement si cette filière n'est pas encore construite.",
+                ephemeral=True,
+            )
             return
 
         stream_role_name = _stream_role_name(level, stream)
         subject_role_name = _subject_role_name(level, stream, curriculum_subject)
         stream_role = get_managed_role(guild, stream_role_name)
         if stream_role is None:
-            await interaction.response.send_message("❌ Le rôle géré de cette filière n'existe pas encore. Lance `/build`.", ephemeral=True)
+            await interaction.response.send_message("❌ Le rôle géré de cette filière n'existe pas. Cette filière doit être présente dans la configuration construite.", ephemeral=True)
             return
 
         selected_members: list[discord.Member] = []
