@@ -166,13 +166,13 @@ class ServerBuilder:
 
     def _find_text(self, category: discord.CategoryChannel, name: str) -> discord.TextChannel | None:
         return discord.utils.find(
-            lambda channel: isinstance(channel, discord.TextChannel) and channel.parent_id == category.id and channel.name == name,
+            lambda channel: isinstance(channel, discord.TextChannel) and channel.category_id == category.id and channel.name == name,
             self._channel_snapshot,
         )
 
     def _find_voice(self, category: discord.CategoryChannel, name: str) -> discord.VoiceChannel | None:
         return discord.utils.find(
-            lambda channel: isinstance(channel, discord.VoiceChannel) and channel.parent_id == category.id and channel.name == name,
+            lambda channel: isinstance(channel, discord.VoiceChannel) and channel.category_id == category.id and channel.name == name,
             self._channel_snapshot,
         )
 
@@ -208,8 +208,8 @@ class ServerBuilder:
             if category is None:
                 missing_channels += len(expected_text) + len(expected_voice)
                 continue
-            existing_text = {channel.name for channel in self._channel_snapshot if isinstance(channel, discord.TextChannel) and channel.parent_id == category.id}
-            existing_voice = {channel.name for channel in self._channel_snapshot if isinstance(channel, discord.VoiceChannel) and channel.parent_id == category.id}
+            existing_text = {channel.name for channel in self._channel_snapshot if isinstance(channel, discord.TextChannel) and channel.category_id == category.id}
+            existing_voice = {channel.name for channel in self._channel_snapshot if isinstance(channel, discord.VoiceChannel) and channel.category_id == category.id}
             missing_channels += len(expected_text - existing_text)
             missing_channels += len(expected_voice - existing_voice)
 
@@ -217,14 +217,14 @@ class ServerBuilder:
             for stream in level.get("streams", []):
                 category = self._find_category(_stream_category_name(level["name"], stream["name"], stream.get("abbreviation")))
                 expected = self._planned_channel_names_for_stream(stream)
-                existing = {channel.name for channel in self._channel_snapshot if isinstance(channel, discord.TextChannel) and category is not None and channel.parent_id == category.id}
+                existing = {channel.name for channel in self._channel_snapshot if isinstance(channel, discord.TextChannel) and category is not None and channel.category_id == category.id}
                 missing_channels += len(expected - existing)
 
         voice_category = self._find_category(CATEGORY_VOICE)
         if voice_category is None:
             missing_channels += len(streams)
         else:
-            existing_voice = {channel.name for channel in self._channel_snapshot if isinstance(channel, discord.VoiceChannel) and channel.parent_id == voice_category.id}
+            existing_voice = {channel.name for channel in self._channel_snapshot if isinstance(channel, discord.VoiceChannel) and channel.category_id == voice_category.id}
             missing_channels += sum(
                 1
                 for stream in streams
