@@ -90,7 +90,7 @@ async def test_existing_text_channel_is_reused_without_edit_or_create():
     channel = MagicMock(spec=discord.TextChannel)
     channel.name = "test-channel"
     channel.id = 456
-    channel.parent_id = 123
+    channel.category_id = 123
     category = MagicMock(spec=discord.CategoryChannel)
     category.text_channels = [channel]
     category.id = 123
@@ -117,7 +117,7 @@ async def test_existing_voice_channel_is_reused_without_edit_or_create():
     channel = MagicMock(spec=discord.VoiceChannel)
     channel.name = "test-voice"
     channel.id = 789
-    channel.parent_id = 123
+    channel.category_id = 123
     category = MagicMock(spec=discord.CategoryChannel)
     category.voice_channels = [channel]
     category.id = 123
