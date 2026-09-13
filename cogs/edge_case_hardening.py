@@ -43,10 +43,7 @@ def _repair_removed_stream_config(config: dict, level: str, stream: str) -> dict
     return candidate
 
 
-_ORIGINAL_REMOVE_STREAM = hardened.HardenedServerCommands.remove_stream.callback
-
-
-async def _patched_remove_stream_callback(self, interaction, level: str, stream: str) -> None:
+async def _patched_remove_stream_callback(original_callback, interaction, level: str, stream: str) -> None:
     original_save = hardened.save_guild_config
 
     def guarded_save(guild_id: int, config: dict) -> None:
@@ -56,14 +53,20 @@ async def _patched_remove_stream_callback(self, interaction, level: str, stream:
     async with _PATCH_LOCK:
         hardened.save_guild_config = guarded_save
         try:
-            await _ORIGINAL_REMOVE_STREAM(self, interaction, level, stream)
+            await original_callback(interaction, level, stream)
         finally:
             hardened.save_guild_config = original_save
 
 
-hardened.HardenedServerCommands.remove_stream.callback = _patched_remove_stream_callback
-
-
 async def setup(bot) -> None:
-    """Apply isolated edge-case patch after the hardened cog has loaded."""
-    return None
+    """Patch the command already registered by security_hardening_v2."""
+    command = bot.tree.get_command("removestream")
+    if command is None or getattr(command, "_edge_case_hardening_applied", False):
+        return
+    original_callback = command.callback
+
+    async def guarded_callback(interaction, level: str, stream: str) -> None:
+        await _patched_remove_stream_callback(original_callback, interaction, level, stream)
+
+    command.callback = guarded_callback
+    command._edge_case_hardening_applied = True
