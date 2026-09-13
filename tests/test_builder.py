@@ -113,6 +113,31 @@ async def test_existing_text_channel_is_reused_without_edit_or_create():
 
 
 @pytest.mark.asyncio
+async def test_existing_text_channel_is_reused_from_category_even_when_snapshot_type_misses_it():
+    channel = MagicMock()
+    channel.name = "test-channel"
+    channel.id = 456
+    channel.category_id = 123
+    category = MagicMock(spec=discord.CategoryChannel)
+    category.text_channels = [channel]
+    category.id = 123
+    category.create_text_channel = AsyncMock()
+
+    builder = ServerBuilder(SimpleNamespace())
+    builder._channel_snapshot = []
+
+    result = await builder._get_or_create_text(
+        category,
+        "test-channel",
+        topic="topic",
+        overwrites={},
+    )
+
+    assert result is channel
+    category.create_text_channel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_existing_voice_channel_is_reused_without_edit_or_create():
     channel = MagicMock(spec=discord.VoiceChannel)
     channel.name = "test-voice"
@@ -131,4 +156,24 @@ async def test_existing_voice_channel_is_reused_without_edit_or_create():
 
     assert result is channel
     channel.edit.assert_not_awaited()
+    category.create_voice_channel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_existing_voice_channel_is_reused_from_category_even_when_snapshot_is_empty():
+    channel = MagicMock()
+    channel.name = "test-voice"
+    channel.id = 789
+    channel.category_id = 123
+    category = MagicMock(spec=discord.CategoryChannel)
+    category.voice_channels = [channel]
+    category.id = 123
+    category.create_voice_channel = AsyncMock()
+
+    builder = ServerBuilder(SimpleNamespace())
+    builder._channel_snapshot = []
+
+    result = await builder._get_or_create_voice(category, "test-voice", {})
+
+    assert result is channel
     category.create_voice_channel.assert_not_awaited()
