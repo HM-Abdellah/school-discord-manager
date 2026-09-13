@@ -13,7 +13,7 @@ os.environ.setdefault("DISCORD_GUILD_ID", "123456789")
 
 from bot import SchoolBot
 from cogs.admin import AdminCommands
-from cogs.server_v3 import _configured_managed_ids
+from cogs.server_v3 import _configured_managed_ids, _expected_structure_names
 
 
 def test_all_bot_extensions_have_async_setup_entrypoints():
@@ -80,3 +80,25 @@ def test_legacy_resource_discovery_requires_exact_canonical_names():
     assert roles == {501}
     assert channels == {401}
     assert categories == {301}
+
+
+def test_build_structure_does_not_require_on_demand_subject_roles():
+    config = {
+        "levels": [
+            {
+                "name": "Tronc Commun",
+                "streams": [
+                    {
+                        "name": "Tronc Commun Scientifique",
+                        "abbreviation": "TCS",
+                        "subjects": ["Mathématiques", "Physique-Chimie"],
+                    }
+                ],
+            }
+        ]
+    }
+    expected_roles, expected_categories, expected_channels = _expected_structure_names(config)
+    assert expected_roles == {"Administration", "Prof", "Prof (F)", "Élève", "Filière - TCS", "Élèves - TCS"}
+    assert "Matière - TCS - MAT" not in expected_roles
+    assert "Matière - TCS - PC" not in expected_roles
+    assert len(expected_channels["📘・TC・🔬 TCS"]) == 5
