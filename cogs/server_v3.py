@@ -113,49 +113,29 @@ def _expected_structure_names(config: dict) -> tuple[set[str], set[str], dict[st
 
 
 async def _managed_resource_state(guild: discord.Guild, config: dict) -> tuple[bool, int, int, int]:
-    """Inspect fresh Discord state using category channel collections as the canonical source."""
+    """Inspect Discord state using the same category channel collections as the builder."""
     expected_roles, expected_categories, expected_channels_by_category = _expected_structure_names(config)
     try:
         channels = list(await guild.fetch_channels())
     except (discord.Forbidden, discord.HTTPException):
         channels = list(guild.channels)
 
-    categories_by_name = {
-        channel.name: channel
-        for channel in channels
-        if isinstance(channel, discord.CategoryChannel)
-    }
+    categories_by_name = {channel.name: channel for channel in channels if isinstance(channel, discord.CategoryChannel)}
     if not categories_by_name:
         categories_by_name = {category.name: category for category in guild.categories}
 
-    existing_roles = sum(
-        1
-        for name in expected_roles
-        if any(role.name == name and not role.managed for role in guild.roles)
-    )
+    existing_roles = sum(1 for name in expected_roles if any(role.name == name and not role.managed for role in guild.roles))
     existing_categories = sum(1 for name in expected_categories if name in categories_by_name)
     existing_channels = 0
     expected_channel_count = sum(len(names) for names in expected_channels_by_category.values())
-
     for category_name, expected_names in expected_channels_by_category.items():
         category = categories_by_name.get(category_name)
         if category is None:
             continue
-        existing_names = {
-            channel.name
-            for channel in (
-                list(getattr(category, "text_channels", []))
-                + list(getattr(category, "voice_channels", []))
-                + list(getattr(category, "forums", []))
-            )
-        }
+        existing_names = {channel.name for channel in (list(getattr(category, "text_channels", [])) + list(getattr(category, "voice_channels", [])) + list(getattr(category, "forums", [])))}
         existing_channels += len(expected_names & existing_names)
 
-    complete = (
-        existing_roles == len(expected_roles)
-        and existing_categories == len(expected_categories)
-        and existing_channels == expected_channel_count
-    )
+    complete = existing_roles == len(expected_roles) and existing_categories == len(expected_categories) and existing_channels == expected_channel_count
     return complete, existing_roles, existing_channels, existing_categories
 
 
@@ -185,9 +165,6 @@ class ServerCommands(commands.Cog):
             await interaction.response.send_message("❌ Utilise d'abord `/setup`.", ephemeral=True)
             return
         complete, existing_roles, existing_channels, existing_categories = await _managed_resource_state(guild, config)
-        if complete:
-            await interaction.response.send_message(f"✅ **Déjà construit.** Rien à recréer : {existing_roles} rôles · {existing_categories} catégories · {existing_channels} channels gérés sont déjà présents.", ephemeral=True)
-            return
         await interaction.response.send_message("🏗️ Synchronisation sécurisée en cours...", ephemeral=True)
         try:
             stats = await _run_build(guild, config)
@@ -199,6 +176,10 @@ class ServerCommands(commands.Cog):
             return
         except Exception as exc:
             await interaction.followup.send(f"❌ Erreur : `{type(exc).__name__}: {exc}`", ephemeral=True)
+            return
+        created_total = stats.roles_created + stats.categories_created + stats.text_channels_created + stats.voice_channels_created + stats.forums_created
+        if created_total == 0:
+            await interaction.followup.send(f"✅ **Déjà construit.** Rien à recréer : {existing_roles} rôles · {existing_categories} catégories · {existing_channels} channels gérés sont déjà présents.", ephemeral=True)
             return
         await interaction.followup.send(f"✅ Structure synchronisée. Niveaux: {stats.levels_processed} · Filières: {stats.streams_processed} · Rôles créés: {stats.roles_created} · Catégories créées: {stats.categories_created} · Texte créé: {stats.text_channels_created} · Vocaux créés: {stats.voice_channels_created}", ephemeral=True)
 
