@@ -34,7 +34,6 @@ async def stream_autocomplete(interaction: discord.Interaction, current: str) ->
 
 
 def _configured_managed_ids(config: dict, guild: discord.Guild | None = None) -> tuple[set[int], set[int], set[int]]:
-    """Return registered IDs and exact canonical legacy IDs for a supplied guild."""
     managed = config.get("managed", {}) if isinstance(config, dict) else {}
     managed = managed if isinstance(managed, dict) else {}
 
@@ -63,8 +62,6 @@ def _configured_managed_ids(config: dict, guild: discord.Guild | None = None) ->
             code = str(stream.get("abbreviation") or get_stream_abbreviation(level_name, stream_name))
             expected_categories.add(_stream_category_name(level_name, stream_name, code))
             expected_roles.update({f"{STREAM_ROLE_PREFIX}{code}", f"{STUDENT_STREAM_ROLE_PREFIX}{code}"})
-            subjects = stream.get("subjects", []) or get_stream_subjects(level_name, stream_name)
-            expected_roles.update(_subject_role_name(level_name, stream_name, subject) for subject in subjects)
     for category in guild.categories:
         if category.name in expected_categories:
             category_ids.add(category.id)
@@ -115,18 +112,39 @@ def _expected_structure_names(config: dict) -> tuple[set[str], set[str], dict[st
     return expected_roles, expected_categories, expected_channels_by_category
 
 
-def _managed_resource_state(guild: discord.Guild, config: dict) -> tuple[bool, int, int, int]:
+async def _managed_resource_state(guild: discord.Guild, config: dict) -> tuple[bool, int, int, int]:
+    """Inspect fresh Discord state so build decisions never rely on a stale gateway cache."""
     expected_roles, expected_categories, expected_channels_by_category = _expected_structure_names(config)
-    existing_roles = sum(1 for name in expected_roles if discord.utils.get(guild.roles, name=name, managed=False) is not None)
-    existing_categories = sum(1 for name in expected_categories if discord.utils.get(guild.categories, name=name) is not None)
+    try:
+        channels = list(await guild.fetch_channels())
+    except (discord.Forbidden, discord.HTTPException):
+        channels = list(guild.channels)
+
+    categories_by_name = {channel.name: channel for channel in channels if isinstance(channel, discord.CategoryChannel)}
+    existing_roles = sum(
+        1
+        for name in expected_roles
+        if any(role.name == name and not role.managed for role in guild.roles)
+    )
+    existing_categories = sum(1 for name in expected_categories if name in categories_by_name)
     existing_channels = 0
     expected_channel_count = sum(len(names) for names in expected_channels_by_category.values())
     for category_name, expected_names in expected_channels_by_category.items():
-        category = discord.utils.get(guild.categories, name=category_name)
+        category = categories_by_name.get(category_name)
         if category is None:
             continue
-        existing_channels += len(expected_names & {channel.name for channel in category.channels})
-    complete = existing_roles == len(expected_roles) and existing_categories == len(expected_categories) and existing_channels == expected_channel_count
+        existing_names = {
+            channel.name
+            for channel in channels
+            if isinstance(channel, (discord.TextChannel, discord.VoiceChannel))
+            and channel.category_id == category.id
+        }
+        existing_channels += len(expected_names & existing_names)
+    complete = (
+        existing_roles == len(expected_roles)
+        and existing_categories == len(expected_categories)
+        and existing_channels == expected_channel_count
+    )
     return complete, existing_roles, existing_channels, existing_categories
 
 
@@ -155,7 +173,7 @@ class ServerCommands(commands.Cog):
         if not config:
             await interaction.response.send_message("❌ Utilise d'abord `/setup`.", ephemeral=True)
             return
-        complete, existing_roles, existing_channels, existing_categories = _managed_resource_state(guild, config)
+        complete, existing_roles, existing_channels, existing_categories = await _managed_resource_state(guild, config)
         if complete:
             await interaction.response.send_message(f"✅ **Déjà construit.** Rien à recréer : {existing_roles} rôles · {existing_categories} catégories · {existing_channels} channels gérés sont déjà présents.", ephemeral=True)
             return
