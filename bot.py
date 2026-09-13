@@ -32,7 +32,6 @@ class SchoolBot(commands.Bot):
         "cogs.admin",
         "cogs.command_fixes",
         "cogs.year_rollback",
-        "cogs.command_ui",
         "cogs.security_hardening_v2",
     )
 
