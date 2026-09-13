@@ -28,8 +28,9 @@ class YearRollbackCommands(commands.Cog):
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True)
         if confirm.strip().upper() != "ROLLBACK SCHOOL YEAR":
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Confirmation exacte requise : `ROLLBACK SCHOOL YEAR`.",
                 ephemeral=True,
             )
@@ -37,12 +38,12 @@ class YearRollbackCommands(commands.Cog):
 
         config = get_guild_config(guild.id)
         if not config:
-            await interaction.response.send_message("❌ Configuration absente.", ephemeral=True)
+            await interaction.followup.send("❌ Configuration absente.", ephemeral=True)
             return
 
         current_year = config.get("academic_year")
         if year == current_year:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"ℹ️ **{year}** est déjà l'année scolaire active.",
                 ephemeral=True,
             )
@@ -52,7 +53,7 @@ class YearRollbackCommands(commands.Cog):
         years = list_academic_years(guild.id)
         target = next((row for row in years if row["name"] == year), None)
         if target is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ L'année **{year}** n'est pas enregistrée. Utilise `/years` pour voir les années disponibles.",
                 ephemeral=True,
             )
@@ -60,13 +61,13 @@ class YearRollbackCommands(commands.Cog):
 
         lock = get_build_lock(guild.id)
         if lock.locked():
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "⏳ Une construction est déjà en cours sur ce serveur.",
                 ephemeral=True,
             )
             return
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"↩️ Rollback vers **{year}** en cours...",
             ephemeral=True,
         )
