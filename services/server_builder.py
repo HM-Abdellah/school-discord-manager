@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import unicodedata
 
 import discord
 
@@ -66,6 +67,10 @@ def _safe_name(value: str, max_length: int = 80) -> str:
     value = value.lower().replace("’", "'").replace(" ", "-")
     value = re.sub(r"[^\w\-àâçéèêëîïôûùüÿñæœ']+", "-", value, flags=re.UNICODE)
     return re.sub(r"-+", "-", value).strip("-")[:max_length]
+
+
+def _normalize_channel_name(value: str) -> str:
+    return unicodedata.normalize("NFKC", value).casefold()
 
 
 def _subject_channel_name(stream_code: str, subject: str) -> str:
@@ -159,21 +164,45 @@ class ServerBuilder:
         self._channel_snapshot = list(await self.guild.fetch_channels())
 
     def _find_category(self, name: str) -> discord.CategoryChannel | None:
-        return discord.utils.find(
-            lambda channel: isinstance(channel, discord.CategoryChannel) and channel.name == name,
+        normalized_name = _normalize_channel_name(name)
+        category = discord.utils.find(
+            lambda channel: isinstance(channel, discord.CategoryChannel) and _normalize_channel_name(channel.name) == normalized_name,
             self._channel_snapshot,
+        )
+        if category is not None:
+            return category
+        return discord.utils.find(
+            lambda channel: isinstance(channel, discord.CategoryChannel) and _normalize_channel_name(channel.name) == normalized_name,
+            getattr(self.guild, "categories", []),
         )
 
     def _find_text(self, category: discord.CategoryChannel, name: str) -> discord.TextChannel | None:
-        return discord.utils.find(
-            lambda channel: isinstance(channel, discord.TextChannel) and channel.category_id == category.id and channel.name == name,
+        normalized_name = _normalize_channel_name(name)
+        channel = discord.utils.find(
+            lambda item: item is not category
+            and _normalize_channel_name(getattr(item, "name", "")) == normalized_name
+            and getattr(item, "category_id", None) == category.id,
             self._channel_snapshot,
+        )
+        if channel is not None and not isinstance(channel, discord.VoiceChannel):
+            return channel
+        return discord.utils.find(
+            lambda item: _normalize_channel_name(getattr(item, "name", "")) == normalized_name,
+            getattr(category, "text_channels", []),
         )
 
     def _find_voice(self, category: discord.CategoryChannel, name: str) -> discord.VoiceChannel | None:
-        return discord.utils.find(
-            lambda channel: isinstance(channel, discord.VoiceChannel) and channel.category_id == category.id and channel.name == name,
+        normalized_name = _normalize_channel_name(name)
+        channel = discord.utils.find(
+            lambda item: _normalize_channel_name(getattr(item, "name", "")) == normalized_name
+            and getattr(item, "category_id", None) == category.id,
             self._channel_snapshot,
+        )
+        if channel is not None and isinstance(channel, discord.VoiceChannel):
+            return channel
+        return discord.utils.find(
+            lambda item: _normalize_channel_name(getattr(item, "name", "")) == normalized_name,
+            getattr(category, "voice_channels", []),
         )
 
     async def _pace_after_create(self) -> None:
@@ -208,27 +237,27 @@ class ServerBuilder:
             if category is None:
                 missing_channels += len(expected_text) + len(expected_voice)
                 continue
-            existing_text = {channel.name for channel in self._channel_snapshot if isinstance(channel, discord.TextChannel) and channel.category_id == category.id}
-            existing_voice = {channel.name for channel in self._channel_snapshot if isinstance(channel, discord.VoiceChannel) and channel.category_id == category.id}
-            missing_channels += len(expected_text - existing_text)
-            missing_channels += len(expected_voice - existing_voice)
+            existing_text = {_normalize_channel_name(channel.name) for channel in getattr(category, "text_channels", [])}
+            existing_voice = {_normalize_channel_name(channel.name) for channel in getattr(category, "voice_channels", [])}
+            missing_channels += sum(1 for expected in expected_text if _normalize_channel_name(expected) not in existing_text)
+            missing_channels += sum(1 for expected in expected_voice if _normalize_channel_name(expected) not in existing_voice)
 
         for level in selected.get("levels", []):
             for stream in level.get("streams", []):
                 category = self._find_category(_stream_category_name(level["name"], stream["name"], stream.get("abbreviation")))
                 expected = self._planned_channel_names_for_stream(stream)
-                existing = {channel.name for channel in self._channel_snapshot if isinstance(channel, discord.TextChannel) and category is not None and channel.category_id == category.id}
-                missing_channels += len(expected - existing)
+                existing = {_normalize_channel_name(channel.name) for channel in getattr(category, "text_channels", [])} if category is not None else set()
+                missing_channels += sum(1 for expected_name in expected if _normalize_channel_name(expected_name) not in existing)
 
         voice_category = self._find_category(CATEGORY_VOICE)
         if voice_category is None:
             missing_channels += len(streams)
         else:
-            existing_voice = {channel.name for channel in self._channel_snapshot if isinstance(channel, discord.VoiceChannel) and channel.category_id == voice_category.id}
+            existing_voice = {_normalize_channel_name(channel.name) for channel in getattr(voice_category, "voice_channels", [])}
             missing_channels += sum(
                 1
                 for stream in streams
-                if f"🔊-{_safe_name(stream.get('abbreviation') or stream.get('name', ''), 30)}-à-distance" not in existing_voice
+                if _normalize_channel_name(f"🔊-{_safe_name(stream.get('abbreviation') or stream.get('name', ''), 30)}-à-distance") not in existing_voice
             )
 
         projected_channels = len(self._channel_snapshot) + missing_channels
