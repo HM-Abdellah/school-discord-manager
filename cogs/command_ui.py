@@ -51,19 +51,26 @@ async def subject_autocomplete(interaction: discord.Interaction, current: str) -
     return choices[:25]
 
 
-def _resolve_subject(level: str, stream: str, value: str) -> str | None:
-    for candidate in get_stream_subjects(level, stream):
-        if candidate.casefold() == value.casefold() or get_subject_display_name(candidate).casefold() == value.casefold():
-            return candidate
+def _time_choices() -> list[app_commands.Choice[str]]:
+    return [
+        app_commands.Choice(name=f"{hour:02d}:{minute:02d}", value=f"{hour:02d}:{minute:02d}")
+        for hour in range(7, 21)
+        for minute in (0, 30)
+    ][:25]
+
+
+def _parse_exam_date(value: str):
+    """Accept YYYY-MM-DD and the shorter MM/DD format used in Discord manually."""
+    value = value.strip()
+    for fmt in ("%Y-%m-%d", "%m/%d", "%m-%d"):
+        try:
+            parsed = datetime.strptime(value, fmt).date()
+            if fmt != "%Y-%m-%d":
+                parsed = parsed.replace(year=datetime.now().year)
+            return parsed
+        except ValueError:
+            continue
     return None
-
-
-def _valid_time(value: str) -> bool:
-    try:
-        datetime.strptime(value, "%H:%M")
-        return True
-    except ValueError:
-        return False
 
 
 class CommandUI(commands.Cog):
@@ -141,12 +148,13 @@ class CommandUI(commands.Cog):
         level="Niveau scolaire",
         stream="Filière scolaire",
         subject="Matière",
-        exam_date="Date au format YYYY-MM-DD",
-        start_time="Heure de début, format HH:MM",
-        end_time="Heure de fin, format HH:MM",
+        exam_date="Date: YYYY-MM-DD ou MM/DD (ex. 09/17)",
+        start_time="Heure de début (suggestions)",
+        end_time="Heure de fin (suggestions)",
         details="Détails ou consignes (optionnel)",
     )
     @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete, subject=subject_autocomplete)
+    @app_commands.choices(start_time=_time_choices(), end_time=_time_choices())
     @management_check()
     async def set_exam(
         self,
@@ -155,8 +163,8 @@ class CommandUI(commands.Cog):
         stream: str,
         subject: str,
         exam_date: str,
-        start_time: str,
-        end_time: str,
+        start_time: app_commands.Choice[str],
+        end_time: app_commands.Choice[str],
         details: str | None = None,
     ) -> None:
         guild = interaction.guild
@@ -172,15 +180,15 @@ class CommandUI(commands.Cog):
         if curriculum_subject is None:
             await interaction.followup.send("❌ Matière invalide pour cette filière.", ephemeral=True)
             return
-        try:
-            parsed_date = datetime.strptime(exam_date, "%Y-%m-%d").date()
-        except ValueError:
-            await interaction.followup.send("❌ Date invalide. Utilise `YYYY-MM-DD`.", ephemeral=True)
+
+        parsed_date = _parse_exam_date(exam_date)
+        if parsed_date is None:
+            await interaction.followup.send("❌ Date invalide. Utilise `YYYY-MM-DD` ou `MM/DD` comme `09/17`.", ephemeral=True)
             return
-        if not _valid_time(start_time) or not _valid_time(end_time):
-            await interaction.followup.send("❌ Heure invalide. Utilise `HH:MM`, par exemple `08:00`.", ephemeral=True)
-            return
-        if start_time >= end_time:
+
+        start_value = start_time.value
+        end_value = end_time.value
+        if start_value >= end_value:
             await interaction.followup.send("❌ L'heure de début doit être avant l'heure de fin.", ephemeral=True)
             return
 
@@ -197,8 +205,8 @@ class CommandUI(commands.Cog):
             colour=discord.Colour.red(),
             description=(
                 f"**Filière :** {code}\n"
-                f"**Date :** {parsed_date.isoformat()}\n"
-                f"**Horaire :** {start_time} → {end_time}\n"
+                f"**Date :** {parsed_date.strftime('%m/%d/%Y')}\n"
+                f"**Horaire :** {start_value} → {end_value}\n"
                 f"**Détails :** {details or 'Aucun'}"
             ),
         )
@@ -212,8 +220,16 @@ class CommandUI(commands.Cog):
             await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
             return
 
-        record_event(guild.id, interaction.user.id, interaction.user.display_name, "setexam", code, f"{subject_display} | {exam_date} | {start_time}-{end_time}")
+        record_event(guild.id, interaction.user.id, interaction.user.display_name, "setexam", code, f"{subject_display} | {parsed_date.isoformat()} | {start_value}-{end_value}")
         await interaction.followup.send(f"✅ Examen de **{subject_display}** publié dans {channel.mention}.", ephemeral=True)
+
+
+# Keep this helper local because the command uses the same subject autocomplete contract as the original command.
+def _resolve_subject(level: str, stream: str, value: str) -> str | None:
+    for candidate in get_stream_subjects(level, stream):
+        if candidate.casefold() == value.casefold() or get_subject_display_name(candidate).casefold() == value.casefold():
+            return candidate
+    return None
 
 
 async def setup(bot: commands.Bot) -> None:
