@@ -259,40 +259,67 @@ class ServerCommands(commands.Cog):
         target["streams"] = [item for item in target.get("streams", []) if item.get("name") != stream]
         candidate["levels"] = [item for item in candidate.get("levels", []) if item.get("streams")]
         await interaction.response.send_message(f"🗑️ Suppression de **{code}** en cours...", ephemeral=True)
+        print(f"[REMOVE] Start guild={guild.id} level={level} stream={stream} code={code}", flush=True)
         lock = get_build_lock(guild.id)
         if lock.locked():
+            print(f"[REMOVE] Blocked: build lock already held guild={guild.id}", flush=True)
             await interaction.followup.send("⏳ Une construction est déjà en cours sur ce serveur.", ephemeral=True)
             return
         try:
             async with lock:
                 category_name = _stream_category_name(level, stream, code)
+                print(f"[REMOVE] Category target: {category_name}", flush=True)
                 category = discord.utils.find(lambda item: isinstance(item, discord.CategoryChannel) and item.name == category_name, guild.categories)
                 if category is not None:
-                    for channel in list(category.channels):
+                    channels = list(category.channels)
+                    print(f"[REMOVE] Category found id={category.id}; deleting channels={len(channels)}", flush=True)
+                    for channel in channels:
+                        print(f"[REMOVE] -> channel delete: {channel.name} ({channel.id})", flush=True)
                         await channel.delete(reason="School manager stream removal")
+                    print(f"[REMOVE] -> category delete: {category.name} ({category.id})", flush=True)
                     await category.delete(reason="School manager stream category removal")
+                else:
+                    print(f"[REMOVE] Category not found: {category_name}", flush=True)
                 voice_category = discord.utils.get(guild.categories, name=CATEGORY_VOICE)
+                voice_name = f"🔊-{_safe_name(code, 30)}-à-distance"
                 if voice_category is not None:
-                    voice = discord.utils.get(voice_category.voice_channels, name=f"🔊-{_safe_name(code, 30)}-à-distance")
+                    voice = discord.utils.get(voice_category.voice_channels, name=voice_name)
                     if voice is not None:
+                        print(f"[REMOVE] -> voice delete: {voice.name} ({voice.id})", flush=True)
                         await voice.delete(reason="School manager stream removal")
+                    else:
+                        print(f"[REMOVE] Voice not found: {voice_name}", flush=True)
+                else:
+                    print(f"[REMOVE] Voice category not found: {CATEGORY_VOICE}", flush=True)
                 managed_roles = config.get("managed", {}).get("roles", {}) if isinstance(config.get("managed", {}), dict) else {}
                 role_names = {f"{STREAM_ROLE_PREFIX}{code}", f"{STUDENT_STREAM_ROLE_PREFIX}{code}"}
                 role_names.update(_subject_role_name(level, stream, subject) for subject in get_stream_subjects(level, stream))
                 ids_to_delete = {value for name, value in managed_roles.items() if name in role_names and isinstance(value, int)}
                 ids_to_delete.update(role.id for role in guild.roles if not role.managed and role.name in role_names)
+                print(f"[REMOVE] Roles targeted: {sorted(role_names)}", flush=True)
                 top_role = guild.me.top_role if guild.me is not None else None
+                deleted_roles = 0
+                skipped_roles = 0
                 for role_id in ids_to_delete:
                     role = guild.get_role(role_id)
                     if role is not None and not role.managed and not role.is_default() and (top_role is None or role < top_role):
+                        print(f"[REMOVE] -> role delete: {role.name} ({role.id})", flush=True)
                         await role.delete(reason="School manager stream role cleanup")
+                        deleted_roles += 1
+                    else:
+                        skipped_roles += 1
+                print(f"[REMOVE] Role cleanup done deleted={deleted_roles} skipped={skipped_roles}", flush=True)
+                print(f"[REMOVE] Saving configuration without stream={stream}", flush=True)
                 save_guild_config(guild.id, candidate)
         except discord.NotFound:
+            print(f"[REMOVE] NotFound while removing code={code}", flush=True)
             await interaction.followup.send(f"⚠️ Une ressource de **{code}** était déjà absente. Configuration inchangée; vérifie `/status`.", ephemeral=True)
             return
         except (discord.Forbidden, discord.HTTPException, OSError) as exc:
+            print(f"[REMOVE] Failed code={code}: {type(exc).__name__}: {exc}", flush=True)
             await interaction.followup.send(f"❌ Suppression interrompue; configuration inchangée : `{type(exc).__name__}: {exc}`", ephemeral=True)
             return
+        print(f"[REMOVE] Complete guild={guild.id} code={code}", flush=True)
         await interaction.followup.send(f"✅ **{code}** supprimée.", ephemeral=True)
 
     @app_commands.command(name="newyear", description="Créer une nouvelle année scolaire et la rendre active.")
