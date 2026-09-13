@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import discord
-from discord.ext import commands
 from discord import app_commands
+from discord.ext import commands
 
-from config.curriculum import get_streams
 from services.audit import recent_events
 from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, _preflight_message, management_check
 from services.storage import get_guild_config, list_academic_years
