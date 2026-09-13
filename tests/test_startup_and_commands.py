@@ -25,7 +25,8 @@ def test_all_bot_extensions_have_async_setup_entrypoints():
 
 
 def test_security_hardening_is_loaded_last_and_duplicate_ui_is_not_loaded():
-    assert SchoolBot.EXTENSIONS[-1] == "cogs.security_hardening_v2"
+    assert SchoolBot.EXTENSIONS[-1] == "cogs.edge_case_hardening"
+    assert SchoolBot.EXTENSIONS[-2] == "cogs.security_hardening_v2"
     assert "cogs.command_ui" not in SchoolBot.EXTENSIONS
     assert "cogs.security_hardening" not in SchoolBot.EXTENSIONS
 
