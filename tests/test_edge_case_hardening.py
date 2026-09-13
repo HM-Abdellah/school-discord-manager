@@ -1,3 +1,8 @@
+from types import SimpleNamespace
+
+import pytest
+
+from cogs import edge_case_hardening as edge
 from cogs.edge_case_hardening import _repair_removed_stream_config
 
 
@@ -60,3 +65,37 @@ def test_removestream_repair_is_noop_for_non_matching_level_or_malformed_streams
 
     assert repaired == config
     assert repaired is not config
+
+
+@pytest.mark.asyncio
+async def test_edge_patch_rewrites_config_before_the_original_save(monkeypatch):
+    saved = []
+
+    async def original_callback(_interaction, _level, _stream):
+        edge.hardened.save_guild_config(
+            123,
+            {
+                "levels": [
+                    {
+                        "name": "Tronc Commun",
+                        "streams": [
+                            {"name": "Tronc Commun Scientifique"},
+                            {"name": "Tronc Commun Lettres"},
+                        ],
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr(edge.hardened, "save_guild_config", lambda guild_id, config: saved.append((guild_id, config)))
+
+    await edge._patched_remove_stream_callback(
+        original_callback,
+        SimpleNamespace(),
+        "Tronc Commun",
+        "Tronc Commun Scientifique",
+    )
+
+    assert len(saved) == 1
+    assert saved[0][0] == 123
+    assert saved[0][1]["levels"][0]["streams"] == [{"name": "Tronc Commun Lettres"}]
