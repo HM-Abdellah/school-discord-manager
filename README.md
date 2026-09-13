@@ -2,9 +2,9 @@
 
 A Discord bot for generating and managing a clean, role-driven school server for Moroccan secondary education.
 
-## ✨ Current Discord architecture
+## ✨ Current architecture
 
-The server uses a **real Discord category for every stream**. This makes the stream name a true title instead of creating a fake writable/readonly title channel.
+The server uses a **real Discord category for every stream**. The stream name is therefore the category title rather than a fake writable/readonly channel.
 
 ```text
 📘・TC・🔬 TCS
@@ -12,45 +12,32 @@ The server uses a **real Discord category for every stream**. This makes the str
 ├── 🗓️-TCS・emploi-du-temps
 ├── 📝-TCS・examens
 └── 📚-TCS・Math / PC / SVT / ...
-
-📘・TC・📩 TCL
-├── 📌-TCL・informations
-├── 🗓️-TCL・emploi-du-temps
-├── 📝-TCL・examens
-└── 📚-TCL・...
-
-1️⃣・1BAC・🧪 1BACSE
-└── ...
 ```
 
-Each stream has one shared academic space for all of its classes/groups. No Discord channel or role is created per class.
+Each stream has one shared academic space for its classes/groups. No Discord channel or role is created per class.
 
-The builder is idempotent: running `/build` again reconciles only resources whose state actually differs. Discord operations are bounded and logged so a stalled API call is visible instead of looking like a silent freeze.
+The builder is idempotent and uses a per-guild build lock. Re-running `/build` reconciles the configured School Manager resources instead of formatting the server.
 
 ## 👥 Roles and permissions
 
-Main roles:
+Core roles:
 
 - `Administration`
 - `Prof`
 - `Prof (F)`
 - `Élève`
 
-For each stream, the bot creates separate roles for teachers and students:
+Stream roles are recorded by Discord ID in the guild configuration. Management authorization uses the configured Administration role ID, while the server owner remains an owner-only management path for dangerous operations.
 
-- `Filière - 1BACSE` → teacher stream role
-- `Élèves - 1BACSE` → student stream role
-- `Matière - 1BACSE - Math` → teacher role scoped to one subject and one stream
-
-The management role is authorized by its **Discord role ID stored in the guild configuration**, not by role name alone. The server owner remains an emergency management path.
+Destructive operations resolve targets from the persisted managed-resource registry rather than expanding their scope from matching names.
 
 ## 📅 Academic years and student history
 
-School data is separated from Discord channels. The bot stores academic years, students and enrollment history in local SQLite at `data/school.db`.
+Academic data is stored separately from Discord resources in SQLite at `data/school.db`.
 
-Enrollment operations are idempotent: assigning a student to the same active stream again does not create a duplicate history record. SQLite also enforces one active enrollment per student.
+Student enrollment is idempotent: assigning a student to the same active stream again does not create a duplicate active enrollment, and SQLite enforces one active enrollment per student.
 
-At the start of a new school year:
+Example yearly workflow:
 
 ```text
 /newyear 2027/2028
@@ -58,41 +45,28 @@ At the start of a new school year:
 /build
 ```
 
-Previous years remain stored for archive/history features.
+Previous academic years remain available for history/archive features.
 
-## ⚙️ Setup and maintenance commands
+## ⚙️ Commands
+
+Setup and server maintenance:
 
 ```text
 /setup
-```
-Configure the levels and only the streams actually present in the school.
-
-```text
 /build
-```
-Reconcile the current configuration without formatting the server.
-
-```text
 /addstream
-```
-Add one stream using the same locked/idempotent build pipeline.
-
-```text
 /removestream
-```
-Remove only one configured stream, its dedicated category, voice room and managed roles.
-
-```text
 /status
 /years
 /newyear 2027/2028
+/rollbackyear
 ```
-Inspect configuration and manage academic years.
 
 Teacher/student administration:
 
 ```text
 /assignteacher
+/assignteacherfull
 /assignsubjectteachers
 /assignstudent
 /studenthistory
@@ -100,63 +74,75 @@ Teacher/student administration:
 /reportabsence
 ```
 
+Scheduling and exams:
+
+```text
+/set_timetable
+/setexam
+```
+
+Administration:
+
+```text
+/adminpanel
+/serverhealth
+```
+
 Dangerous maintenance:
 
 ```text
 /resetserver RESET SCHOOL MANAGER
 ```
-This is restricted to the Discord server owner and targets only resources recorded as School Manager managed resources. It does **not** format unrelated server channels/categories.
+
+`/resetserver` is restricted to the server owner and targets only resources recorded as School Manager managed resources. Unrelated channels and categories are intentionally outside its scope.
+
+## 🧱 Code organization
+
+```text
+bot.py
+  └── loads the cogs in a deliberate order
+
+cogs/
+  setup.py                 interactive setup wizard
+  server_v3.py             build/add/remove/status/year commands
+  students.py              student assignment and history
+  teachers.py              teacher/subject/absence commands
+  admin.py                 admin dashboard + health checks
+  command_fixes.py         active compatibility replacements
+  security_hardening_v2.py fail-closed security overrides
+  edge_case_hardening.py  isolated config-consistency compatibility patch
+  year_rollback.py         academic-year rollback workflow
+
+services/
+  permissions.py           authorization + hierarchy/preflight checks
+  server_builder.py        idempotent Discord resource reconciliation
+  storage.py               JSON configuration + SQLite persistence
+  build_guard.py           per-guild concurrency lock
+  audit.py                 audit-event persistence
+```
+
+`command_ui.py` and the older unused security-harden­ing layer are not part of the active extension set. The hardening cog is loaded after the normal command implementations so its strict versions are the effective application commands.
+
+## 🧪 Tests and CI
+
+GitHub Actions runs the test suite on pushes to `main` and pull requests, using Python 3.12 and 3.13.
+
+The suite covers command registration, managed-resource scope, permission edge cases, academic-year validation, storage durability, enrollment idempotency, destructive-operation boundaries, and edge-case configuration repair.
 
 ## 📚 Curriculum
 
-The academic catalogue lives in `config/curriculum.py`. The project currently includes only the configured streams in that catalogue; unsupported/unused streams such as `TCA` and Arts Appliqués are intentionally omitted for now.
-
-## 🧪 CI and tests
-
-GitHub Actions runs one test workflow on pushes and pull requests. Tests cover builder capacity, stream-category naming, permission authorization, configuration consistency, storage durability, enrollment idempotency and duplicate cleanup.
-
-## 📁 Project structure
-
-```text
-school-discord-manager/
-├── bot.py
-├── requirements.txt
-├── .env.example
-├── .gitignore
-├── README.md
-├── config/
-│   ├── __init__.py
-│   └── curriculum.py
-├── cogs/
-│   ├── __init__.py
-│   ├── setup.py
-│   ├── server_v3.py
-│   ├── students.py
-│   └── teachers.py
-├── services/
-│   ├── __init__.py
-│   ├── audit.py
-│   ├── build_guard.py
-│   ├── permissions.py
-│   ├── server_builder.py
-│   └── storage.py
-├── tests/
-└── data/
-    └── .gitkeep
-```
-
-Local `.env` and SQLite/JSON data are ignored by Git and must never contain secrets in commits.
+The academic catalogue lives in `config/curriculum.py`. Only streams present in that catalogue are accepted by the bot.
 
 ## 🔐 Token security
 
-Never commit your real Discord token.
-
-Create `.env` from `.env.example`:
+Never commit the real Discord bot token. Create `.env` from `.env.example`:
 
 ```env
 DISCORD_TOKEN=YOUR_REAL_DISCORD_BOT_TOKEN
 DISCORD_GUILD_ID=YOUR_TEST_SERVER_ID
 ```
+
+Local `.env` and runtime SQLite/JSON data are ignored by Git.
 
 ## 🛠️ Local installation
 
@@ -169,4 +155,4 @@ python -m pip install -r requirements.txt
 python bot.py
 ```
 
-The bot uses `discord.py` application commands and disables the message-content intent because the current command architecture does not need it.
+The bot uses Discord application commands and does not enable the message-content intent because the current architecture does not require message-content events.
