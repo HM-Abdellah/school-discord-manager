@@ -27,6 +27,7 @@ class SchoolBot(commands.Bot):
     EXTENSIONS = (
         "cogs.setup",
         "cogs.server_v3",
+        "cogs.year_rollback",
         "cogs.students",
         "cogs.teachers",
         "cogs.admin",
@@ -62,7 +63,7 @@ class SchoolBot(commands.Bot):
         print(f"Bot      : {self.user}")
         print(f"Bot ID   : {self.user.id}")
         print(f"Servers  : {len(self.guilds)}")
-        print("Commands : /setup /build /addstream /removestream /status /newyear /years /assignstudent /assignteacher /assignsubjectteachers /assignteacherfull /set_timetable /setexam /adminpanel /serverhealth /reportabsence /resetserver(owner)")
+        print("Commands : /setup /build /addstream /removestream /status /newyear /rollbackyear /years /assignstudent /assignteacher /assignsubjectteachers /assignteacherfull /set_timetable /setexam /adminpanel /serverhealth /reportabsence /resetserver(owner)")
         print("=" * 72)
 
 
