@@ -27,10 +27,11 @@ class SchoolBot(commands.Bot):
     EXTENSIONS = (
         "cogs.setup",
         "cogs.server_v3",
-        "cogs.year_rollback",
         "cogs.students",
         "cogs.teachers",
         "cogs.admin",
+        "cogs.command_fixes",
+        "cogs.year_rollback",
     )
 
     def __init__(self) -> None:
