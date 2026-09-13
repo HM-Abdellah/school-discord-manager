@@ -27,6 +27,7 @@ def test_all_bot_extensions_have_async_setup_entrypoints():
 def test_security_hardening_is_loaded_last_and_duplicate_ui_is_not_loaded():
     assert SchoolBot.EXTENSIONS[-1] == "cogs.security_hardening_v2"
     assert "cogs.command_ui" not in SchoolBot.EXTENSIONS
+    assert "cogs.security_hardening" not in SchoolBot.EXTENSIONS
 
 
 def test_bot_startup_has_no_runtime_fix_dependency():
@@ -36,14 +37,13 @@ def test_bot_startup_has_no_runtime_fix_dependency():
 
 
 @pytest.mark.asyncio
-async def test_admin_commands_can_register_without_mutating_discord_metadata():
+async def test_admin_commands_register_only_admin_dashboard_commands():
     intents = discord.Intents.none()
     bot = commands.Bot(command_prefix="!", intents=intents)
     await bot.add_cog(AdminCommands(bot))
-    command = bot.tree.get_command("setexam")
-    assert command is not None
-    content_parameter = next(parameter for parameter in command.parameters if parameter.name == "content")
-    assert getattr(content_parameter, "autocomplete", None) is not None
+    assert bot.tree.get_command("adminpanel") is not None
+    assert bot.tree.get_command("serverhealth") is not None
+    assert bot.tree.get_command("setexam") is None
     await bot.close()
 
 
