@@ -68,8 +68,21 @@ def test_valid_academic_years_are_accepted(value):
     assert _valid_academic_year(value) is True
 
 
+class FakeRole:
+    def __init__(self, name: str, role_id: int, managed: bool = False):
+        self.name = name
+        self.id = role_id
+        self.managed = managed
+
+    def __hash__(self):
+        return hash(self.id)
+
+    def __eq__(self, other):
+        return isinstance(other, FakeRole) and self.id == other.id
+
+
 def _role(name, role_id):
-    return SimpleNamespace(name=name, id=role_id, managed=False)
+    return FakeRole(name, role_id)
 
 
 def test_student_assignment_allows_student_reassignment_but_blocks_staff(monkeypatch):
