@@ -372,7 +372,7 @@ class ServerCommands(commands.Cog):
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
         if confirm.strip().upper() != "RESET SCHOOL MANAGER":
-            await interaction.response.send_message("❌ Confirmation exacte requise : `RESET SCHOOL MANAGER`. ", ephemeral=True)
+            await interaction.response.send_message("❌ Confirmation exacte requise : `RESET SCHOOL MANAGER`.", ephemeral=True)
             return
         lock = get_build_lock(guild.id)
         if lock.locked():
