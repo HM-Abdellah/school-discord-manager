@@ -6,10 +6,8 @@ import asyncio
 from copy import deepcopy
 
 from cogs import security_hardening_v2 as hardened
-from services.storage import get_guild_config
 
 _PATCH_LOCK = asyncio.Lock()
-_ORIGINAL_SAVE = hardened.save_guild_config
 
 
 def _repair_removed_stream_config(config: dict, level: str, stream: str) -> dict:
@@ -32,7 +30,8 @@ def _repair_removed_stream_config(config: dict, level: str, stream: str) -> dict
             repaired_levels.append(level_item)
             continue
         remaining_streams = [
-            item for item in streams
+            item
+            for item in streams
             if not (isinstance(item, dict) and item.get("name") == stream)
         ]
         updated_level = deepcopy(level_item)
@@ -42,6 +41,9 @@ def _repair_removed_stream_config(config: dict, level: str, stream: str) -> dict
 
     candidate["levels"] = repaired_levels
     return candidate
+
+
+_ORIGINAL_REMOVE_STREAM = hardened.HardenedServerCommands.remove_stream.callback
 
 
 async def _patched_remove_stream_callback(self, interaction, level: str, stream: str) -> None:
@@ -54,12 +56,11 @@ async def _patched_remove_stream_callback(self, interaction, level: str, stream:
     async with _PATCH_LOCK:
         hardened.save_guild_config = guarded_save
         try:
-            await hardened.HardenedServerCommands.remove_stream.callback(self, interaction, level, stream)
+            await _ORIGINAL_REMOVE_STREAM(self, interaction, level, stream)
         finally:
             hardened.save_guild_config = original_save
 
 
-_ORIGINAL_REMOVE_STREAM = hardened.HardenedServerCommands.remove_stream.callback
 hardened.HardenedServerCommands.remove_stream.callback = _patched_remove_stream_callback
 
 
