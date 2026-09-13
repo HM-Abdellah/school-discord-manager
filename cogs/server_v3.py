@@ -330,18 +330,19 @@ class ServerCommands(commands.Cog):
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True)
         match = re.fullmatch(r"(\d{4})/(\d{4})", year)
         if not match or int(match.group(2)) != int(match.group(1)) + 1:
-            await interaction.response.send_message("❌ Format attendu : `2026/2027`.", ephemeral=True)
+            await interaction.followup.send("❌ Format attendu : `2026/2027`.", ephemeral=True)
             return
         config = deepcopy(get_guild_config(guild.id) or {"levels": []})
         config["academic_year"] = year
         try:
             save_guild_config(guild.id, config)
         except OSError as exc:
-            await interaction.response.send_message(f"❌ Impossible d'enregistrer l'année scolaire : `{exc}`", ephemeral=True)
+            await interaction.followup.send(f"❌ Impossible d'enregistrer l'année scolaire : `{exc}`", ephemeral=True)
             return
-        await interaction.response.send_message(f"✅ **{year}** est maintenant l'année scolaire active.", ephemeral=True)
+        await interaction.followup.send(f"✅ **{year}** est maintenant l'année scolaire active.", ephemeral=True)
 
     @app_commands.command(name="years", description="Afficher les années scolaires enregistrées.")
     @management_check()
@@ -349,8 +350,10 @@ class ServerCommands(commands.Cog):
         if interaction.guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True)
         rows = list_academic_years(interaction.guild.id)
-        await interaction.response.send_message("## 📅 Années scolaires\n\n" + ("\n".join(f"• **{row['name']}**" + (" 🟢 ACTIVE" if row["is_active"] else "") for row in rows) or "Aucune année enregistrée."), ephemeral=True)
+        message = "## 📅 Années scolaires\n\n" + ("\n".join(f"• **{row['name']}**" + (" 🟢 ACTIVE" if row["is_active"] else "") for row in rows) or "Aucune année enregistrée.")
+        await interaction.followup.send(message, ephemeral=True)
 
     @app_commands.command(name="status", description="Afficher la configuration scolaire enregistrée.")
     @management_check()
