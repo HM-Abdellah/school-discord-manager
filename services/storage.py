@@ -160,9 +160,32 @@ def get_guild_config(guild_id: int) -> dict[str, Any] | None:
     return load_all().get(str(guild_id))
 
 
+def _academic_year_key(year: str | None) -> tuple[int, int] | None:
+    if not isinstance(year, str):
+        return None
+    parts = year.split("/", 1)
+    if len(parts) != 2 or not all(part.isdigit() and len(part) == 4 for part in parts):
+        return None
+    start, end = int(parts[0]), int(parts[1])
+    if end != start + 1:
+        return None
+    return start, end
+
+
 def save_guild_config(guild_id: int, config: dict[str, Any]) -> None:
     initialize_database()
     old_data = load_all()
+    previous_config = old_data.get(str(guild_id))
+    previous_year = previous_config.get("academic_year") if isinstance(previous_config, dict) else None
+    requested_year = config.get("academic_year") if isinstance(config, dict) else None
+    previous_key = _academic_year_key(previous_year)
+    requested_key = _academic_year_key(requested_year)
+    if previous_key is not None and requested_key is not None and requested_key < previous_key:
+        raise OSError(
+            f"Impossible de revenir de {previous_year} à {requested_year}. "
+            "Une nouvelle année scolaire doit être postérieure à l'année active actuelle."
+        )
+
     new_data = deepcopy(old_data)
     new_data[str(guild_id)] = deepcopy(config)
     with _connect() as conn:
