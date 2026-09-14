@@ -160,12 +160,16 @@ class ServerCommands(commands.Cog):
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
+        # Acknowledge immediately: Discord interaction tokens are short-lived.
+        # The state inspection below performs a network request and must not run
+        # before the initial response is acknowledged.
+        await interaction.response.defer(ephemeral=True)
         config = get_guild_config(guild.id)
         if not config:
-            await interaction.response.send_message("❌ Utilise d'abord `/setup`.", ephemeral=True)
+            await interaction.followup.send("❌ Utilise d'abord `/setup`.", ephemeral=True)
             return
         complete, existing_roles, existing_channels, existing_categories = await _managed_resource_state(guild, config)
-        await interaction.response.send_message("🏗️ Synchronisation sécurisée en cours...", ephemeral=True)
+        await interaction.followup.send("🏗️ Synchronisation sécurisée en cours...", ephemeral=True)
         try:
             stats = await _run_build(guild, config)
         except discord.Forbidden:
@@ -317,7 +321,7 @@ class ServerCommands(commands.Cog):
             return
         except (discord.Forbidden, discord.HTTPException, OSError) as exc:
             print(f"[REMOVE] Failed code={code}: {type(exc).__name__}: {exc}", flush=True)
-            await interaction.followup.send(f"❌ Suppression interrompue; configuration inchangée : `{type(exc).__name__}: {exc}`", ephemeral=True)
+            await interaction.followup.send(f"❌ Suppression interrompue; configuration inchangée : `{type(exc).__name__}`", ephemeral=True)
             return
         print(f"[REMOVE] Complete guild={guild.id} code={code}", flush=True)
         await interaction.followup.send(f"✅ **{code}** supprimée.", ephemeral=True)
@@ -414,7 +418,7 @@ class ServerCommands(commands.Cog):
                         deleted_roles += 1
                 reset_guild_data(guild.id)
         except (discord.Forbidden, discord.HTTPException, OSError) as exc:
-            await interaction.followup.send(f"❌ Reset interrompu : `{type(exc).__name__}: {exc}`. Les ressources non supprimées restent intactes.", ephemeral=True)
+            await interaction.followup.send(f"❌ Reset interrompu : `{type(exc).__name__}`. Les ressources non supprimées restent intactes.", ephemeral=True)
             return
         await interaction.followup.send(f"✅ Reset School Manager terminé. Channels: **{deleted_channels}** · Catégories: **{deleted_categories}** · Rôles: **{deleted_roles}**. Les autres ressources du serveur n'ont pas été ciblées.", ephemeral=True)
 
