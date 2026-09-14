@@ -87,10 +87,16 @@ def _remove_managed_entries(config: dict, *, role_names: set[str], channel_names
 
 
 def _find_level_stream(config: dict, level: str, stream: str) -> tuple[dict | None, dict | None]:
-    for level_item in config.get("levels", []) if isinstance(config.get("levels", []), list) else []:
+    levels = config.get("levels", []) if isinstance(config, dict) else []
+    if not isinstance(levels, list):
+        return None, None
+    for level_item in levels:
         if not isinstance(level_item, dict) or level_item.get("name") != level:
             continue
-        for stream_item in level_item.get("streams", []) if isinstance(level_item.get("streams", []), list) else []:
+        streams = level_item.get("streams", [])
+        if not isinstance(streams, list):
+            return level_item, None
+        for stream_item in streams:
             if isinstance(stream_item, dict) and stream_item.get("name") == stream:
                 return level_item, stream_item
         return level_item, None
@@ -99,6 +105,25 @@ def _find_level_stream(config: dict, level: str, stream: str) -> tuple[dict | No
 
 def _fail(message: str) -> str:
     return f"❌ {message}"
+
+
+async def level_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    return [
+        app_commands.Choice(name=level, value=level)
+        for level in get_levels()
+        if current.casefold() in level.casefold()
+    ][:25]
+
+
+async def stream_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    level = str(getattr(interaction.namespace, "level", ""))
+    if level not in get_levels():
+        return []
+    return [
+        app_commands.Choice(name=stream, value=stream)
+        for stream in get_streams(level)
+        if current.casefold() in stream.casefold()
+    ][:25]
 
 
 class SafeRemoveStream(commands.Cog):
@@ -110,8 +135,7 @@ class SafeRemoveStream(commands.Cog):
         description="Supprimer une filière uniquement si toutes ses ressources gérées sont enregistrées.",
     )
     @app_commands.describe(level="Niveau", stream="Filière à supprimer")
-    @app_commands.autocomplete(level=lambda i, c: [app_commands.Choice(name=x, value=x) for x in get_levels() if c.casefold() in x.casefold()][:25])
-    @app_commands.autocomplete(stream=lambda i, c: [app_commands.Choice(name=x, value=x) for x in get_streams(str(getattr(i.namespace, "level", ""))) if c.casefold() in x.casefold()][:25] if str(getattr(i.namespace, "level", "")) in get_levels() else [])
+    @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete)
     @management_check()
     async def remove_stream(self, interaction: discord.Interaction, level: str, stream: str) -> None:
         guild = interaction.guild
@@ -143,7 +167,6 @@ class SafeRemoveStream(commands.Cog):
         role_ids, channel_ids, category_id, voice_id = _stream_resource_ids(config, level, stream)
         voice_category_id = _recorded_id(config, "categories", CATEGORY_VOICE)
 
-        # Fail closed: do not delete or mutate config when the registry is incomplete.
         missing_parts: list[str] = []
         if category_id is None:
             missing_parts.append("category")
@@ -181,7 +204,6 @@ class SafeRemoveStream(commands.Cog):
             )
             return
 
-        # Verify every managed resource before deleting anything.
         verified_channels: list[discord.abc.GuildChannel] = []
         for name in sorted(expected_channel_names):
             channel_id = channel_ids.get(name)
@@ -250,7 +272,8 @@ class SafeRemoveStream(commands.Cog):
                         if not (isinstance(item, dict) and item.get("name") == stream)
                     ]
                 candidate["levels"] = [
-                    item for item in candidate.get("levels", [])
+                    item
+                    for item in candidate.get("levels", [])
                     if not (isinstance(item, dict) and item.get("name") == level and not item.get("streams"))
                 ]
                 _remove_managed_entries(
