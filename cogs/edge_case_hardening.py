@@ -75,10 +75,27 @@ async def setup(bot) -> None:
     if command is None or getattr(command, "_edge_case_hardening_applied", False):
         return
 
+    # discord.py exposes Command.callback as a read-only property. The actual
+    # mutable callback used during invocation is Command._callback. For Cog
+    # commands the invocation machinery passes the bound Cog instance first,
+    # so the wrapper must preserve that calling convention.
     original_callback = command.callback
+    binding = command.binding
 
-    async def guarded_callback(interaction: Any, level: str, stream: str) -> None:
-        await _patched_remove_stream_callback(original_callback, interaction, level, stream)
+    if binding is None:
+        async def guarded_callback(interaction: Any, level: str, stream: str) -> None:
+            await _patched_remove_stream_callback(original_callback, interaction, level, stream)
+    else:
+        async def guarded_callback(_binding: Any, interaction: Any, level: str, stream: str) -> None:
+            async def invoke_original(patched_interaction: Any, patched_level: str, patched_stream: str) -> Any:
+                return await original_callback(_binding, patched_interaction, patched_level, patched_stream)
 
-    command.callback = guarded_callback
+            await _patched_remove_stream_callback(
+                invoke_original,
+                interaction,
+                level,
+                stream,
+            )
+
+    command._callback = guarded_callback
     command._edge_case_hardening_applied = True
