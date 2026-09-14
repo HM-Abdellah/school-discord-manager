@@ -149,8 +149,12 @@ async def _fetch_channels(guild: discord.Guild) -> list[discord.abc.GuildChannel
         return list(guild.channels)
 
 
-def _unique_named[T](items: list[T], expected: str, *, attr: str = "name") -> T | None:
-    matches = [item for item in items if _norm(str(getattr(item, attr, ""))) == _norm(expected)]
+def _unique_named(items: list, expected: str):
+    matches = [
+        item
+        for item in items
+        if _norm(str(getattr(item, "name", ""))) == _norm(expected)
+    ]
     return matches[0] if len(matches) == 1 else None
 
 
@@ -160,7 +164,7 @@ async def _resolve_registry(
     level: str,
     stream: str,
     stream_item: dict,
-) -> tuple[dict[str, int], dict[str, int], discord.CategoryChannel | None, discord.VoiceChannel | None, discord.CategoryChannel | None, str | None]:
+):
     """Resolve exact stream resources with a conservative Discord-side fallback."""
     code = get_stream_abbreviation(level, stream)
     category_name = _stream_category_name(level, stream, code)
@@ -202,7 +206,7 @@ async def _resolve_registry(
         if len(categories) == 1:
             voice_category = categories[0]
 
-    channels: dict[str, int] = {}
+    channels = {}
     if category is not None:
         scoped_text = list(category.text_channels)
         if not scoped_text:
@@ -215,7 +219,11 @@ async def _resolve_registry(
         for name in expected_channels:
             recorded = _recorded_id(config, "channels", name)
             recorded_channel = guild.get_channel(recorded) if recorded else None
-            if isinstance(recorded_channel, discord.TextChannel) and getattr(recorded_channel, "category_id", None) == category.id and _norm(recorded_channel.name) == _norm(name):
+            if (
+                isinstance(recorded_channel, discord.TextChannel)
+                and recorded_channel.category_id == category.id
+                and _norm(recorded_channel.name) == _norm(name)
+            ):
                 channels[name] = recorded_channel.id
                 continue
             match = _unique_named(scoped_text, name)
@@ -245,7 +253,7 @@ async def _resolve_registry(
             if isinstance(match, discord.VoiceChannel):
                 voice = match
 
-    roles: dict[str, int] = {}
+    roles = {}
     for name in expected_roles:
         recorded = _recorded_id(config, "roles", name)
         recorded_role = guild.get_role(recorded) if recorded else None
@@ -260,7 +268,7 @@ async def _resolve_registry(
         if len(matches) == 1:
             roles[name] = matches[0].id
 
-    missing: list[str] = []
+    missing = []
     if category is None:
         missing.append("category")
     if voice_category is None:
@@ -344,10 +352,14 @@ class SafeRemoveStream(commands.Cog):
         assert voice is not None
         assert voice_category is not None
 
-        verified_channels: list[discord.TextChannel] = []
+        verified_channels = []
         for name in sorted(expected_channel_names):
             channel = guild.get_channel(channel_ids[name])
-            if not isinstance(channel, discord.TextChannel) or channel.category_id != category.id or _norm(channel.name) != _norm(name):
+            if (
+                not isinstance(channel, discord.TextChannel)
+                or channel.category_id != category.id
+                or _norm(channel.name) != _norm(name)
+            ):
                 await interaction.response.send_message(
                     _fail(f"Suppression refusée pour **{code}** : salon géré `{name}` absent ou incohérent. Aucun changement effectué."),
                     ephemeral=True,
@@ -355,7 +367,7 @@ class SafeRemoveStream(commands.Cog):
                 return
             verified_channels.append(channel)
 
-        verified_roles: list[discord.Role] = []
+        verified_roles = []
         for name in sorted(expected_role_names):
             role = guild.get_role(role_ids[name])
             if role is None or role.managed or role.is_default() or _norm(role.name) != _norm(name):
