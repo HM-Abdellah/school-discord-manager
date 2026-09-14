@@ -34,6 +34,7 @@ class SchoolBot(commands.Bot):
         "cogs.year_rollback",
         "cogs.security_hardening_v2",
         "cogs.edge_case_hardening",
+        "cogs.removestream_fix",
     )
 
     def __init__(self) -> None:
