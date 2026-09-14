@@ -45,6 +45,10 @@ class SchoolBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         for extension in self.EXTENSIONS:
+            if extension == "cogs.removestream_fix":
+                # The hardening cogs may already have registered /removestream.
+                # Remove that root command before loading the final implementation.
+                self.tree.remove_command("removestream")
             await self.load_extension(extension)
 
         if GUILD_ID_RAW:
