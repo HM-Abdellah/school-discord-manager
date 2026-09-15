@@ -62,6 +62,7 @@ def test_all_bot_extensions_have_async_setup_entrypoints():
 def test_runtime_loader_declares_final_command_owners():
     extensions = list(SchoolBot.EXTENSIONS)
     assert "cogs.edge_case_hardening" not in extensions
+    assert "cogs.discord_aware_commands" not in extensions
     assert extensions.index("cogs.removestream_fix") < extensions.index("cogs.section_aware_exam")
     assert extensions.index("cogs.section_aware_exam") < extensions.index("cogs.section_aware_timetable")
 
@@ -86,6 +87,29 @@ def test_critical_commands_have_one_source_definition_and_expected_owner():
             f"{command} must have exactly one source owner; "
             f"found {definitions[command]}"
         )
+
+
+def test_critical_command_cogs_have_no_cog_to_cog_dependency():
+    critical_modules = (
+        "cogs/command_fixes.py",
+        "cogs/security_hardening_v2.py",
+        "cogs/removestream_fix.py",
+        "cogs/section_aware_exam.py",
+        "cogs/section_aware_timetable.py",
+    )
+    for path in critical_modules:
+        source = Path(path).read_text(encoding="utf-8")
+        assert "from cogs." not in source, f"{path} must depend on services/config, not another cog"
+        assert "import cogs." not in source, f"{path} must depend on services/config, not another cog"
+
+
+def test_shared_command_helpers_live_outside_cogs():
+    source = Path("services/command_autocomplete.py").read_text(encoding="utf-8")
+    assert "async def level_autocomplete" in source
+    assert "async def stream_autocomplete" in source
+    resolver = Path("services/discord_registry.py").read_text(encoding="utf-8")
+    assert "async def resolve_managed_text_channel" in resolver
+    assert "def persist_registry_repair" in resolver
 
 
 def test_section_aware_commands_are_configured_for_maximum_section_eight():
