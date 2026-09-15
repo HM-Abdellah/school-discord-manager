@@ -30,6 +30,6 @@ def test_section_matrix_enforces_shared_channel_model():
     payload = load_matrix()
     expectations = " ".join(case["expectation"] for case in payload["cases"])
     assert "channel count" in expectations
-    assert "same shared timetable channel" in expectations
-    assert "same shared exam channel" in expectations
+    assert "shared stream timetable channel" in expectations
+    assert "shared stream exam channel" in expectations
     assert "does not create an unregistered replacement channel" in expectations
