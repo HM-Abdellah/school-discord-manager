@@ -35,6 +35,7 @@ class SchoolBot(commands.Bot):
         "cogs.security_hardening_v2",
         "cogs.edge_case_hardening",
         "cogs.removestream_fix",
+        "cogs.discord_aware_commands",
     )
 
     def __init__(self) -> None:
@@ -46,8 +47,6 @@ class SchoolBot(commands.Bot):
     async def setup_hook(self) -> None:
         for extension in self.EXTENSIONS:
             if extension == "cogs.removestream_fix":
-                # The hardening cogs may already have registered /removestream.
-                # Remove that root command before loading the final implementation.
                 self.tree.remove_command("removestream")
             await self.load_extension(extension)
 
