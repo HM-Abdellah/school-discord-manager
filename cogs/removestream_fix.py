@@ -1,8 +1,9 @@
 """Fail-closed /removestream implementation.
 
-Only the exact resources created for the selected stream are eligible for
-removal. Missing or ambiguous resources abort the operation before anything
-is deleted.
+Destructive stream removal resolves every deletion target from the persisted
+managed-resource registry. Resource names are used only to verify that a
+registered ID still identifies the expected resource; names are never used to
+discover new deletion targets.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from config.curriculum import (
     get_streams,
 )
 from services.build_guard import get_build_lock
+from services.discord_ownership import validate_managed_registry
 from services.permissions import (
     STREAM_ROLE_PREFIX,
     STUDENT_STREAM_ROLE_PREFIX,
@@ -66,7 +68,11 @@ def _stream_channel_names(
     code = get_stream_abbreviation(level, stream)
     subjects = get_stream_subjects(level, stream)
     if isinstance(stream_item, dict) and isinstance(stream_item.get("subjects"), list):
-        subjects = [subject for subject in stream_item["subjects"] if isinstance(subject, str)]
+        subjects = [
+            subject
+            for subject in stream_item["subjects"]
+            if isinstance(subject, str)
+        ]
     return {
         f"📌-{code}・informations",
         f"🗓️-{code}・emploi-du-temps",
@@ -96,7 +102,11 @@ def _remove_managed_entries(
                 mapping.pop(name, None)
 
 
-def _find_level_stream(config: dict, level: str, stream: str) -> tuple[dict | None, dict | None]:
+def _find_level_stream(
+    config: dict,
+    level: str,
+    stream: str,
+) -> tuple[dict | None, dict | None]:
     levels = config.get("levels", []) if isinstance(config, dict) else []
     if not isinstance(levels, list):
         return None, None
@@ -142,22 +152,6 @@ async def stream_autocomplete(
     ][:25]
 
 
-async def _fetch_channels(guild: discord.Guild) -> list[discord.abc.GuildChannel]:
-    try:
-        return list(await guild.fetch_channels())
-    except (discord.Forbidden, discord.HTTPException):
-        return list(guild.channels)
-
-
-def _unique_named(items: list, expected: str):
-    matches = [
-        item
-        for item in items
-        if _norm(str(getattr(item, "name", ""))) == _norm(expected)
-    ]
-    return matches[0] if len(matches) == 1 else None
-
-
 async def _resolve_registry(
     guild: discord.Guild,
     config: dict,
@@ -165,124 +159,99 @@ async def _resolve_registry(
     stream: str,
     stream_item: dict,
 ):
-    """Resolve exact stream resources with a conservative Discord-side fallback."""
+    """Resolve deletion targets exclusively from persisted managed IDs."""
     code = get_stream_abbreviation(level, stream)
     category_name = _stream_category_name(level, stream, code)
     voice_name = f"🔊-{_safe_name(code, 30)}-à-distance"
     expected_channels = _stream_channel_names(level, stream, stream_item)
     expected_roles = _stream_role_names(level, stream)
 
-    all_channels = await _fetch_channels(guild)
-
-    category = None
     category_id = _recorded_id(config, "categories", category_name)
-    if category_id:
-        candidate = guild.get_channel(category_id)
-        if isinstance(candidate, discord.CategoryChannel) and _norm(candidate.name) == _norm(category_name):
-            category = candidate
-    if category is None:
-        categories = [
-            item
-            for item in all_channels
-            if isinstance(item, discord.CategoryChannel)
-            and _norm(item.name) == _norm(category_name)
-        ]
-        if len(categories) == 1:
-            category = categories[0]
-
-    voice_category = None
     voice_category_id = _recorded_id(config, "categories", CATEGORY_VOICE)
-    if voice_category_id:
-        candidate = guild.get_channel(voice_category_id)
-        if isinstance(candidate, discord.CategoryChannel) and _norm(candidate.name) == _norm(CATEGORY_VOICE):
-            voice_category = candidate
-    if voice_category is None:
-        categories = [
-            item
-            for item in all_channels
-            if isinstance(item, discord.CategoryChannel)
-            and _norm(item.name) == _norm(CATEGORY_VOICE)
-        ]
-        if len(categories) == 1:
-            voice_category = categories[0]
+    if category_id is None:
+        category = None
+    else:
+        candidate = guild.get_channel(category_id)
+        category = (
+            candidate
+            if isinstance(candidate, discord.CategoryChannel)
+            and _norm(candidate.name) == _norm(category_name)
+            else None
+        )
 
-    channels = {}
+    if voice_category_id is None:
+        voice_category = None
+    else:
+        candidate = guild.get_channel(voice_category_id)
+        voice_category = (
+            candidate
+            if isinstance(candidate, discord.CategoryChannel)
+            and _norm(candidate.name) == _norm(CATEGORY_VOICE)
+            else None
+        )
+
+    channels: dict[str, int] = {}
     if category is not None:
-        scoped_text = list(category.text_channels)
-        if not scoped_text:
-            scoped_text = [
-                item
-                for item in all_channels
-                if getattr(item, "category_id", None) == category.id
-                and isinstance(item, discord.TextChannel)
-            ]
         for name in expected_channels:
             recorded = _recorded_id(config, "channels", name)
-            recorded_channel = guild.get_channel(recorded) if recorded else None
-            if (
-                isinstance(recorded_channel, discord.TextChannel)
-                and recorded_channel.category_id == category.id
-                and _norm(recorded_channel.name) == _norm(name)
-            ):
-                channels[name] = recorded_channel.id
+            if recorded is None:
                 continue
-            match = _unique_named(scoped_text, name)
-            if isinstance(match, discord.TextChannel):
-                channels[name] = match.id
+            candidate = guild.get_channel(recorded)
+            if (
+                isinstance(candidate, discord.TextChannel)
+                and candidate.category_id == category.id
+                and _norm(candidate.name) == _norm(name)
+            ):
+                channels[name] = candidate.id
 
     voice = None
     recorded_voice = _recorded_id(config, "channels", voice_name)
-    if isinstance(voice_category, discord.CategoryChannel):
-        recorded_channel = guild.get_channel(recorded_voice) if recorded_voice else None
+    if recorded_voice is not None and voice_category is not None:
+        candidate = guild.get_channel(recorded_voice)
         if (
-            isinstance(recorded_channel, discord.VoiceChannel)
-            and recorded_channel.category_id == voice_category.id
-            and _norm(recorded_channel.name) == _norm(voice_name)
+            isinstance(candidate, discord.VoiceChannel)
+            and candidate.category_id == voice_category.id
+            and _norm(candidate.name) == _norm(voice_name)
         ):
-            voice = recorded_channel
-        else:
-            scoped_voice = list(voice_category.voice_channels)
-            if not scoped_voice:
-                scoped_voice = [
-                    item
-                    for item in all_channels
-                    if isinstance(item, discord.VoiceChannel)
-                    and getattr(item, "category_id", None) == voice_category.id
-                ]
-            match = _unique_named(scoped_voice, voice_name)
-            if isinstance(match, discord.VoiceChannel):
-                voice = match
+            voice = candidate
 
-    roles = {}
+    roles: dict[str, int] = {}
     for name in expected_roles:
         recorded = _recorded_id(config, "roles", name)
-        recorded_role = guild.get_role(recorded) if recorded else None
-        if isinstance(recorded_role, discord.Role) and not recorded_role.managed and _norm(recorded_role.name) == _norm(name):
-            roles[name] = recorded_role.id
+        if recorded is None:
             continue
-        matches = [
-            role
-            for role in guild.roles
-            if not role.managed and _norm(role.name) == _norm(name)
-        ]
-        if len(matches) == 1:
-            roles[name] = matches[0].id
+        candidate = guild.get_role(recorded)
+        if (
+            isinstance(candidate, discord.Role)
+            and not candidate.managed
+            and _norm(candidate.name) == _norm(name)
+        ):
+            roles[name] = candidate.id
 
-    missing = []
+    missing: list[str] = []
     if category is None:
-        missing.append("category")
+        missing.append(f"catégorie `{category_name}` (ID géré manquant/invalide)")
     if voice_category is None:
-        missing.append("catégorie vocale")
+        missing.append(f"catégorie vocale `{CATEGORY_VOICE}` (ID géré manquant/invalide)")
     if voice is None:
-        missing.append("salon vocal")
+        missing.append(f"salon vocal `{voice_name}` (ID géré manquant/invalide)")
+
     missing_channels = expected_channels - set(channels)
     if missing_channels:
-        missing.append(f"{len(missing_channels)} salon(s) géré(s)")
+        missing.append(f"{len(missing_channels)} salon(s) géré(s) avec ID manquant/invalide")
+
     missing_roles = expected_roles - set(roles)
     if missing_roles:
-        missing.append(f"{len(missing_roles)} rôle(s) géré(s)")
+        missing.append(f"{len(missing_roles)} rôle(s) géré(s) avec ID manquant/invalide")
 
-    return roles, channels, category, voice, voice_category, ", ".join(missing) if missing else None
+    return (
+        roles,
+        channels,
+        category,
+        voice,
+        voice_category,
+        ", ".join(missing) if missing else None,
+    )
 
 
 class SafeRemoveStream(commands.Cog):
@@ -329,6 +298,18 @@ class SafeRemoveStream(commands.Cog):
         expected_role_names = _stream_role_names(level, stream)
         expected_channel_names = _stream_channel_names(level, stream, stream_item)
 
+        try:
+            await validate_managed_registry(guild, config)
+        except RuntimeError as exc:
+            await interaction.response.send_message(
+                _fail(
+                    f"Suppression refusée pour **{code}** : identité gérée incohérente (`{exc}`). "
+                    "Aucun changement effectué."
+                ),
+                ephemeral=True,
+            )
+            return
+
         (
             role_ids,
             channel_ids,
@@ -341,7 +322,7 @@ class SafeRemoveStream(commands.Cog):
         if registry_error:
             await interaction.response.send_message(
                 _fail(
-                    f"Suppression refusée pour **{code}** : ressources gérées absentes ou ambiguës ({registry_error}). "
+                    f"Suppression refusée pour **{code}** : ressources gérées absentes/incomplètes ({registry_error}). "
                     "Aucune ressource et aucune configuration n'ont été modifiées."
                 ),
                 ephemeral=True,
@@ -352,7 +333,7 @@ class SafeRemoveStream(commands.Cog):
         assert voice is not None
         assert voice_category is not None
 
-        verified_channels = []
+        verified_channels: list[discord.TextChannel] = []
         for name in sorted(expected_channel_names):
             channel = guild.get_channel(channel_ids[name])
             if (
@@ -361,18 +342,29 @@ class SafeRemoveStream(commands.Cog):
                 or _norm(channel.name) != _norm(name)
             ):
                 await interaction.response.send_message(
-                    _fail(f"Suppression refusée pour **{code}** : salon géré `{name}` absent ou incohérent. Aucun changement effectué."),
+                    _fail(
+                        f"Suppression refusée pour **{code}** : salon géré `{name}` absent ou incohérent. "
+                        "Aucun changement effectué."
+                    ),
                     ephemeral=True,
                 )
                 return
             verified_channels.append(channel)
 
-        verified_roles = []
+        verified_roles: list[discord.Role] = []
         for name in sorted(expected_role_names):
             role = guild.get_role(role_ids[name])
-            if role is None or role.managed or role.is_default() or _norm(role.name) != _norm(name):
+            if (
+                role is None
+                or role.managed
+                or role.is_default()
+                or _norm(role.name) != _norm(name)
+            ):
                 await interaction.response.send_message(
-                    _fail(f"Suppression refusée pour **{code}** : rôle géré `{name}` absent ou incohérent. Aucun changement effectué."),
+                    _fail(
+                        f"Suppression refusée pour **{code}** : rôle géré `{name}` absent ou incohérent. "
+                        "Aucun changement effectué."
+                    ),
                     ephemeral=True,
                 )
                 return
@@ -380,13 +372,20 @@ class SafeRemoveStream(commands.Cog):
 
         if voice.category_id != voice_category.id or _norm(voice.name) != _norm(voice_name):
             await interaction.response.send_message(
-                _fail(f"Suppression refusée pour **{code}** : salon vocal absent ou incohérent. Aucun changement effectué."),
+                _fail(
+                    f"Suppression refusée pour **{code}** : salon vocal absent ou incohérent. "
+                    "Aucun changement effectué."
+                ),
                 ephemeral=True,
             )
             return
 
         top_role = guild.me.top_role if guild.me is not None else None
-        blocked_roles = [role.name for role in verified_roles if top_role is not None and role >= top_role]
+        blocked_roles = [
+            role.name
+            for role in verified_roles
+            if top_role is not None and role >= top_role
+        ]
         if blocked_roles:
             await interaction.response.send_message(
                 _fail(
