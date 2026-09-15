@@ -100,8 +100,9 @@ def test_security_v3_owns_only_resetserver():
     assert _command_names_in_file("cogs/security_hardening_v3.py") == ["resetserver"]
 
 
-def test_legacy_security_v2_has_no_commands():
-    assert _command_names_in_file("cogs/security_hardening_v2.py") == []
+def test_obsolete_compatibility_modules_are_removed():
+    assert not (Path("cogs") / "security_hardening_v2.py").exists()
+    assert not (Path("cogs") / "edge_case_hardening.py").exists()
 
 
 def test_shared_command_helpers_live_outside_cogs():
@@ -111,6 +112,9 @@ def test_shared_command_helpers_live_outside_cogs():
     resolver = Path("services/discord_registry.py").read_text(encoding="utf-8")
     assert "async def resolve_managed_text_channel" in resolver
     assert "def persist_registry_repair" in resolver
+    conflicts = Path("services/role_conflicts.py").read_text(encoding="utf-8")
+    assert "def student_staff_conflict" in conflicts
+    assert "def teacher_target_conflict" in conflicts
 
 
 def test_section_aware_commands_are_configured_for_maximum_section_eight():
