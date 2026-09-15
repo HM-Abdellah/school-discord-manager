@@ -11,7 +11,7 @@ from discord.ext import commands
 
 from config.curriculum import get_level, get_levels, get_stream_abbreviation, get_stream_subjects, get_streams
 from services.build_guard import get_build_lock
-from services.permissions import management_check
+from services.permissions import _preflight_message, management_check
 from services.server_builder import ServerBuilder
 from services.storage import get_active_academic_year, save_guild_config
 
@@ -156,6 +156,12 @@ class SummaryView(SetupBaseView):
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
+
+        message = _preflight_message(interaction, needs_channels=True, needs_roles=True)
+        if message:
+            await interaction.response.send_message(message, ephemeral=True)
+            return
+
         lock = get_build_lock(guild.id)
         if lock.locked():
             await interaction.response.send_message("⏳ Une construction est déjà en cours sur ce serveur.", ephemeral=True)
