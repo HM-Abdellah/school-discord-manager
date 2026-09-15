@@ -17,7 +17,6 @@ import discord
 PENDING_REMOVAL_KEY = "pending_removal"
 JOURNAL_VERSION = 1
 
-DeleteCallable = Callable[[], Awaitable[None]]
 CheckpointCallable = Callable[[dict[str, Any]], None]
 FinalizeCallable = Callable[[dict[str, Any]], None]
 
@@ -71,7 +70,7 @@ def _resource_key(resource: dict[str, Any]) -> str:
 def _normalize_resource(resource: dict[str, Any]) -> dict[str, Any]:
     kind = resource.get("kind")
     resource_id = resource.get("id")
-    if kind not in {"channel", "role"} or not isinstance(resource_id, int) or resource_id <= 0:
+    if kind not in {"channel", "role", "category"} or not isinstance(resource_id, int) or resource_id <= 0:
         raise ValueError(f"Invalid removal resource: {resource!r}")
     return {
         "kind": kind,
