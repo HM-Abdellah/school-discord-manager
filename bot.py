@@ -9,6 +9,8 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+from services.storage_recovery import recover_json_cache
+
 load_dotenv()
 
 discord.utils.setup_logging(level=logging.INFO, root=False)
@@ -45,6 +47,7 @@ class SchoolBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents, help_command=None)
 
     async def setup_hook(self) -> None:
+        recover_json_cache()
         for extension in self.EXTENSIONS:
             if extension == "cogs.removestream_fix":
                 self.tree.remove_command("removestream")
