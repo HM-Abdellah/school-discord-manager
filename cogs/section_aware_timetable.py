@@ -1,4 +1,4 @@
-"""Section-aware timetable publishing override.
+"""Section-aware timetable publishing command.
 
 A timetable belongs to a specific school section while the Discord channel
 remains shared by the stream. The section number is metadata on the published
@@ -11,19 +11,15 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.discord_aware_commands import (
-    _persist_registry_repair,
-    _resolve_discord_managed_text_channel,
-    level_autocomplete,
-    stream_autocomplete,
-)
 from config.curriculum import get_levels, get_stream_abbreviation, get_streams
 from services.audit import record_event
+from services.command_autocomplete import level_autocomplete, stream_autocomplete
+from services.discord_registry import persist_registry_repair, resolve_managed_text_channel
 from services.permissions import management_check
 from services.server_builder import _stream_category_name
 from services.storage import get_guild_config, save_guild_config
 
-OVERRIDDEN_COMMANDS = {"set_timetable"}
+OWNED_COMMANDS = {"set_timetable"}
 MAX_SECTIONS = 8
 
 
@@ -81,7 +77,7 @@ class SectionAwareTimetableCommands(commands.Cog):
         channel_name = f"🗓️-{code}・emploi-du-temps"
         config = get_guild_config(guild.id) or {}
 
-        channel, registry_repaired = await _resolve_discord_managed_text_channel(
+        channel, registry_repaired = await resolve_managed_text_channel(
             guild,
             config,
             channel_name=channel_name,
@@ -94,7 +90,7 @@ class SectionAwareTimetableCommands(commands.Cog):
             )
             return
 
-        if not _persist_registry_repair(guild.id, config, registry_repaired):
+        if not persist_registry_repair(guild.id, config, registry_repaired):
             await interaction.followup.send(
                 "❌ Le channel a bien été détecté sur Discord, mais la synchronisation du registre géré a échoué. Publication annulée pour éviter un état incohérent.",
                 ephemeral=True,
@@ -133,6 +129,4 @@ class SectionAwareTimetableCommands(commands.Cog):
 
 
 async def setup(bot: commands.Bot) -> None:
-    for name in OVERRIDDEN_COMMANDS:
-        bot.tree.remove_command(name)
     await bot.add_cog(SectionAwareTimetableCommands(bot))
