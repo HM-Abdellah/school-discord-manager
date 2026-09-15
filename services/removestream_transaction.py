@@ -10,15 +10,13 @@ delete so a later retry can resume idempotently.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 
 import discord
 
 PENDING_REMOVAL_KEY = "pending_removal"
 JOURNAL_VERSION = 1
-
 CheckpointCallable = Callable[[dict[str, Any]], None]
-FinalizeCallable = Callable[[dict[str, Any]], None]
 
 
 def build_removal_journal(
@@ -27,9 +25,10 @@ def build_removal_journal(
     stream: str,
     code: str,
     resources: list[dict[str, Any]],
+    category: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build an immutable deletion plan with stable resource identities."""
-    return {
+    """Build a deletion plan with stable resource identities."""
+    journal: dict[str, Any] = {
         "version": JOURNAL_VERSION,
         "level": level,
         "stream": stream,
@@ -37,6 +36,9 @@ def build_removal_journal(
         "resources": deepcopy(resources),
         "completed": [],
     }
+    if category is not None:
+        journal["category"] = deepcopy(category)
+    return journal
 
 
 def install_removal_journal(
@@ -70,12 +72,20 @@ def _resource_key(resource: dict[str, Any]) -> str:
 def _normalize_resource(resource: dict[str, Any]) -> dict[str, Any]:
     kind = resource.get("kind")
     resource_id = resource.get("id")
-    if kind not in {"channel", "role", "category"} or not isinstance(resource_id, int) or resource_id <= 0:
+    if kind not in {"channel", "role"} or not isinstance(resource_id, int) or resource_id <= 0:
         raise ValueError(f"Invalid removal resource: {resource!r}")
     return {
         "kind": kind,
         "id": resource_id,
         "name": str(resource.get("name", "")),
+    }
+
+
+def _normalize_completed(completed: list[Any]) -> set[str]:
+    return {
+        item
+        for item in completed
+        if isinstance(item, str)
     }
 
 
@@ -93,11 +103,7 @@ async def execute_removal_journal(
     because the journal's invariant is that the target no longer exists.
     """
     normalized = [_normalize_resource(item) for item in journal["resources"]]
-    completed = {
-        str(item)
-        for item in journal.get("completed", [])
-        if isinstance(item, str)
-    }
+    completed = _normalize_completed(journal.get("completed", []))
 
     for resource in normalized:
         key = _resource_key(resource)
@@ -120,7 +126,7 @@ async def execute_removal_journal(
 def clear_removal_journal(
     config: dict[str, Any],
     *,
-    checkpoint: FinalizeCallable,
+    checkpoint: CheckpointCallable,
 ) -> None:
     """Remove the journal only after Discord and logical config are finalized."""
     config.pop(PENDING_REMOVAL_KEY, None)
