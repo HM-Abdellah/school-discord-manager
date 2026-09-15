@@ -110,7 +110,7 @@ class TransactionalServerBuilder(ServerBuilder):
 async def build_and_persist(guild: discord.Guild, config: dict[str, Any]):
     """Run a build against an isolated config and commit it only after success."""
     working_config = deepcopy(config)
-    validate_managed_registry(guild, working_config)
+    await validate_managed_registry(guild, working_config)
     builder = TransactionalServerBuilder(guild)
 
     try:
