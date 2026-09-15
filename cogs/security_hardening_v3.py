@@ -9,6 +9,7 @@ from discord.ext import commands
 from config.curriculum import get_levels, get_stream_abbreviation, get_streams
 from services.audit import record_event
 from services.command_autocomplete import level_autocomplete, stream_autocomplete
+from services.discord_ownership import validate_managed_registry
 from services.permissions import (
     ROLE_ADMIN,
     ROLE_PROFESSOR,
@@ -161,6 +162,11 @@ class HardenedResetCommands(commands.Cog):
             await interaction.response.send_message("❌ Confirmation exacte requise : `RESET SCHOOL MANAGER`.", ephemeral=True)
             return
         config = get_guild_config(guild.id) or {}
+        try:
+            validate_managed_registry(guild, config)
+        except RuntimeError as exc:
+            await interaction.response.send_message(f"❌ Reset refusé : identité gérée incohérente (`{exc}`). Aucun resource n'a été supprimé.", ephemeral=True)
+            return
         role_ids = {value for value in _managed_mapping(config, "roles").values() if isinstance(value, int) and value > 0}
         channel_ids = {value for value in _managed_mapping(config, "channels").values() if isinstance(value, int) and value > 0}
         category_ids = {value for value in _managed_mapping(config, "categories").values() if isinstance(value, int) and value > 0}
