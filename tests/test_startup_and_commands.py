@@ -1,3 +1,4 @@
+import ast
 import importlib
 import inspect
 import os
@@ -20,7 +21,34 @@ EXPECTED_RUNTIME_OWNERS = {
     "removestream": "cogs.removestream_fix",
     "setexam": "cogs.section_aware_exam",
     "set_timetable": "cogs.section_aware_timetable",
+    "newyear": "cogs.server_v3",
+    "resetserver": "cogs.security_hardening_v2",
+    "assignstudent": "cogs.security_hardening_v2",
+    "assignteacher": "cogs.security_hardening_v2",
+    "assignteacherfull": "cogs.command_fixes",
+    "assignsubjectteachers": "cogs.command_fixes",
+    "reportabsence": "cogs.command_fixes",
 }
+
+
+def _command_names_in_file(path: str) -> list[str]:
+    source = Path(path).read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=path)
+    names: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            if not (
+                isinstance(decorator, ast.Call)
+                and isinstance(decorator.func, ast.Attribute)
+                and decorator.func.attr == "command"
+            ):
+                continue
+            for keyword in decorator.keywords:
+                if keyword.arg == "name" and isinstance(keyword.value, ast.Constant):
+                    names.append(str(keyword.value.value))
+    return names
 
 
 def test_all_bot_extensions_have_async_setup_entrypoints():
@@ -31,28 +59,41 @@ def test_all_bot_extensions_have_async_setup_entrypoints():
         assert inspect.iscoroutinefunction(setup), f"setup() must be async in {extension}"
 
 
-def test_runtime_loader_has_one_explicit_final_owner_per_overridden_command():
+def test_runtime_loader_declares_final_command_owners():
     extensions = list(SchoolBot.EXTENSIONS)
     assert "cogs.edge_case_hardening" not in extensions
+    assert extensions.index("cogs.removestream_fix") < extensions.index("cogs.section_aware_exam")
+    assert extensions.index("cogs.section_aware_exam") < extensions.index("cogs.section_aware_timetable")
 
-    assert extensions.index(EXPECTED_RUNTIME_OWNERS["removestream"]) < extensions.index(EXPECTED_RUNTIME_OWNERS["setexam"])
-    assert extensions.index(EXPECTED_RUNTIME_OWNERS["setexam"]) < extensions.index(EXPECTED_RUNTIME_OWNERS["set_timetable"])
-    assert "cogs.command_fixes" in extensions
 
-    final_owner_positions = {
-        command: extensions.index(owner)
-        for command, owner in EXPECTED_RUNTIME_OWNERS.items()
+def test_critical_commands_have_one_source_definition_and_expected_owner():
+    modules = {
+        "cogs.server_v3": "cogs/server_v3.py",
+        "cogs.security_hardening_v2": "cogs/security_hardening_v2.py",
+        "cogs.command_fixes": "cogs/command_fixes.py",
+        "cogs.removestream_fix": "cogs/removestream_fix.py",
+        "cogs.section_aware_exam": "cogs/section_aware_exam.py",
+        "cogs.section_aware_timetable": "cogs/section_aware_timetable.py",
     }
-    assert len(final_owner_positions) == len(EXPECTED_RUNTIME_OWNERS)
+    definitions: dict[str, list[str]] = {command: [] for command in EXPECTED_RUNTIME_OWNERS}
+    for module, path in modules.items():
+        for command in _command_names_in_file(path):
+            if command in definitions:
+                definitions[command].append(module)
+
+    for command, owner in EXPECTED_RUNTIME_OWNERS.items():
+        assert definitions[command] == [owner], (
+            f"{command} must have exactly one source owner; "
+            f"found {definitions[command]}"
+        )
 
 
 def test_section_aware_commands_are_configured_for_maximum_section_eight():
-    exam_source = inspect.getsource(importlib.import_module("cogs.section_aware_exam"))
-    timetable_source = inspect.getsource(importlib.import_module("cogs.section_aware_timetable"))
-    assert "MAX_SECTIONS = 8" in exam_source
-    assert "app_commands.Range[int, 1, MAX_SECTIONS]" in exam_source
-    assert "MAX_SECTIONS = 8" in timetable_source
-    assert "app_commands.Range[int, 1, MAX_SECTIONS]" in timetable_source
+    exam_module = importlib.import_module("cogs.section_aware_exam")
+    timetable_module = importlib.import_module("cogs.section_aware_timetable")
+    assert "app_commands.Range[int, 1, 8]" in inspect.getsource(exam_module)
+    assert "MAX_SECTIONS = 8" in inspect.getsource(timetable_module)
+    assert "app_commands.Range[int, 1, MAX_SECTIONS]" in inspect.getsource(timetable_module)
 
 
 def test_legacy_resource_discovery_requires_exact_canonical_names():
