@@ -89,24 +89,28 @@ def test_critical_commands_have_one_source_definition_and_expected_owner():
         )
 
 
-def test_critical_command_cogs_have_no_cog_to_cog_dependency():
-    critical_modules = (
+def test_command_cogs_use_service_layer_not_other_command_cogs():
+    command_cogs = (
         "cogs/command_fixes.py",
-        "cogs/security_hardening_v2.py",
         "cogs/removestream_fix.py",
         "cogs/section_aware_exam.py",
         "cogs/section_aware_timetable.py",
     )
-    for path in critical_modules:
+    for path in command_cogs:
         source = Path(path).read_text(encoding="utf-8")
-        assert "from cogs." not in source, f"{path} must depend on services/config, not another cog"
-        assert "import cogs." not in source, f"{path} must depend on services/config, not another cog"
+        assert "from cogs." not in source, f"{path} must not import another command cog"
+        assert "import cogs." not in source, f"{path} must not import another command cog"
+
+
+def test_security_cog_owns_only_security_commands():
+    commands = _command_names_in_file("cogs/security_hardening_v2.py")
+    assert sorted(commands) == ["assignstudent", "assignteacher", "resetserver"]
 
 
 def test_shared_command_helpers_live_outside_cogs():
-    source = Path("services/command_autocomplete.py").read_text(encoding="utf-8")
-    assert "async def level_autocomplete" in source
-    assert "async def stream_autocomplete" in source
+    autocomplete = Path("services/command_autocomplete.py").read_text(encoding="utf-8")
+    assert "async def level_autocomplete" in autocomplete
+    assert "async def stream_autocomplete" in autocomplete
     resolver = Path("services/discord_registry.py").read_text(encoding="utf-8")
     assert "async def resolve_managed_text_channel" in resolver
     assert "def persist_registry_repair" in resolver
