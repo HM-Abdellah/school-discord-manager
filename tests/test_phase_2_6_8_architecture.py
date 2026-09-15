@@ -1,5 +1,9 @@
 import ast
+import os
 from pathlib import Path
+
+os.environ.setdefault("DISCORD_TOKEN", "test-token")
+os.environ.setdefault("DISCORD_GUILD_ID", "123456789")
 
 from bot import SchoolBot
 
@@ -63,9 +67,8 @@ def test_security_v2_is_not_a_runtime_extension_or_command_source():
 
 
 def test_runtime_cogs_do_not_import_command_cogs():
-    excluded = {"cogs.admin"}
     for extension in SchoolBot.EXTENSIONS:
-        if extension in excluded or not extension.startswith("cogs."):
+        if not extension.startswith("cogs.") or extension == "cogs.admin":
             continue
         source = (ROOT / (extension.replace(".", "/") + ".py")).read_text(encoding="utf-8")
         assert "from cogs." not in source, extension
