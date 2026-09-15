@@ -2,53 +2,44 @@ from types import SimpleNamespace
 
 import pytest
 
-from cogs.security_hardening_v2 import (
-    _recorded_id,
-    _stream_managed_ids,
-    _student_staff_conflict,
-    _teacher_target_conflict,
-    _valid_academic_year,
-)
+from cogs.removestream_fix import _recorded_id, _stream_channel_names, _stream_role_names
+from cogs.server_v3 import _valid_academic_year
+from cogs.security_hardening_v2 import _student_staff_conflict, _teacher_target_conflict
 
 
-def test_stream_destructive_scope_uses_recorded_ids_only(monkeypatch):
+def test_stream_destructive_scope_builds_only_canonical_managed_names(monkeypatch):
     monkeypatch.setattr(
-        "cogs.security_hardening_v2.get_stream_subjects",
+        "cogs.removestream_fix.get_stream_subjects",
         lambda _level, _stream: ["Mathématiques", "Physique et Chimie"],
     )
-    monkeypatch.setattr("cogs.security_hardening_v2.get_stream_abbreviation", lambda _level, _stream: "TCS")
-    monkeypatch.setattr("cogs.security_hardening_v2._stream_category_name", lambda *_args: "📘・TC・🔬 TCS")
-    monkeypatch.setattr("cogs.security_hardening_v2._subject_channel_name", lambda code, subject: f"📚-{code}・{subject}")
-    monkeypatch.setattr("cogs.security_hardening_v2._subject_role_name", lambda level, stream, subject: f"Matière - TCS - {subject}")
-
-    config = {
-        "managed": {
-            "roles": {
-                "Filière - TCS": 101,
-                "Élèves - TCS": 102,
-                "Matière - TCS - Mathématiques": 103,
-                "UNRELATED": 999,
-            },
-            "channels": {
-                "📌-TCS・informations": 201,
-                "🗓️-TCS・emploi-du-temps": 202,
-                "📝-TCS・examens": 203,
-                "📚-TCS・Mathématiques": 204,
-                "custom-channel": 9999,
-                "🔊-tcs-à-distance": 205,
-            },
-            "categories": {"📘・TC・🔬 TCS": 301, "custom": 9998},
-        }
-    }
-
-    role_ids, channel_ids, category_id, voice_id = _stream_managed_ids(
-        config, "Tronc Commun", "Tronc Commun Scientifique"
+    monkeypatch.setattr(
+        "cogs.removestream_fix.get_stream_abbreviation",
+        lambda _level, _stream: "TCS",
     )
-    assert role_ids == {101, 102, 103}
-    assert channel_ids == {201, 202, 203, 204}
-    assert category_id == 301
-    assert voice_id == 205
-    assert 9999 not in channel_ids
+    monkeypatch.setattr(
+        "cogs.removestream_fix._subject_channel_name",
+        lambda code, subject: f"📚-{code}・{subject}",
+    )
+    monkeypatch.setattr(
+        "cogs.removestream_fix.STREAM_ROLE_PREFIX",
+        "Filière - ",
+    )
+    monkeypatch.setattr(
+        "cogs.removestream_fix.STUDENT_STREAM_ROLE_PREFIX",
+        "Élèves - ",
+    )
+
+    role_names = _stream_role_names("Tronc Commun", "Tronc Commun Scientifique")
+    channel_names = _stream_channel_names("Tronc Commun", "Tronc Commun Scientifique")
+
+    assert role_names == {"Filière - TCS", "Élèves - TCS"}
+    assert channel_names == {
+        "📌-TCS・informations",
+        "🗓️-TCS・emploi-du-temps",
+        "📝-TCS・examens",
+        "📚-TCS・Mathématiques",
+        "📚-TCS・Physique et Chimie",
+    }
 
 
 def test_recorded_id_fails_closed_for_missing_or_invalid_values():
@@ -58,7 +49,10 @@ def test_recorded_id_fails_closed_for_missing_or_invalid_values():
     assert _recorded_id(config, "channels", "z") == 55
 
 
-@pytest.mark.parametrize("value", ["1999/2000", "2101/2102", "2026/2028", "2026-2027", "2026/27"])
+@pytest.mark.parametrize(
+    "value",
+    ["1999/2000", "2101/2102", "2026/2028", "2026-2027", "2026/27"],
+)
 def test_invalid_academic_years_are_rejected(value):
     assert _valid_academic_year(value) is False
 
@@ -90,7 +84,15 @@ def test_student_assignment_allows_student_reassignment_but_blocks_staff(monkeyp
     prof = _role("Prof", 11)
     student = _role("Élève", 12)
 
-    monkeypatch.setattr("cogs.security_hardening_v2.get_managed_role", lambda _guild, name: {"Administration": admin, "Prof": prof, "Prof (F)": None, "Élève": student}.get(name))
+    monkeypatch.setattr(
+        "cogs.security_hardening_v2.get_managed_role",
+        lambda _guild, name: {
+            "Administration": admin,
+            "Prof": prof,
+            "Prof (F)": None,
+            "Élève": student,
+        }.get(name),
+    )
 
     guild = SimpleNamespace(roles=[admin, prof, student])
     enrolled_student = SimpleNamespace(bot=False, roles=[student])
@@ -107,7 +109,15 @@ def test_teacher_assignment_blocks_student_admin_and_bot(monkeypatch):
     prof = _role("Prof", 11)
     student = _role("Élève", 12)
 
-    monkeypatch.setattr("cogs.security_hardening_v2.get_managed_role", lambda _guild, name: {"Administration": admin, "Prof": prof, "Prof (F)": None, "Élève": student}.get(name))
+    monkeypatch.setattr(
+        "cogs.security_hardening_v2.get_managed_role",
+        lambda _guild, name: {
+            "Administration": admin,
+            "Prof": prof,
+            "Prof (F)": None,
+            "Élève": student,
+        }.get(name),
+    )
     guild = SimpleNamespace(roles=[admin, prof, student])
 
     assert _teacher_target_conflict(SimpleNamespace(bot=True, roles=[]), guild) is not None
