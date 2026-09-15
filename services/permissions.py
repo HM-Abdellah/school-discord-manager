@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import wraps
+import types
 
 import discord
 from discord import app_commands
@@ -131,26 +132,47 @@ def _preflight_message(interaction: discord.Interaction, *, needs_channels: bool
     return None
 
 
+def _wrap_with_mutation_lock(function):
+    """Serialize one command callback per guild without changing annotation resolution."""
+    original = function
+
+    async def guarded(*args, **kwargs):
+        interaction = next((arg for arg in args if isinstance(arg, discord.Interaction)), None)
+        guild = getattr(interaction, "guild", None)
+        if guild is None:
+            return await original(*args, **kwargs)
+        async with get_build_lock(guild.id):
+            return await original(*args, **kwargs)
+
+    # discord.py resolves annotations against callback.__globals__. A normal
+    # functools.wraps wrapper would leave those globals pointing at this service
+    # module, so create an equivalent function using the command module's globals.
+    wrapped_globals = dict(function.__globals__)
+    wrapped_globals["discord"] = discord
+    wrapped_globals["get_build_lock"] = get_build_lock
+    guarded = types.FunctionType(
+        guarded.__code__,
+        wrapped_globals,
+        name=function.__name__,
+        argdefs=guarded.__defaults__,
+        closure=guarded.__closure__,
+    )
+    guarded.__kwdefaults__ = guarded.__kwdefaults__
+    guarded.__module__ = function.__module__
+    guarded.__qualname__ = function.__qualname__
+    guarded.__doc__ = function.__doc__
+    guarded.__annotations__ = dict(getattr(function, "__annotations__", {}))
+    guarded.__dict__.update(getattr(function, "__dict__", {}))
+    guarded.__wrapped__ = function
+    return guarded
+
+
 def _apply_default_permission(function, *, manage_roles: bool = False, administrator: bool = False):
     if administrator:
         return app_commands.default_permissions(administrator=True)(function)
     if manage_roles:
         return app_commands.default_permissions(manage_roles=True)(function)
     return function
-
-
-def _wrap_with_mutation_lock(function):
-    """Serialize a command callback per guild while preserving its function metadata."""
-    @wraps(function)
-    async def guarded(*args, **kwargs):
-        interaction = next((arg for arg in args if isinstance(arg, discord.Interaction)), None)
-        guild = getattr(interaction, "guild", None)
-        if guild is None:
-            return await function(*args, **kwargs)
-        async with get_build_lock(guild.id):
-            return await function(*args, **kwargs)
-
-    return guarded
 
 
 def management_check() -> app_commands.check:
