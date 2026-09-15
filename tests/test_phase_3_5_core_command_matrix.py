@@ -37,4 +37,4 @@ def test_core_matrix_covers_destructive_and_repetition_paths():
     assert "/resetserver" in by_command
     assert "unmanaged" in by_command["/removestream"]["action"]
     assert "unmanaged" in by_command["/resetserver"]["action"]
-    assert "Repeat" in by_command["/build"]["action"]
+    assert "twice" in by_command["/build"]["action"].casefold()
