@@ -34,9 +34,13 @@ async def test_resolver_refuses_missing_managed_ids(monkeypatch):
     monkeypatch.setattr(removestream_fix.discord, "CategoryChannel", FakeCategoryChannel)
     monkeypatch.setattr(removestream_fix.discord, "Role", FakeRole)
 
+    async def forbidden_fetch_channels():
+        raise AssertionError("destructive resolver must not perform name-discovery fetches")
+
     guild = SimpleNamespace(
         channels=[],
         roles=[],
+        fetch_channels=forbidden_fetch_channels,
         get_channel=lambda _id: None,
         get_role=lambda _id: None,
     )
