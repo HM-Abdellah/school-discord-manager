@@ -24,6 +24,11 @@ if not TOKEN:
 class SchoolBot(commands.Bot):
     """Main bot with application-command synchronization and cog loading."""
 
+    # Runtime ownership order is intentional:
+    # - command_fixes provides the remaining legacy commands.
+    # - removestream_fix owns /removestream.
+    # - discord_aware_commands provides shared live-Discord resolution helpers.
+    # - section-aware cogs are the final owners of /setexam and /set_timetable.
     EXTENSIONS = (
         "cogs.setup",
         "cogs.server_v3",
@@ -33,10 +38,10 @@ class SchoolBot(commands.Bot):
         "cogs.command_fixes",
         "cogs.year_rollback",
         "cogs.security_hardening_v2",
-        "cogs.edge_case_hardening",
         "cogs.removestream_fix",
         "cogs.discord_aware_commands",
         "cogs.section_aware_exam",
+        "cogs.section_aware_timetable",
     )
 
     def __init__(self) -> None:
