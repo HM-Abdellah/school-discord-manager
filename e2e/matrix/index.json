@@ -1,0 +1,23 @@
+{
+  "phase": "3",
+  "matrices": [
+    "core_commands.json",
+    "permission_roles.json",
+    "sections_timetable_exam.json",
+    "failure_recovery.json",
+    "concurrency_regression.json"
+  ],
+  "execution_model": {
+    "discord_actor": "real normal Discord test user account",
+    "observer": "E2E bot token using e2e.runner",
+    "account_count": 2,
+    "live_automation_note": "Slash-command execution is not performed with user tokens/self-bots. Live scenarios require a normal Discord account to perform the command and the observer bot to capture the resulting guild state."
+  },
+  "gate": {
+    "required_for_phase_completion": [
+      "all matrix files structurally valid",
+      "unit/regression CI green on Python 3.12 and 3.13",
+      "live E2E scenarios executed against a dedicated Discord test guild"
+    ]
+  }
+}
