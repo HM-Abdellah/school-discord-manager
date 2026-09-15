@@ -36,6 +36,7 @@ class SchoolBot(commands.Bot):
         "cogs.edge_case_hardening",
         "cogs.removestream_fix",
         "cogs.discord_aware_commands",
+        "cogs.section_aware_exam",
     )
 
     def __init__(self) -> None:
