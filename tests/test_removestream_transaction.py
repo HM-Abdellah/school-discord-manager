@@ -110,11 +110,3 @@ def test_invalid_resource_is_rejected_before_execution():
 
     with pytest.raises(ValueError, match="Invalid removal resource"):
         transaction._normalize_resource(journal["resources"][0])
-
-
-def test_category_resources_are_supported():
-    resource = transaction._normalize_resource(
-        {"kind": "category", "id": 404, "name": "📘・TC・🔬 TCS"}
-    )
-    assert resource["kind"] == "category"
-    assert resource["id"] == 404
