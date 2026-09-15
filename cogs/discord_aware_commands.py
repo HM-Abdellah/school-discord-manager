@@ -13,7 +13,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.security_hardening_v2 import (
+from cogs.command_fixes import (
     level_autocomplete,
     stream_autocomplete,
     subject_autocomplete,
