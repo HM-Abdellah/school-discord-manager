@@ -1,0 +1,154 @@
+{
+  "phase": "3.5",
+  "name": "core_command_matrix",
+  "principles": [
+    "Execute with a real Discord user in the dedicated E2E guild.",
+    "Capture Discord state before and after with e2e.runner.",
+    "Verify both visible Discord effects and command response semantics.",
+    "Never infer success from an HTTP/API call alone."
+  ],
+  "cases": [
+    {
+      "id": "CORE-001",
+      "command": "/setup",
+      "precondition": "Dedicated test guild; management-authorized user; no assumption about school sections.",
+      "action": "Open /setup, select configured levels/streams for the test school, confirm the summary, then build.",
+      "discord_expectation": "Only resources belonging to the submitted configuration are created; managed IDs are persisted.",
+      "repeat_expectation": "Repeating the same build does not duplicate managed resources."
+    },
+    {
+      "id": "CORE-002",
+      "command": "/build",
+      "precondition": "A valid stored configuration exists.",
+      "action": "Run /build twice.",
+      "discord_expectation": "Second run reconciles existing managed resources instead of creating duplicates.",
+      "repeat_expectation": "Resource IDs remain stable when resources still match their managed identities."
+    },
+    {
+      "id": "CORE-003",
+      "command": "/addstream",
+      "precondition": "Stored configuration exists and selected stream is not configured.",
+      "action": "Add one valid stream, then repeat the same request.",
+      "discord_expectation": "First request adds the stream; second request reports it is already configured and does not rebuild it."
+    },
+    {
+      "id": "CORE-004",
+      "command": "/removestream",
+      "precondition": "A configured stream and its managed resources exist.",
+      "action": "Remove the stream, then rerun after introducing an unmanaged same-name resource.",
+      "discord_expectation": "Managed resources are removed; an unmanaged same-name resource is not selected by name discovery."
+    },
+    {
+      "id": "CORE-005",
+      "command": "/status",
+      "precondition": "The guild has a stored configuration.",
+      "action": "Run /status before and after a controlled reconciliation.",
+      "discord_expectation": "Reported state reflects the current configuration and live Discord structure."
+    },
+    {
+      "id": "CORE-006",
+      "command": "/newyear",
+      "precondition": "Management-authorized user and an existing academic-year state.",
+      "action": "Create the next valid academic year.",
+      "discord_expectation": "The new year becomes the active year according to command semantics and is persisted."
+    },
+    {
+      "id": "CORE-007",
+      "command": "/years",
+      "precondition": "At least one academic year exists.",
+      "action": "Run /years.",
+      "discord_expectation": "The active/inactive year history is shown without mutating server structure."
+    },
+    {
+      "id": "CORE-008",
+      "command": "/rollbackyear",
+      "precondition": "At least two stored academic years exist and the user is the required owner.",
+      "action": "Rollback to a known prior academic year.",
+      "discord_expectation": "Academic-year state changes atomically from the command perspective; unrelated Discord resources are not deleted by the year rollback itself."
+    },
+    {
+      "id": "CORE-009",
+      "command": "/assignstudent",
+      "precondition": "Target member can be assigned and the selected stream exists.",
+      "action": "Assign the member to one stream, then assign the same member to another stream.",
+      "discord_expectation": "Required student/stream roles are present and conflicting student-stream assignment roles are normalized according to command semantics."
+    },
+    {
+      "id": "CORE-010",
+      "command": "/assignteacher",
+      "precondition": "Target member is not currently assigned as a student.",
+      "action": "Assign professor role with one gender option, then switch the gender option.",
+      "discord_expectation": "Exactly the applicable managed professor role remains."
+    },
+    {
+      "id": "CORE-011",
+      "command": "/assignsubjectteachers",
+      "precondition": "Selected subject channel exists and selected members are valid professors.",
+      "action": "Assign one or more professors to a subject.",
+      "discord_expectation": "Subject access is updated without converting a student into a professor or creating duplicate subject roles."
+    },
+    {
+      "id": "CORE-012",
+      "command": "/assignteacherfull",
+      "precondition": "Configured stream/subject exists and target member is a valid professor.",
+      "action": "Run the full teacher assignment path.",
+      "discord_expectation": "All documented managed teacher roles/access are applied consistently with the assignment operation."
+    },
+    {
+      "id": "CORE-013",
+      "command": "/reportabsence",
+      "precondition": "Managed absences channel exists and target member represents the absent teacher.",
+      "action": "Publish one absence announcement.",
+      "discord_expectation": "The announcement is posted to the managed absence channel and no extra structure is created."
+    },
+    {
+      "id": "CORE-014",
+      "command": "/set_timetable",
+      "precondition": "Configured stream exists and a valid section value 1..8 is supplied.",
+      "action": "Publish/update a timetable entry for a section.",
+      "discord_expectation": "The shared stream timetable channel contains the section-tagged timetable without creating per-section channels."
+    },
+    {
+      "id": "CORE-015",
+      "command": "/setexam",
+      "precondition": "Configured stream exists and a valid section value 1..8 is supplied.",
+      "action": "Create/update an exam entry for a section.",
+      "discord_expectation": "The stream exam surface is updated for the requested section according to current section-aware semantics."
+    },
+    {
+      "id": "CORE-016",
+      "command": "/studenthistory",
+      "precondition": "A student record with history exists.",
+      "action": "Request the student's history.",
+      "discord_expectation": "History is displayed without mutating Discord roles or channels."
+    },
+    {
+      "id": "CORE-017",
+      "command": "/leave_school",
+      "precondition": "A registered student currently has managed student assignment roles.",
+      "action": "Mark the student as having left the school.",
+      "discord_expectation": "Managed student assignment roles are removed and the persisted history remains available."
+    },
+    {
+      "id": "CORE-018",
+      "command": "/adminpanel",
+      "precondition": "Management-authorized user and a configured guild.",
+      "action": "Open the administrative dashboard.",
+      "discord_expectation": "Dashboard reflects the current academic year, counts, configuration, and recent audit events."
+    },
+    {
+      "id": "CORE-019",
+      "command": "/serverhealth",
+      "precondition": "Management-authorized user in the dedicated guild.",
+      "action": "Run the health check.",
+      "discord_expectation": "Permission, hierarchy, channel-capacity, and configuration diagnostics reflect live state."
+    },
+    {
+      "id": "CORE-020",
+      "command": "/resetserver",
+      "precondition": "Owner-authorized user; valid managed registry; dedicated E2E guild.",
+      "action": "Reset the managed server structure while leaving an explicitly unmanaged test resource present.",
+      "discord_expectation": "Only persisted managed resources are deleted; unmanaged resources survive."
+    }
+  ]
+}
