@@ -1,0 +1,22 @@
+{
+  "phase": "3.9",
+  "name": "concurrency_regression_matrix",
+  "cases": [
+    {"id":"CONC-001","operation":"/build + /build","actors":["OWNER","MEMBER_ADMIN"],"expectation":"Per-guild mutation lock prevents overlapping destructive/build mutations; exactly one serialized reconciliation occurs at a time."},
+    {"id":"CONC-002","operation":"/build + /addstream","actors":["OWNER","MEMBER_ADMIN"],"expectation":"Operations targeting the same guild serialize through the shared build lock and persisted state remains internally consistent."},
+    {"id":"CONC-003","operation":"/addstream + /addstream same stream","actors":["OWNER","MEMBER_ADMIN"],"expectation":"Only one stream becomes configured; duplicate concurrent creation is rejected or reconciled without duplicate managed resources."},
+    {"id":"CONC-004","operation":"/removestream + /build","actors":["OWNER","MEMBER_ADMIN"],"expectation":"Destructive removal and reconstruction cannot interleave in a way that causes unrelated managed resources to be deleted."},
+    {"id":"CONC-005","operation":"/resetserver + mutation","actors":["OWNER","MEMBER_ADMIN"],"expectation":"Reset participates in the same guild mutation boundary and cannot race with another mutating command."},
+    {"id":"CONC-006","operation":"two role assignments for same member","actors":["OWNER","MEMBER_ADMIN"],"expectation":"Managed role state remains normalized; later state does not contain an accidental impossible combination created by concurrent operations."},
+    {"id":"CONC-007","operation":"two timetable publications for different sections","actors":["OWNER","MEMBER_ADMIN"],"expectation":"Both messages can exist in the one shared timetable channel and their section metadata remains distinguishable."},
+    {"id":"CONC-008","operation":"two exam publications for different sections","actors":["OWNER","MEMBER_ADMIN"],"expectation":"Both exams remain in the shared exam channel with their section identifiers intact."},
+    {"id":"REG-001","operation":"rerun full core matrix","actors":["OWNER","MEMBER_ADMIN"],"expectation":"Previously validated command paths keep their expected behavior after later hardening changes."},
+    {"id":"REG-002","operation":"rerun destructive boundary scenarios","actors":["OWNER"],"expectation":"Same-name unmanaged resources remain protected and missing/mismatched managed IDs remain fail-closed."},
+    {"id":"REG-003","operation":"rerun section boundary scenarios","actors":["OWNER"],"expectation":"1 and 8 remain valid while 0 and 9 remain rejected."},
+    {"id":"REG-004","operation":"rerun permission scenarios","actors":["OWNER","MEMBER","MEMBER_ADMIN"],"expectation":"Authorization model remains owner-or-Administration for management commands and owner-only where specified."},
+    {"id":"REG-005","operation":"restart bot then inspect state","actors":["OWNER"],"expectation":"SQLite-backed logical state and JSON recovery do not create duplicate Discord resources on startup."},
+    {"id":"REG-006","operation":"rename an unmanaged resource to a managed-looking name","actors":["OWNER"],"expectation":"The next managed operation does not silently adopt it when its persisted managed ID is absent."},
+    {"id":"REG-007","operation":"delete a managed resource externally then rerun build","actors":["OWNER"],"expectation":"Reconciliation detects the missing managed resource and recreates only the intended resource, preserving unrelated IDs."},
+    {"id":"REG-008","operation":"move a managed channel to another category externally","actors":["OWNER"],"expectation":"Operations that require exact managed identity do not treat the moved channel as the expected resource without explicit reconciliation semantics."}
+  ]
+}
