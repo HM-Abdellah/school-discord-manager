@@ -24,8 +24,15 @@ def _call_line_numbers(node):
     return result
 
 
-def test_setup_build_happens_before_config_persistence():
+def test_setup_delegates_build_and_persistence_to_transaction_service():
     node = _function_node(ROOT / "cogs" / "setup.py", "build_callback")
+    lines = _call_line_numbers(node)
+    assert "build_and_persist" in lines
+    assert "save_guild_config" not in lines
+
+
+def test_transaction_service_build_happens_before_config_persistence():
+    node = _function_node(ROOT / "services" / "build_transaction.py", "build_and_persist")
     lines = _call_line_numbers(node)
     assert min(lines["build"]) < min(lines["save_guild_config"])
 
