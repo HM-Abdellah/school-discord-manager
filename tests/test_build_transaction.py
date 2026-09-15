@@ -22,17 +22,17 @@ class _FailingBuilder(_FakeBuilder):
         raise RuntimeError("discord mutation failed")
 
 
+async def _no_conflict(guild, config):
+    return None
+
+
 @pytest.mark.asyncio
 async def test_build_and_persist_commits_working_config_only_after_build_success(monkeypatch):
     original = {"academic_year": "2026/2027", "levels": []}
     saved = {}
 
     monkeypatch.setattr(build_transaction, "TransactionalServerBuilder", _FakeBuilder)
-    monkeypatch.setattr(
-        build_transaction,
-        "validate_managed_registry",
-        lambda guild, config: None,
-    )
+    monkeypatch.setattr(build_transaction, "validate_managed_registry", _no_conflict)
 
     def fake_save(guild_id, config):
         saved["guild_id"] = guild_id
@@ -54,11 +54,7 @@ async def test_build_failure_rolls_back_and_does_not_mutate_caller_config(monkey
     saved = AsyncMock()
 
     monkeypatch.setattr(build_transaction, "TransactionalServerBuilder", _FailingBuilder)
-    monkeypatch.setattr(
-        build_transaction,
-        "validate_managed_registry",
-        lambda guild, config: None,
-    )
+    monkeypatch.setattr(build_transaction, "validate_managed_registry", _no_conflict)
     monkeypatch.setattr(build_transaction, "save_guild_config", saved)
 
     with pytest.raises(RuntimeError, match="discord mutation failed"):
@@ -74,11 +70,7 @@ async def test_persistence_failure_rolls_back_discord_and_does_not_commit_config
     builder = _FakeBuilder(SimpleNamespace(id=123))
 
     monkeypatch.setattr(build_transaction, "TransactionalServerBuilder", lambda guild: builder)
-    monkeypatch.setattr(
-        build_transaction,
-        "validate_managed_registry",
-        lambda guild, config: None,
-    )
+    monkeypatch.setattr(build_transaction, "validate_managed_registry", _no_conflict)
 
     def fail_save(guild_id, config):
         raise OSError("disk full")
