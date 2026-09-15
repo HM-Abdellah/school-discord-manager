@@ -147,15 +147,63 @@ def _checkpoint_factory(guild_id: int):
 
 
 def _journal_target(guild: discord.Guild, resource: dict):
+    """Resolve a journal target only when its exact identity still matches."""
     kind = resource.get("kind")
     resource_id = resource.get("id")
+    name = resource.get("name")
     if not isinstance(resource_id, int) or resource_id <= 0:
-        return None
+        raise RuntimeError("journal resource ID invalide")
+    if not isinstance(name, str) or not name:
+        raise RuntimeError("journal resource name invalide")
+
     if kind == "channel":
-        return guild.get_channel(resource_id)
+        target = guild.get_channel(resource_id)
+        if target is None:
+            return None
+
+        channel_type = resource.get("channel_type")
+        expected_category_id = resource.get("category_id")
+        if channel_type == "text":
+            if not isinstance(target, discord.TextChannel):
+                raise RuntimeError(
+                    f"l'ID de salon géré {resource_id} désigne un type différent"
+                )
+        elif channel_type == "voice":
+            if not isinstance(target, discord.VoiceChannel):
+                raise RuntimeError(
+                    f"l'ID de salon vocal géré {resource_id} désigne un type différent"
+                )
+        else:
+            raise RuntimeError(f"type de salon journalisé invalide pour {resource_id}")
+
+        if not isinstance(expected_category_id, int) or expected_category_id <= 0:
+            raise RuntimeError(f"catégorie journalisée invalide pour le salon {resource_id}")
+        actual_category_id = getattr(target, "category_id", None)
+        if actual_category_id != expected_category_id:
+            raise RuntimeError(
+                f"l'ID de salon géré {resource_id} n'appartient plus à la catégorie attendue"
+            )
+        if _norm(target.name) != _norm(name):
+            raise RuntimeError(
+                f"l'ID de salon géré {resource_id} désigne `{target.name}` au lieu de `{name}`"
+            )
+        return target
+
     if kind == "role":
-        return guild.get_role(resource_id)
-    return None
+        target = guild.get_role(resource_id)
+        if target is None:
+            return None
+        if not isinstance(target, discord.Role):
+            raise RuntimeError(f"l'ID de rôle géré {resource_id} désigne un type différent")
+        if target.managed or target.is_default():
+            raise RuntimeError(f"l'ID de rôle géré {resource_id} désigne un rôle non supprimable")
+        if _norm(target.name) != _norm(name):
+            raise RuntimeError(
+                f"l'ID de rôle géré {resource_id} désigne `{target.name}` au lieu de `{name}`"
+            )
+        return target
+
+    raise RuntimeError(f"type de ressource journalisé invalide: {kind!r}")
 
 
 def _remove_journal_owned_entries(config: dict, journal: dict) -> None:
@@ -644,6 +692,8 @@ class SafeRemoveStream(commands.Cog):
                 "kind": "channel",
                 "id": channel.id,
                 "name": name,
+                "channel_type": "text",
+                "category_id": category.id,
             }
             for name, channel in zip(
                 sorted(expected_channel_names),
@@ -656,6 +706,8 @@ class SafeRemoveStream(commands.Cog):
                 "kind": "channel",
                 "id": voice.id,
                 "name": voice_name,
+                "channel_type": "voice",
+                "category_id": voice_category.id,
             }
         )
         resources.extend(
