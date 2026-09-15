@@ -1,4 +1,4 @@
-"""Hardened replacements for Discord commands with dynamic school lookups."""
+"""Teacher-assignment and absence commands with dynamic school lookups."""
 
 from __future__ import annotations
 
@@ -27,22 +27,22 @@ from services.permissions import (
     SUBJECT_ROLE_PREFIX,
     STREAM_ROLE_PREFIX,
     STUDENT_STREAM_ROLE_PREFIX,
+    administrator_overwrite,
     get_managed_role,
     hidden_overwrite,
     management_check,
-    administrator_overwrite,
     professor_subject_member_overwrite,
     professor_subject_view_overwrite,
     student_overwrite,
 )
-from services.server_builder import _subject_channel_name, _stream_category_name
+from services.server_builder import _stream_category_name, _subject_channel_name
 from services.storage import get_guild_config, save_guild_config
 
-OVERRIDDEN_COMMANDS = {
+# This module owns only the three commands below. Timetable and exam commands
+# live in dedicated section-aware cogs; they must never be redefined here.
+OWNED_COMMANDS = {
     "assignteacherfull",
     "assignsubjectteachers",
-    "set_timetable",
-    "setexam",
     "reportabsence",
 }
 
@@ -55,18 +55,35 @@ def _normalize_name(value: str) -> str:
     return unicodedata.normalize("NFKC", value).casefold().replace("\ufe0f", "")
 
 
-async def level_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-    return [app_commands.Choice(name=level, value=level) for level in get_levels() if _contains(level, current)][:25]
+async def level_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    return [
+        app_commands.Choice(name=level, value=level)
+        for level in get_levels()
+        if _contains(level, current)
+    ][:25]
 
 
-async def stream_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+async def stream_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
     level = str(getattr(interaction.namespace, "level", ""))
     if level not in get_levels():
         return []
-    return [app_commands.Choice(name=stream, value=stream) for stream in get_streams(level) if _contains(stream, current)][:25]
+    return [
+        app_commands.Choice(name=stream, value=stream)
+        for stream in get_streams(level)
+        if _contains(stream, current)
+    ][:25]
 
 
-async def subject_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+async def subject_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
     level = str(getattr(interaction.namespace, "level", ""))
     stream = str(getattr(interaction.namespace, "stream", ""))
     if level not in get_levels() or stream not in get_streams(level):
@@ -84,14 +101,21 @@ async def subject_autocomplete(interaction: discord.Interaction, current: str) -
     return choices[:25]
 
 
-async def teacher_subject_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-    """Suggest every subject configured on the server, once, while prioritizing the selected stream."""
+async def teacher_subject_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    """Suggest configured subjects once, prioritizing the selected stream."""
     level = str(getattr(interaction.namespace, "level", ""))
     stream = str(getattr(interaction.namespace, "stream", ""))
     if level not in get_levels():
         return []
 
-    preferred = {subject.casefold() for subject in get_stream_subjects(level, stream)} if stream in get_streams(level) else set()
+    preferred = (
+        {subject.casefold() for subject in get_stream_subjects(level, stream)}
+        if stream in get_streams(level)
+        else set()
+    )
     subjects: list[str] = []
     seen: set[str] = set()
 
@@ -104,7 +128,10 @@ async def teacher_subject_autocomplete(interaction: discord.Interaction, current
         if not isinstance(level_name, str) or level_name not in get_levels():
             continue
         for configured_stream in configured_level.get("streams", []) or []:
-            if not isinstance(configured_stream, dict) or not isinstance(configured_stream.get("name"), str):
+            if (
+                not isinstance(configured_stream, dict)
+                or not isinstance(configured_stream.get("name"), str)
+            ):
                 continue
             stream_name = configured_stream["name"]
             try:
@@ -125,7 +152,12 @@ async def teacher_subject_autocomplete(interaction: discord.Interaction, current
                     seen.add(key)
                     subjects.append(subject)
 
-    subjects.sort(key=lambda item: (item.casefold() not in preferred, get_subject_display_name(item).casefold()))
+    subjects.sort(
+        key=lambda item: (
+            item.casefold() not in preferred,
+            get_subject_display_name(item).casefold(),
+        )
+    )
     choices: list[app_commands.Choice[str]] = []
     for subject in subjects:
         display = get_subject_display_name(subject)
@@ -134,7 +166,10 @@ async def teacher_subject_autocomplete(interaction: discord.Interaction, current
     return choices[:25]
 
 
-async def class_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+async def class_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
     guild = interaction.guild
     if guild is None:
         return []
@@ -151,18 +186,29 @@ async def class_autocomplete(interaction: discord.Interaction, current: str) -> 
             if not isinstance(stream, dict) or not isinstance(stream.get("name"), str):
                 continue
             stream_name = stream["name"]
-            code = str(stream.get("abbreviation") or get_stream_abbreviation(level_name, stream_name))
+            code = str(
+                stream.get("abbreviation")
+                or get_stream_abbreviation(level_name, stream_name)
+            )
             if code in seen_codes:
                 continue
             seen_codes.add(code)
             label = f"{code} — {stream_name}"[:100]
-            if _contains(label, current) or _contains(code, current) or _contains(stream_name, current):
+            if (
+                _contains(label, current)
+                or _contains(code, current)
+                or _contains(stream_name, current)
+            ):
                 choices.append(app_commands.Choice(name=label, value=code))
     return choices[:25]
 
 
-async def _find_text_channel(guild: discord.Guild, category_name: str, expected_name: str) -> discord.TextChannel | None:
-    """Find a managed text channel by ID, then normalized name inside its expected category."""
+async def _find_text_channel(
+    guild: discord.Guild,
+    category_name: str,
+    expected_name: str,
+) -> discord.TextChannel | None:
+    """Resolve a text channel by managed ID, then normalized name in scope."""
     expected_norm = _normalize_name(expected_name)
     config = get_guild_config(guild.id) or {}
     managed = config.get("managed", {})
@@ -173,7 +219,10 @@ async def _find_text_channel(guild: discord.Guild, category_name: str, expected_
             channel = await guild.fetch_channel(channel_id)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             channel = None
-        if isinstance(channel, discord.TextChannel) and _normalize_name(channel.name) == expected_norm:
+        if (
+            isinstance(channel, discord.TextChannel)
+            and _normalize_name(channel.name) == expected_norm
+        ):
             return channel
 
     try:
@@ -191,22 +240,32 @@ async def _find_text_channel(guild: discord.Guild, category_name: str, expected_
         None,
     )
     if category is not None:
-        for channel in list(getattr(category, "text_channels", [])):
-            if _normalize_name(channel.name) == expected_norm:
-                return channel
+        matches = [
+            channel
+            for channel in list(getattr(category, "text_channels", []))
+            if _normalize_name(channel.name) == expected_norm
+        ]
+        if len(matches) == 1:
+            return matches[0]
 
-    for channel in channels_now:
-        if isinstance(channel, discord.TextChannel) and _normalize_name(channel.name) == expected_norm:
-            return channel
-    return None
+    matches = [
+        channel
+        for channel in channels_now
+        if isinstance(channel, discord.TextChannel)
+        and _normalize_name(channel.name) == expected_norm
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _global_subject_role_name(subject: str) -> str:
     return f"{SUBJECT_ROLE_PREFIX}{get_subject_display_name(subject)}"[:100]
 
 
-def _member_is_professor(member: discord.Member, guild: discord.Guild) -> bool:
-    professor_roles = {
+def _member_is_professor(
+    member: discord.Member,
+    guild: discord.Guild,
+) -> bool:
+    professor_role_ids = {
         role.id
         for role in (
             get_managed_role(guild, ROLE_PROFESSOR),
@@ -214,10 +273,16 @@ def _member_is_professor(member: discord.Member, guild: discord.Guild) -> bool:
         )
         if role is not None
     }
-    return any(role.id in professor_roles for role in member.roles if not role.managed)
+    return any(
+        role.id in professor_role_ids
+        for role in member.roles
+        if not role.managed
+    )
 
 
-def _configured_streams(guild: discord.Guild) -> list[tuple[str, str, str]]:
+def _configured_streams(
+    guild: discord.Guild,
+) -> list[tuple[str, str, str]]:
     config = get_guild_config(guild.id) or {}
     result: list[tuple[str, str, str]] = []
     seen: set[str] = set()
@@ -231,7 +296,10 @@ def _configured_streams(guild: discord.Guild) -> list[tuple[str, str, str]]:
             if not isinstance(stream, dict) or not isinstance(stream.get("name"), str):
                 continue
             stream_name = stream["name"]
-            code = str(stream.get("abbreviation") or get_stream_abbreviation(level_name, stream_name))
+            code = str(
+                stream.get("abbreviation")
+                or get_stream_abbreviation(level_name, stream_name)
+            )
             if code not in seen:
                 seen.add(code)
                 result.append((level_name, stream_name, code))
@@ -239,12 +307,14 @@ def _configured_streams(guild: discord.Guild) -> list[tuple[str, str, str]]:
 
 
 def _legacy_subject_map(guild: discord.Guild) -> dict[str, str]:
-    """Map every old stream-specific subject role name to its canonical curriculum subject."""
+    """Map legacy stream-specific subject roles to curriculum subjects."""
     result: dict[str, str] = {}
     for level_name, stream_name, code in _configured_streams(guild):
-        subjects = get_stream_subjects(level_name, stream_name)
-        for subject in subjects:
-            legacy_name = f"{SUBJECT_ROLE_PREFIX}{code} - {get_subject_internal_code(subject)}"
+        for subject in get_stream_subjects(level_name, stream_name):
+            legacy_name = (
+                f"{SUBJECT_ROLE_PREFIX}{code} - "
+                f"{get_subject_internal_code(subject)}"
+            )
             result[legacy_name] = subject
     return result
 
@@ -254,7 +324,7 @@ async def _get_or_create_global_subject_role(
     config: dict,
     subject: str,
 ) -> discord.Role:
-    """Resolve or create the new shared subject role."""
+    """Resolve or create the shared subject role."""
     role_name = _global_subject_role_name(subject)
     role = get_managed_role(guild, role_name)
     if role is None:
@@ -271,13 +341,12 @@ async def _get_or_create_global_subject_role(
     return role
 
 
-async def _migrate_legacy_subject_roles(guild: discord.Guild, member: discord.Member, config: dict) -> list[str]:
-    """Replace old stream-specific subject roles on one teacher with shared subject roles.
-
-    Existing channel overwrites are mirrored onto the new global role so the teacher does
-    not lose access when the legacy role is removed. Legacy role overwrites are left in
-    place for users that have not been migrated yet.
-    """
+async def _migrate_legacy_subject_roles(
+    guild: discord.Guild,
+    member: discord.Member,
+    config: dict,
+) -> list[str]:
+    """Migrate legacy subject roles while preserving channel access."""
     legacy_map = _legacy_subject_map(guild)
     if not legacy_map:
         return []
@@ -294,7 +363,11 @@ async def _migrate_legacy_subject_roles(guild: discord.Guild, member: discord.Me
     migrated_subjects: list[str] = []
     for old_role in old_roles:
         subject = legacy_map[old_role.name]
-        new_role = await _get_or_create_global_subject_role(guild, config, subject)
+        new_role = await _get_or_create_global_subject_role(
+            guild,
+            config,
+            subject,
+        )
         if new_role not in global_roles:
             global_roles.append(new_role)
         if subject not in migrated_subjects:
@@ -304,30 +377,39 @@ async def _migrate_legacy_subject_roles(guild: discord.Guild, member: discord.Me
             try:
                 overwrites = getattr(channel, "overwrites", {})
                 old_overwrite = overwrites.get(old_role)
-                if old_overwrite is None:
+                if old_overwrite is None or new_role in overwrites:
                     continue
-                if new_role not in overwrites:
-                    await channel.set_permissions(
-                        new_role,
-                        overwrite=old_overwrite,
-                        reason="School Manager subject role migration",
-                    )
+                await channel.set_permissions(
+                    new_role,
+                    overwrite=old_overwrite,
+                    reason="School Manager subject role migration",
+                )
             except (discord.Forbidden, discord.HTTPException):
-                # If a channel cannot be migrated, keep the legacy role on the user below.
                 continue
 
     try:
-        await member.add_roles(*global_roles, reason="School Manager migrate legacy subject roles")
-        await member.remove_roles(*old_roles, reason="School Manager remove legacy stream-specific subject roles")
+        await member.add_roles(
+            *global_roles,
+            reason="School Manager migrate legacy subject roles",
+        )
+        await member.remove_roles(
+            *old_roles,
+            reason="School Manager remove legacy stream-specific subject roles",
+        )
     except (discord.Forbidden, discord.HTTPException):
-        # Do not leave the user without a working role if Discord rejects the update.
         return []
 
     return migrated_subjects
 
 
-def _resolve_class_codes(guild: discord.Guild, value: str) -> list[str]:
-    available = {code.casefold(): code for _, _, code in _configured_streams(guild)}
+def _resolve_class_codes(
+    guild: discord.Guild,
+    value: str,
+) -> list[str]:
+    available = {
+        code.casefold(): code
+        for _, _, code in _configured_streams(guild)
+    }
     resolved: list[str] = []
     for part in value.split(","):
         token = part.strip()
@@ -335,7 +417,9 @@ def _resolve_class_codes(guild: discord.Guild, value: str) -> list[str]:
             continue
         code = available.get(token.casefold())
         if code is None:
-            raise ValueError(f"Classe/filière inconnue : `{token}`. Utilise l'autocomplétion.")
+            raise ValueError(
+                f"Classe/filière inconnue : `{token}`. Utilise l'autocomplétion."
+            )
         if code not in resolved:
             resolved.append(code)
     if not resolved:
@@ -343,23 +427,16 @@ def _resolve_class_codes(guild: discord.Guild, value: str) -> list[str]:
     return resolved
 
 
-async def _upsert_bot_embed(channel: discord.TextChannel, *, marker: str, embed: discord.Embed) -> discord.Message:
-    bot_user = channel.guild.me
-    async for message in channel.history(limit=50):
-        if bot_user is not None and message.author.id == bot_user.id and message.embeds:
-            footer = message.embeds[0].footer.text or ""
-            if footer == marker:
-                await message.edit(embed=embed)
-                return message
-    embed.set_footer(text=marker)
-    return await channel.send(embed=embed)
-
-
 class CommandFixes(commands.Cog):
+    """Commands with responsibilities not owned by specialized cogs."""
+
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    @app_commands.command(name="assignteacherfull", description="Affecter un professeur à une filière et à une ou plusieurs matières.")
+    @app_commands.command(
+        name="assignteacherfull",
+        description="Affecter un professeur à une filière et à une ou plusieurs matières.",
+    )
     @app_commands.describe(
         teacher="Professeur",
         gender="Type de rôle professeur",
@@ -373,7 +450,11 @@ class CommandFixes(commands.Cog):
             app_commands.Choice(name="Prof (F)", value="female"),
         ]
     )
-    @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete, subjects=teacher_subject_autocomplete)
+    @app_commands.autocomplete(
+        level=level_autocomplete,
+        stream=stream_autocomplete,
+        subjects=teacher_subject_autocomplete,
+    )
     @management_check()
     async def assign_teacher_full(
         self,
@@ -394,7 +475,8 @@ class CommandFixes(commands.Cog):
             await interaction.followup.send("❌ Niveau ou filière invalide.", ephemeral=True)
             return
         if any(
-            role.name == ROLE_STUDENT or role.name.startswith(STUDENT_STREAM_ROLE_PREFIX)
+            role.name == ROLE_STUDENT
+            or role.name.startswith(STUDENT_STREAM_ROLE_PREFIX)
             for role in teacher.roles
             if not role.managed
         ):
@@ -404,46 +486,107 @@ class CommandFixes(commands.Cog):
             )
             return
 
-        requested = {item.strip().casefold() for item in subjects.split(",") if item.strip()}
+        requested = {
+            item.strip().casefold()
+            for item in subjects.split(",")
+            if item.strip()
+        }
         selected = [
             subject
             for subject in get_stream_subjects(level, stream)
-            if subject.casefold() in requested or get_subject_display_name(subject).casefold() in requested
+            if subject.casefold() in requested
+            or get_subject_display_name(subject).casefold() in requested
         ]
         if not selected:
-            await interaction.followup.send("❌ Aucune matière reconnue pour cette filière. Utilise les suggestions.", ephemeral=True)
+            await interaction.followup.send(
+                "❌ Aucune matière reconnue pour cette filière. Utilise les suggestions.",
+                ephemeral=True,
+            )
             return
 
         stream_code = get_stream_abbreviation(level, stream)
-        stream_role = get_managed_role(guild, f"{STREAM_ROLE_PREFIX}{stream_code}")
-        desired_role = get_managed_role(guild, ROLE_PROFESSOR_FEMALE if gender.value == "female" else ROLE_PROFESSOR)
-        other_role = get_managed_role(guild, ROLE_PROFESSOR if gender.value == "female" else ROLE_PROFESSOR_FEMALE)
+        stream_role = get_managed_role(
+            guild,
+            f"{STREAM_ROLE_PREFIX}{stream_code}",
+        )
+        desired_role = get_managed_role(
+            guild,
+            ROLE_PROFESSOR_FEMALE
+            if gender.value == "female"
+            else ROLE_PROFESSOR,
+        )
+        other_role = get_managed_role(
+            guild,
+            ROLE_PROFESSOR
+            if gender.value == "female"
+            else ROLE_PROFESSOR_FEMALE,
+        )
         if stream_role is None or desired_role is None:
-            await interaction.followup.send("❌ Les rôles scolaires requis pour cette filière n'existent pas. Vérifie `/build`.", ephemeral=True)
+            await interaction.followup.send(
+                "❌ Les rôles scolaires requis pour cette filière n'existent pas. Vérifie `/build`.",
+                ephemeral=True,
+            )
             return
 
         config = get_guild_config(guild.id) or {}
         try:
-            migrated = await _migrate_legacy_subject_roles(guild, teacher, config)
-            subject_roles = [await _get_or_create_global_subject_role(guild, config, subject) for subject in selected]
+            migrated = await _migrate_legacy_subject_roles(
+                guild,
+                teacher,
+                config,
+            )
+            subject_roles = [
+                await _get_or_create_global_subject_role(
+                    guild,
+                    config,
+                    subject,
+                )
+                for subject in selected
+            ]
             if other_role is not None and other_role in teacher.roles:
-                await teacher.remove_roles(other_role, reason="Teacher role normalization")
-            await teacher.add_roles(desired_role, stream_role, *subject_roles, reason="School Manager full teacher assignment")
+                await teacher.remove_roles(
+                    other_role,
+                    reason="Teacher role normalization",
+                )
+            await teacher.add_roles(
+                desired_role,
+                stream_role,
+                *subject_roles,
+                reason="School Manager full teacher assignment",
+            )
             save_guild_config(guild.id, config)
         except discord.Forbidden:
-            await interaction.followup.send("❌ Impossible d'attribuer les rôles. Vérifie la hiérarchie du bot.", ephemeral=True)
+            await interaction.followup.send(
+                "❌ Impossible d'attribuer les rôles. Vérifie la hiérarchie du bot.",
+                ephemeral=True,
+            )
             return
         except discord.HTTPException as exc:
-            await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
+            await interaction.followup.send(
+                f"❌ Discord API : `{exc}`",
+                ephemeral=True,
+            )
             return
         except OSError as exc:
-            await interaction.followup.send(f"❌ Stockage local : `{exc}`", ephemeral=True)
+            await interaction.followup.send(
+                f"❌ Stockage local : `{exc}`",
+                ephemeral=True,
+            )
             return
 
-        subject_names = ", ".join(get_subject_display_name(subject) for subject in selected)
+        subject_names = ", ".join(
+            get_subject_display_name(subject)
+            for subject in selected
+        )
         migration_text = ""
         if migrated:
-            migration_text = "\n♻️ Anciens rôles matière migrés : " + ", ".join(get_subject_display_name(subject) for subject in migrated)
+            migration_text = (
+                "\n♻️ Anciens rôles matière migrés : "
+                + ", ".join(
+                    get_subject_display_name(subject)
+                    for subject in migrated
+                )
+            )
         record_event(
             guild.id,
             interaction.user.id,
@@ -455,12 +598,18 @@ class CommandFixes(commands.Cog):
         await interaction.followup.send(
             f"✅ {teacher.mention} est affecté à **{stream_code}** pour : {subject_names}.\n"
             f"Rôles : `Filière - {stream_code}` + "
-            f"{', '.join(f'`{_global_subject_role_name(subject)}`' for subject in selected)}"
-            f"{migration_text}",
+            + ", ".join(
+                f"`{_global_subject_role_name(subject)}`"
+                for subject in selected
+            )
+            + migration_text,
             ephemeral=True,
         )
 
-    @app_commands.command(name="assignsubjectteachers", description="Affecter jusqu'à 5 professeurs à une matière.")
+    @app_commands.command(
+        name="assignsubjectteachers",
+        description="Affecter jusqu'à 5 professeurs à une matière.",
+    )
     @app_commands.describe(
         level="Niveau scolaire",
         stream="Filière scolaire",
@@ -471,7 +620,11 @@ class CommandFixes(commands.Cog):
         teacher4="Professeur 4 (optionnel)",
         teacher5="Professeur 5 (optionnel)",
     )
-    @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete, subject=subject_autocomplete)
+    @app_commands.autocomplete(
+        level=level_autocomplete,
+        stream=stream_autocomplete,
+        subject=subject_autocomplete,
+    )
     @management_check()
     async def assign_subject_teachers(
         self,
@@ -493,21 +646,30 @@ class CommandFixes(commands.Cog):
         if level not in get_levels() or stream not in get_streams(level):
             await interaction.followup.send("❌ Niveau ou filière invalide.", ephemeral=True)
             return
+
         subject_match = next(
             (
                 item
                 for item in get_stream_subjects(level, stream)
-                if item.casefold() == subject.casefold() or get_subject_display_name(item).casefold() == subject.casefold()
+                if item.casefold() == subject.casefold()
+                or get_subject_display_name(item).casefold() == subject.casefold()
             ),
             None,
         )
         if subject_match is None:
-            await interaction.followup.send("❌ Matière invalide pour cette filière.", ephemeral=True)
+            await interaction.followup.send(
+                "❌ Matière invalide pour cette filière.",
+                ephemeral=True,
+            )
             return
 
         code = get_stream_abbreviation(level, stream)
         channel_name = _subject_channel_name(code, subject_match)
-        channel = await _find_text_channel(guild, _stream_category_name(level, stream, code), channel_name)
+        channel = await _find_text_channel(
+            guild,
+            _stream_category_name(level, stream, code),
+            channel_name,
+        )
         if channel is None:
             await interaction.followup.send(
                 f"❌ Le salon de matière **{channel_name}** est introuvable dans la catégorie de **{code}**. Vérifie `/build`.",
@@ -519,34 +681,56 @@ class CommandFixes(commands.Cog):
         stream_role = get_managed_role(guild, stream_role_name)
         subject_role_name = _global_subject_role_name(subject_match)
         if stream_role is None:
-            await interaction.followup.send("❌ Le rôle géré de cette filière n'existe pas. Vérifie `/build`.", ephemeral=True)
+            await interaction.followup.send(
+                "❌ Le rôle géré de cette filière n'existe pas. Vérifie `/build`.",
+                ephemeral=True,
+            )
             return
 
         selected_members: list[discord.Member] = []
         seen_ids: set[int] = set()
-        for member in (teacher1, teacher2, teacher3, teacher4, teacher5):
+        for member in (
+            teacher1,
+            teacher2,
+            teacher3,
+            teacher4,
+            teacher5,
+        ):
             if member is not None and member.id not in seen_ids:
                 seen_ids.add(member.id)
                 selected_members.append(member)
+
         invalid = [
             member
             for member in selected_members
             if any(
-                role.name == ROLE_STUDENT or role.name.startswith(STUDENT_STREAM_ROLE_PREFIX)
+                role.name == ROLE_STUDENT
+                or role.name.startswith(STUDENT_STREAM_ROLE_PREFIX)
                 for role in member.roles
                 if not role.managed
             )
             or not _member_is_professor(member, guild)
         ]
         if invalid:
-            await interaction.followup.send("❌ Un ou plusieurs membres sélectionnés ne sont pas des professeurs valides.", ephemeral=True)
+            await interaction.followup.send(
+                "❌ Un ou plusieurs membres sélectionnés ne sont pas des professeurs valides.",
+                ephemeral=True,
+            )
             return
 
         config = get_guild_config(guild.id) or {}
         try:
-            subject_role = await _get_or_create_global_subject_role(guild, config, subject_match)
+            subject_role = await _get_or_create_global_subject_role(
+                guild,
+                config,
+                subject_match,
+            )
             for member in selected_members:
-                await _migrate_legacy_subject_roles(guild, member, config)
+                await _migrate_legacy_subject_roles(
+                    guild,
+                    member,
+                    config,
+                )
 
             overwrites = {
                 guild.default_role: hidden_overwrite(),
@@ -556,7 +740,10 @@ class CommandFixes(commands.Cog):
             admin_role = get_managed_role(guild, ROLE_ADMIN)
             prof_role = get_managed_role(guild, ROLE_PROFESSOR)
             prof_f_role = get_managed_role(guild, ROLE_PROFESSOR_FEMALE)
-            student_stream_role = get_managed_role(guild, f"{STUDENT_STREAM_ROLE_PREFIX}{code}")
+            student_stream_role = get_managed_role(
+                guild,
+                f"{STUDENT_STREAM_ROLE_PREFIX}{code}",
+            )
             if admin_role is not None:
                 overwrites[admin_role] = administrator_overwrite()
             if prof_role is not None:
@@ -565,18 +752,37 @@ class CommandFixes(commands.Cog):
                 overwrites[prof_f_role] = professor_subject_view_overwrite()
             if student_stream_role is not None:
                 overwrites[student_stream_role] = student_overwrite(can_send=True)
-            await channel.edit(overwrites=overwrites, reason="School Manager subject teacher access")
+            await channel.edit(
+                overwrites=overwrites,
+                reason="School Manager subject teacher access",
+            )
             for member in selected_members:
-                await member.add_roles(stream_role, subject_role, reason=f"School Manager subject assignment: {code} / {subject_match}")
+                await member.add_roles(
+                    stream_role,
+                    subject_role,
+                    reason=(
+                        f"School Manager subject assignment: "
+                        f"{code} / {subject_match}"
+                    ),
+                )
             save_guild_config(guild.id, config)
         except discord.Forbidden:
-            await interaction.followup.send("❌ Permission refusée. Vérifie Manage Roles, Manage Channels et la hiérarchie.", ephemeral=True)
+            await interaction.followup.send(
+                "❌ Permission refusée. Vérifie Manage Roles, Manage Channels et la hiérarchie.",
+                ephemeral=True,
+            )
             return
         except discord.HTTPException as exc:
-            await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
+            await interaction.followup.send(
+                f"❌ Discord API : `{exc}`",
+                ephemeral=True,
+            )
             return
         except OSError as exc:
-            await interaction.followup.send(f"❌ Stockage local : `{exc}`", ephemeral=True)
+            await interaction.followup.send(
+                f"❌ Stockage local : `{exc}`",
+                ephemeral=True,
+            )
             return
 
         record_event(
@@ -584,99 +790,27 @@ class CommandFixes(commands.Cog):
             interaction.user.id,
             interaction.user.display_name,
             "assignsubjectteachers",
-            ", ".join(member.display_name for member in selected_members),
+            ", ".join(
+                member.display_name for member in selected_members
+            ),
             f"{code} / {get_subject_display_name(subject_match)}",
         )
         await interaction.followup.send(
             f"✅ **{len(selected_members)} professeur(s)** affecté(s) à **{code} / {get_subject_display_name(subject_match)}**.\n"
-            f"Salon : {channel.mention}\nRôle matière partagé : `{subject_role_name}`",
+            f"Salon : {channel.mention}\n"
+            f"Rôle matière partagé : `{subject_role_name}`",
             ephemeral=True,
         )
 
-    @app_commands.command(name="set_timetable", description="Mettre à jour l'emploi du temps d'une filière sans créer de nouveau salon.")
-    @app_commands.describe(level="Niveau", stream="Filière", subject="Matière concernée", content="Horaire et détails de la séance")
-    @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete, subject=subject_autocomplete)
-    @management_check()
-    async def set_timetable(self, interaction: discord.Interaction, level: str, stream: str, subject: str, content: str) -> None:
-        guild = interaction.guild
-        if guild is None:
-            await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-        if level not in get_levels() or stream not in get_streams(level):
-            await interaction.followup.send("❌ Niveau ou filière invalide.", ephemeral=True)
-            return
-        curriculum_subject = next(
-            (
-                candidate
-                for candidate in get_stream_subjects(level, stream)
-                if candidate == subject or get_subject_display_name(candidate).casefold() == subject.casefold()
-            ),
-            None,
-        )
-        if curriculum_subject is None:
-            await interaction.followup.send("❌ Matière invalide pour cette filière.", ephemeral=True)
-            return
-        code = get_stream_abbreviation(level, stream)
-        channel_name = f"🗓️-{code}・emploi-du-temps"
-        channel = await _find_text_channel(guild, _stream_category_name(level, stream, code), channel_name)
-        if channel is None:
-            await interaction.followup.send("❌ Channel d'emploi du temps introuvable pour cette filière. Vérifie `/build`.", ephemeral=True)
-            return
-        subject_display = get_subject_display_name(curriculum_subject)
-        embed = discord.Embed(title=f"🗓️ Emploi du temps — {code} / {subject_display}", description=content[:4000], colour=discord.Colour.blue())
-        embed.timestamp = discord.utils.utcnow()
-        try:
-            await _upsert_bot_embed(channel, marker=f"SchoolManager:T:{code}:{curriculum_subject}", embed=embed)
-        except discord.HTTPException as exc:
-            await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
-            return
-        record_event(guild.id, interaction.user.id, interaction.user.display_name, "set_timetable", code, f"{subject_display} timetable updated")
-        await interaction.followup.send(f"✅ Emploi du temps de **{subject_display}** mis à jour dans {channel.mention}.", ephemeral=True)
-
-    @app_commands.command(name="setexam", description="Mettre à jour les examens d'une filière sans créer de nouveau salon.")
-    @app_commands.describe(level="Niveau", stream="Filière", subject="Matière concernée", content="Dates, horaires et consignes des examens")
-    @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete, subject=subject_autocomplete)
-    @management_check()
-    async def set_exam(self, interaction: discord.Interaction, level: str, stream: str, subject: str, content: str) -> None:
-        guild = interaction.guild
-        if guild is None:
-            await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-        if level not in get_levels() or stream not in get_streams(level):
-            await interaction.followup.send("❌ Niveau ou filière invalide.", ephemeral=True)
-            return
-        curriculum_subject = next(
-            (
-                candidate
-                for candidate in get_stream_subjects(level, stream)
-                if candidate == subject or get_subject_display_name(candidate).casefold() == subject.casefold()
-            ),
-            None,
-        )
-        if curriculum_subject is None:
-            await interaction.followup.send("❌ Matière invalide pour cette filière.", ephemeral=True)
-            return
-        code = get_stream_abbreviation(level, stream)
-        channel_name = f"📝-{code}・examens"
-        channel = await _find_text_channel(guild, _stream_category_name(level, stream, code), channel_name)
-        if channel is None:
-            await interaction.followup.send("❌ Channel d'examens introuvable pour cette filière. Vérifie `/build`.", ephemeral=True)
-            return
-        subject_display = get_subject_display_name(curriculum_subject)
-        embed = discord.Embed(title=f"📝 Examens — {code} / {subject_display}", description=content[:4000], colour=discord.Colour.red())
-        embed.timestamp = discord.utils.utcnow()
-        try:
-            await _upsert_bot_embed(channel, marker=f"SchoolManager:E:{code}:{curriculum_subject}", embed=embed)
-        except discord.HTTPException as exc:
-            await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
-            return
-        record_event(guild.id, interaction.user.id, interaction.user.display_name, "setexam", code, f"{subject_display} exam content updated")
-        await interaction.followup.send(f"✅ Examens de **{subject_display}** mis à jour dans {channel.mention}.", ephemeral=True)
-
-    @app_commands.command(name="reportabsence", description="Publier une annonce d'absence d'un professeur.")
-    @app_commands.describe(teacher="Professeur absent", duration="Durée en jours", classes="Classe(s)/filière(s) concernée(s)")
+    @app_commands.command(
+        name="reportabsence",
+        description="Publier une annonce d'absence d'un professeur.",
+    )
+    @app_commands.describe(
+        teacher="Professeur absent",
+        duration="Durée en jours",
+        classes="Classe(s)/filière(s) concernée(s)",
+    )
     @app_commands.choices(
         duration=[
             app_commands.Choice(name="1 jour", value=1),
@@ -712,13 +846,24 @@ class CommandFixes(commands.Cog):
         try:
             class_codes = _resolve_class_codes(guild, classes)
         except ValueError as exc:
-            await interaction.followup.send(f"❌ {exc}", ephemeral=True)
+            await interaction.followup.send(
+                f"❌ {exc}",
+                ephemeral=True,
+            )
             return
 
-        channel = await _find_text_channel(guild, "🏢・INFORMATIONS & ADMINISTRATION", GENERAL_CHANNELS["absences"])
+        channel = await _find_text_channel(
+            guild,
+            "🏢・INFORMATIONS & ADMINISTRATION",
+            GENERAL_CHANNELS["absences"],
+        )
         if channel is None:
-            await interaction.followup.send("❌ Le salon d'absences n'existe pas. Lance `/build` après `/setup`.", ephemeral=True)
+            await interaction.followup.send(
+                "❌ Le salon d'absences n'existe pas. Lance `/build` après `/setup`.",
+                ephemeral=True,
+            )
             return
+
         days = duration.value
         duration_text = f"{days} jour" if days == 1 else f"{days} jours"
         class_text = ", ".join(class_codes)
@@ -735,16 +880,32 @@ class CommandFixes(commands.Cog):
         try:
             await channel.send(embed=embed)
         except discord.Forbidden:
-            await interaction.followup.send("❌ Le bot ne peut pas publier dans le salon d'absences.", ephemeral=True)
+            await interaction.followup.send(
+                "❌ Le bot ne peut pas publier dans le salon d'absences.",
+                ephemeral=True,
+            )
             return
         except discord.HTTPException as exc:
-            await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
+            await interaction.followup.send(
+                f"❌ Discord API : `{exc}`",
+                ephemeral=True,
+            )
             return
-        record_event(guild.id, interaction.user.id, interaction.user.display_name, "reportabsence", teacher.display_name, f"{duration_text} | {class_text}")
-        await interaction.followup.send(f"✅ Absence publiée dans {channel.mention}.", ephemeral=True)
+        record_event(
+            guild.id,
+            interaction.user.id,
+            interaction.user.display_name,
+            "reportabsence",
+            teacher.display_name,
+            f"{duration_text} | {class_text}",
+        )
+        await interaction.followup.send(
+            f"✅ Absence publiée dans {channel.mention}.",
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot) -> None:
-    for name in OVERRIDDEN_COMMANDS:
+    for name in OWNED_COMMANDS:
         bot.tree.remove_command(name)
     await bot.add_cog(CommandFixes(bot))
