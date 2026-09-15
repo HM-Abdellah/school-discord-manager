@@ -34,7 +34,7 @@ def _duplicate_by_name(items, expected_name: str):
     return [item for item in items if _name_key(getattr(item, "name", "")) == key]
 
 
-def validate_managed_registry(guild: discord.Guild, config: dict) -> None:
+async def validate_managed_registry(guild: discord.Guild, config: dict) -> None:
     """Fail closed when a registered resource identity conflicts with live state.
 
     Missing registered resources are allowed: a later builder/reconciliation
@@ -42,9 +42,10 @@ def validate_managed_registry(guild: discord.Guild, config: dict) -> None:
     to a different live object that merely has the same canonical name.
     """
     role_mappings = _mapping(config, "roles")
+    roles = list(getattr(guild, "roles", []))
     for expected_name, registered_id in role_mappings.items():
-        by_id = next((role for role in getattr(guild, "roles", []) if role.id == registered_id), None)
-        same_name = _duplicate_by_name(getattr(guild, "roles", []), expected_name)
+        by_id = next((role for role in roles if role.id == registered_id), None)
+        same_name = _duplicate_by_name(roles, expected_name)
         if by_id is not None and _name_key(by_id.name) != _name_key(expected_name):
             raise ManagedResourceConflict(
                 f"Managed role `{expected_name}` points to role ID {registered_id}, "
@@ -59,11 +60,10 @@ def validate_managed_registry(guild: discord.Guild, config: dict) -> None:
             )
 
     try:
-        live_channels = list(guild._state.http.get_channel) if False else None
-    except Exception:
-        live_channels = None
+        channels = list(await guild.fetch_channels())
+    except (discord.Forbidden, discord.HTTPException):
+        channels = list(getattr(guild, "channels", []))
 
-    channels = list(getattr(guild, "channels", []))
     for section in ("categories", "channels"):
         for expected_name, registered_id in _mapping(config, section).items():
             same_name = _duplicate_by_name(channels, expected_name)
