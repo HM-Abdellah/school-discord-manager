@@ -28,9 +28,10 @@ from config.curriculum import (
 from services.audit import record_event
 from services.permissions import management_check
 from services.server_builder import _stream_category_name
-from services.storage import get_guild_config
+from services.storage import get_guild_config, save_guild_config
 
 OVERRIDDEN_COMMANDS = {"setexam"}
+MAX_SECTIONS = 8
 
 
 def _parse_exam_date(value: str):
@@ -66,7 +67,7 @@ class SectionAwareExamCommands(commands.Cog):
     @app_commands.describe(
         level="Niveau scolaire",
         stream="Filière scolaire",
-        section="Numéro de classe (ex. 1, 2, 3...)",
+        section="Numéro de classe (1 à 8)",
         subject="Matière",
         exam_date="Date: YYYY-MM-DD ou MM/DD",
         start_time="Heure de début",
@@ -84,7 +85,7 @@ class SectionAwareExamCommands(commands.Cog):
         interaction: discord.Interaction,
         level: str,
         stream: str,
-        section: app_commands.Range[int, 1, 20],
+        section: app_commands.Range[int, 1, MAX_SECTIONS],
         subject: str,
         exam_date: str,
         start_time: app_commands.Choice[str],
@@ -165,7 +166,6 @@ class SectionAwareExamCommands(commands.Cog):
             config.setdefault("managed", {}).setdefault("messages", {})[
                 f"{code}:section:{section}:exam:{message.id}"
             ] = message.id
-            from services.storage import save_guild_config
             save_guild_config(guild.id, config)
         except (discord.Forbidden, discord.HTTPException, OSError) as exc:
             await interaction.followup.send(f"❌ Publication impossible : `{type(exc).__name__}`", ephemeral=True)
