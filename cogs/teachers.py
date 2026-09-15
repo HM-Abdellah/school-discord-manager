@@ -18,6 +18,7 @@ from config.curriculum import (
     get_subject_display_name,
 )
 from services.audit import record_event
+from services.discord_registry import resolve_registered_text_channel
 from services.permissions import (
     ROLE_ADMIN,
     ROLE_PROFESSOR,
@@ -66,28 +67,15 @@ async def subject_autocomplete(interaction: discord.Interaction, current: str) -
     return choices[:25]
 
 
-async def _find_managed_channel(guild: discord.Guild, expected_name: str) -> discord.TextChannel | None:
-    """Resolve the channel from fresh Discord state, not only the local cache."""
+async def _find_managed_channel(guild: discord.Guild, expected_name: str, *, category_name: str) -> discord.TextChannel | None:
+    """Resolve a sensitive managed channel only through persisted identity."""
     config = get_guild_config(guild.id) or {}
-    managed = config.get("managed", {})
-    channels = managed.get("channels", {}) if isinstance(managed, dict) else {}
-    channel_id = channels.get(expected_name) if isinstance(channels, dict) else None
-    if isinstance(channel_id, int):
-        try:
-            channel = await guild.fetch_channel(channel_id)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            channel = None
-        if isinstance(channel, discord.TextChannel) and channel.name == expected_name:
-            return channel
-
-    try:
-        channels_now = await guild.fetch_channels()
-    except (discord.Forbidden, discord.HTTPException):
-        channels_now = guild.text_channels
-    for channel in channels_now:
-        if isinstance(channel, discord.TextChannel) and channel.name == expected_name:
-            return channel
-    return None
+    return await resolve_registered_text_channel(
+        guild,
+        config,
+        channel_name=expected_name,
+        category_name=category_name,
+    )
 
 
 def _member_has_school_student_role(member: discord.Member) -> bool:
@@ -158,9 +146,10 @@ class TeacherCommands(commands.Cog):
             return
         code = get_stream_abbreviation(level, stream)
         channel_name = _subject_channel_name(code, curriculum_subject)
-        channel = await _find_managed_channel(guild, channel_name)
+        category_name = f"📘・{level}・🔬 {stream}"
+        channel = await _find_managed_channel(guild, channel_name, category_name=category_name)
         if channel is None:
-            await interaction.response.send_message(f"❌ Le salon de matière **{channel_name}** n'existe pas. Vérifie `/status` avant tout nouveau build.", ephemeral=True)
+            await interaction.response.send_message(f"❌ Le salon de matière **{channel_name}** n'existe pas avec son identité gérée. Vérifie `/status` puis `/build`.", ephemeral=True)
             return
         stream_role_name = _stream_role_name(level, stream)
         subject_role_name = _subject_role_name(level, stream, curriculum_subject)
