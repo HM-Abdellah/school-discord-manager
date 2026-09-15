@@ -1,0 +1,25 @@
+{
+  "phase": "3.8",
+  "name": "failure_recovery_matrix",
+  "scope": "Verify fail-closed behavior, rollback boundaries, and resumability when Discord or local persistence fails.",
+  "cases": [
+    {"id":"FAIL-001","operation":"/build","fault":"Discord rejects a resource creation midway through the build.","expectation":"Transaction boundary attempts cleanup of resources created by that operation; no successful partial configuration is committed as complete."},
+    {"id":"FAIL-002","operation":"/build","fault":"Managed resource ID points to a different resource type/name/category.","expectation":"Ownership preflight fails closed; unrelated resource is not adopted or deleted."},
+    {"id":"FAIL-003","operation":"/addstream","fault":"An expected stream category exists but is unmanaged or conflicts with the canonical identity.","expectation":"Add operation is rejected without silently adopting the conflicting category."},
+    {"id":"FAIL-004","operation":"/removestream","fault":"One journaled resource is already missing.","expectation":"Removal remains safe and resumable; missing resource is not rediscovered by name."},
+    {"id":"FAIL-005","operation":"/removestream","fault":"A journaled resource ID now resolves to a different name/type/category.","expectation":"Destructive resolution fails closed before deleting the mismatched resource."},
+    {"id":"FAIL-006","operation":"/removestream","fault":"Deletion fails after earlier journal entries have already been deleted.","expectation":"Journal/checkpoint state remains sufficient for a later retry to continue safely without name discovery."},
+    {"id":"FAIL-007","operation":"/resetserver","fault":"Managed registry is invalid or inconsistent with live Discord state.","expectation":"Reset is blocked before destructive deletion."},
+    {"id":"FAIL-008","operation":"/resetserver","fault":"An unmanaged same-name resource exists next to a managed resource.","expectation":"Only the persisted managed resource ID is eligible for deletion."},
+    {"id":"FAIL-009","operation":"/set_timetable","fault":"The managed timetable channel cannot be resolved.","expectation":"Publication is cancelled; no replacement channel is created by the command."},
+    {"id":"FAIL-010","operation":"/setexam","fault":"The managed exam channel cannot be resolved.","expectation":"Publication is cancelled; no replacement channel is created by the command."},
+    {"id":"FAIL-011","operation":"/set_timetable","fault":"Discord accepts the message but local persistence fails.","expectation":"The failure is surfaced as a persistence problem and later reconciliation can detect the live message/channel state without inventing a new channel."},
+    {"id":"FAIL-012","operation":"/setexam","fault":"Discord accepts the exam message but local persistence fails.","expectation":"The failure is surfaced; rerunning does not depend on a guessed channel name for destructive behavior."},
+    {"id":"FAIL-013","operation":"/assignstudent","fault":"Role mutation fails before persistence.","expectation":"Original managed school roles are restored where Discord permits, and no successful enrollment state is recorded."},
+    {"id":"FAIL-014","operation":"/assignstudent","fault":"Persistence fails after Discord role mutation.","expectation":"The command reports the failure; role/persistence reconciliation is covered by recovery/regression tests rather than claiming atomicity across systems."},
+    {"id":"FAIL-015","operation":"/leave_school","fault":"Role removal fails.","expectation":"History is not marked as left and original managed roles are restored where possible."},
+    {"id":"FAIL-016","operation":"/rollbackyear","fault":"Target year does not exist or cannot be activated.","expectation":"No partial academic-year state is committed."},
+    {"id":"FAIL-017","operation":"startup","fault":"SQLite state is authoritative but JSON cache is stale/corrupt.","expectation":"Startup recovery rebuilds or refreshes the JSON cache from logical source-of-truth state without inventing Discord resources."},
+    {"id":"FAIL-018","operation":"retry","fault":"The same failed operation is retried after partial external success.","expectation":"Retry is idempotent or safely reconciles from persisted IDs/journal state; it does not duplicate or delete unrelated resources."}
+  ]
+}
