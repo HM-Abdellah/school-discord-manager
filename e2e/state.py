@@ -134,8 +134,9 @@ def diff_snapshots(before: dict[str, Any], after: dict[str, Any]) -> dict[str, A
         added_ids = sorted(set(new) - set(old), key=int)
         removed_ids = sorted(set(old) - set(new), key=int)
         changed_ids = sorted(
-            key for key in set(old) & set(new) if old[key] != new[key]
-        , key=int)
+            (key for key in set(old) & set(new) if old[key] != new[key]),
+            key=int,
+        )
         result[collection] = {
             "added": [new[item] for item in added_ids],
             "removed": [old[item] for item in removed_ids],
