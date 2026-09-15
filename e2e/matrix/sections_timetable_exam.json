@@ -1,0 +1,29 @@
+{
+  "phase": "3.7",
+  "name": "section_timetable_exam_matrix",
+  "domain": {
+    "section_min": 1,
+    "section_max": 8,
+    "architecture": "section is metadata inside a configured stream; it is not a stream, category, or channel"
+  },
+  "cases": [
+    {"id":"SECTION-001","command":"/set_timetable","input":"section=1","expectation":"Publishes into the existing shared stream timetable channel and labels the message as Section 1."},
+    {"id":"SECTION-002","command":"/set_timetable","input":"section=8","expectation":"Publishes into the same shared stream timetable channel and labels the message as Section 8."},
+    {"id":"SECTION-003","command":"/setexam","input":"section=1","expectation":"Publishes an exam for the selected section in the shared stream exam channel."},
+    {"id":"SECTION-004","command":"/setexam","input":"section=8","expectation":"Publishes an exam for the selected section in the same shared stream exam channel."},
+    {"id":"SECTION-005","command":"/set_timetable","input":"section=0","expectation":"Rejected by the command's section range validation; no message is published."},
+    {"id":"SECTION-006","command":"/set_timetable","input":"section=9","expectation":"Rejected by the command's section range validation; no message is published."},
+    {"id":"SECTION-007","command":"/setexam","input":"section=0","expectation":"Rejected by the command's section range validation; no exam is published."},
+    {"id":"SECTION-008","command":"/setexam","input":"section=9","expectation":"Rejected by the command's section range validation; no exam is published."},
+    {"id":"SECTION-009","command":"/set_timetable","input":"two different valid sections for one stream","expectation":"The channel count for the stream does not increase; both messages remain in the one shared timetable channel."},
+    {"id":"SECTION-010","command":"/setexam","input":"two different valid sections for one stream","expectation":"The channel count for the stream does not increase; both exam messages remain in the one shared exam channel."},
+    {"id":"SECTION-011","command":"/set_timetable","input":"valid section + invalid level/stream","expectation":"Rejected before publication; no section resource is created."},
+    {"id":"SECTION-012","command":"/setexam","input":"valid section + invalid subject/date/time","expectation":"Rejected before publication; no exam message is created for invalid parameters."},
+    {"id":"SECTION-013","command":"/set_timetable","input":"valid section + missing managed timetable channel","expectation":"Rejected and asks for /build; the command does not create an unregistered replacement channel."},
+    {"id":"SECTION-014","command":"/setexam","input":"valid section + missing managed exam channel","expectation":"Rejected and asks for /build; the command does not create an unregistered replacement channel."},
+    {"id":"SECTION-015","command":"/set_timetable","input":"valid section + allowed image/.txt attachment","expectation":"Message is stored under the section-specific managed message key while the Discord channel remains shared."},
+    {"id":"SECTION-016","command":"/set_timetable","input":"unsupported attachment type","expectation":"Rejected before Discord publication."},
+    {"id":"SECTION-017","command":"/set_timetable","input":"attachment over 15 MB","expectation":"Rejected before Discord publication."},
+    {"id":"SECTION-018","command":"/setexam","input":"start time >= end time","expectation":"Rejected before publication."}
+  ]
+}
