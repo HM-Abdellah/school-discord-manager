@@ -16,6 +16,13 @@ from cogs.admin import AdminCommands
 from cogs.server_v3 import _configured_managed_ids, _expected_structure_names
 
 
+EXPECTED_RUNTIME_OWNERS = {
+    "removestream": "cogs.removestream_fix",
+    "setexam": "cogs.section_aware_exam",
+    "set_timetable": "cogs.section_aware_timetable",
+}
+
+
 def test_all_bot_extensions_have_async_setup_entrypoints():
     for extension in SchoolBot.EXTENSIONS:
         module = importlib.import_module(extension)
@@ -24,28 +31,27 @@ def test_all_bot_extensions_have_async_setup_entrypoints():
         assert inspect.iscoroutinefunction(setup), f"setup() must be async in {extension}"
 
 
-def test_security_hardening_is_loaded_last_and_duplicate_ui_is_not_loaded():
-    assert SchoolBot.EXTENSIONS[-1] == "cogs.edge_case_hardening"
-    assert SchoolBot.EXTENSIONS[-2] == "cogs.security_hardening_v2"
-    assert "cogs.command_ui" not in SchoolBot.EXTENSIONS
-    assert "cogs.security_hardening" not in SchoolBot.EXTENSIONS
+def test_runtime_loader_has_one_explicit_final_owner_per_overridden_command():
+    extensions = list(SchoolBot.EXTENSIONS)
+    assert "cogs.edge_case_hardening" not in extensions
+
+    assert extensions.index(EXPECTED_RUNTIME_OWNERS["removestream"]) < extensions.index(EXPECTED_RUNTIME_OWNERS["setexam"])
+    assert extensions.index(EXPECTED_RUNTIME_OWNERS["setexam"]) < extensions.index(EXPECTED_RUNTIME_OWNERS["set_timetable"])
+    assert "cogs.command_fixes" in extensions
+
+    final_owner_positions = {
+        command: extensions.index(owner)
+        for command, owner in EXPECTED_RUNTIME_OWNERS.items()
+    }
+    assert len(final_owner_positions) == len(EXPECTED_RUNTIME_OWNERS)
 
 
-def test_bot_startup_has_no_runtime_fix_dependency():
-    source = Path("bot.py").read_text(encoding="utf-8")
-    assert "runtime_fixes" not in source
-    assert "apply_runtime_fixes" not in source
+def test_section_aware_commands_are_configured_for_maximum_section_eight():
+    from cogs.section_aware_exam import SectionAwareExamCommands
+    from cogs.section_aware_timetable import SectionAwareTimetableCommands
 
-
-@pytest.mark.asyncio
-async def test_admin_commands_register_only_admin_dashboard_commands():
-    intents = discord.Intents.none()
-    bot = commands.Bot(command_prefix="!", intents=intents)
-    await bot.add_cog(AdminCommands(bot))
-    assert bot.tree.get_command("adminpanel") is not None
-    assert bot.tree.get_command("serverhealth") is not None
-    assert bot.tree.get_command("setexam") is None
-    await bot.close()
+    assert SectionAwareExamCommands.set_exam.callback.__annotations__["section"].__args__[1] == 8
+    assert SectionAwareTimetableCommands.set_timetable.callback.__annotations__["section"].__args__[1] == 8
 
 
 def test_legacy_resource_discovery_requires_exact_canonical_names():
@@ -108,3 +114,20 @@ def test_build_structure_does_not_require_on_demand_subject_roles():
     assert "Matière - TCS - MAT" not in expected_roles
     assert "Matière - TCS - PC" not in expected_roles
     assert len(expected_channels["📘・TC・🔬 TCS"]) == 5
+
+
+@pytest.mark.asyncio
+async def test_admin_commands_register_only_admin_dashboard_commands():
+    intents = discord.Intents.none()
+    bot = commands.Bot(command_prefix="!", intents=intents)
+    await bot.add_cog(AdminCommands(bot))
+    assert bot.tree.get_command("adminpanel") is not None
+    assert bot.tree.get_command("serverhealth") is not None
+    assert bot.tree.get_command("setexam") is None
+    await bot.close()
+
+
+def test_bot_startup_has_no_runtime_fix_dependency():
+    source = Path("bot.py").read_text(encoding="utf-8")
+    assert "runtime_fixes" not in source
+    assert "apply_runtime_fixes" not in source
