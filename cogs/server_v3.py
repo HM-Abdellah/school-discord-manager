@@ -18,6 +18,7 @@ from config.curriculum import (
     get_stream_subjects,
 )
 from services.build_guard import get_build_lock
+from services.build_transaction import build_and_persist
 from services.permissions import (
     ROLE_ADMIN,
     ROLE_PROFESSOR,
@@ -31,7 +32,6 @@ from services.server_builder import (
     CATEGORY_GENERAL,
     CATEGORY_PROFESSORS,
     CATEGORY_VOICE,
-    ServerBuilder,
     _safe_name,
     _stream_category_name,
     _subject_channel_name,
@@ -299,9 +299,7 @@ async def _run_build(guild: discord.Guild, config: dict) -> object:
     if lock.locked():
         raise RuntimeError("Une construction est déjà en cours sur ce serveur.")
     async with lock:
-        stats = await ServerBuilder(guild).build(config)
-        save_guild_config(guild.id, config)
-        return stats
+        return await build_and_persist(guild, config)
 
 
 def _valid_academic_year(value: str) -> bool:
@@ -430,8 +428,8 @@ class ServerCommands(commands.Cog):
             guild.categories,
             name=category_name,
         )
-        adoption_note = (
-            " Une catégorie existante sera adoptée et complétée."
+        conflict_note = (
+            " Une catégorie existante non enregistrée sera refusée par le preflight d'ownership."
             if existing_category is not None
             else ""
         )
@@ -460,7 +458,7 @@ class ServerCommands(commands.Cog):
         )
 
         await interaction.response.send_message(
-            f"🏗️ Ajout de **{code} — {stream}** en cours...{adoption_note}",
+            f"🏗️ Ajout de **{code} — {stream}** en cours...{conflict_note}",
             ephemeral=True,
         )
         try:
@@ -498,7 +496,7 @@ class ServerCommands(commands.Cog):
             )
             return
         await interaction.followup.send(
-            f"✅ **{code} — {stream}** ajoutée. Catégorie créée/utilisée : {category.mention}",
+            f"✅ **{code} — {stream}** ajoutée. Catégorie créée : {category.mention}",
             ephemeral=True,
         )
 
@@ -515,7 +513,7 @@ class ServerCommands(commands.Cog):
     ) -> None:
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            await interaction.response.send_message("❌ Serveur requis", ephemeral=True)
             return
         if not _valid_academic_year(year):
             await interaction.response.send_message(
