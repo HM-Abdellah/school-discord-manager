@@ -11,9 +11,9 @@ from discord.ext import commands
 
 from config.curriculum import get_level, get_levels, get_stream_abbreviation, get_stream_subjects, get_streams
 from services.build_guard import get_build_lock
+from services.build_transaction import build_and_persist
 from services.permissions import _preflight_message, management_check
-from services.server_builder import ServerBuilder
-from services.storage import get_active_academic_year, save_guild_config
+from services.storage import get_active_academic_year
 
 
 def default_academic_year() -> str:
@@ -169,8 +169,7 @@ class SummaryView(SetupBaseView):
         await interaction.response.edit_message(content="🏗️ **Construction sécurisée en cours...**", view=None)
         try:
             async with lock:
-                stats = await ServerBuilder(guild).build(self.config)
-                save_guild_config(guild.id, self.config)
+                stats = await build_and_persist(guild, self.config)
         except discord.Forbidden:
             await interaction.edit_original_response(content="❌ Permission refusée. Vérifie Manage Channels, Manage Roles et la hiérarchie du bot.")
             return
@@ -180,7 +179,7 @@ class SummaryView(SetupBaseView):
         except Exception as exc:
             await interaction.edit_original_response(content=f"❌ Erreur : `{type(exc).__name__}: {exc}`")
             return
-        await interaction.edit_original_response(content=(f"# ✅ Serveur construit avec succès\n\n• Niveaux : **{stats.levels_processed}**\n• Filières : **{stats.streams_processed}**\n• Rôles créés : **{stats.roles_created}**\n• Catégories créées : **{stats.categories_created}**\n• Texte créé : **{stats.text_channels_created}**\n• Vocaux créés : **{stats.voice_channels_created}**"))
+        await interaction.edit_original_response(content=(f"# ✅ Serveur construit avec succès\n\n• Niveaux : **{stats.levels_processed}**\n• Filières : **{stats.streams_processed}**\n• Rôles créés : **{stats.roles_created}**\n• Catégories créées : **{stats.categories_created}**\n• Texte créé : **{stats.text_channels_created}**\n• Vocaux créés : **{stats.voice_channels_created}"))
 
     async def restart_callback(self, interaction: discord.Interaction) -> None:
         await interaction.response.edit_message(content="## 🏫 School Discord Manager\n\nSélectionne les niveaux présents.", view=LevelView(self.owner_id))
