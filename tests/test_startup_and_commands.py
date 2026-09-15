@@ -49,9 +49,10 @@ def test_runtime_loader_has_one_explicit_final_owner_per_overridden_command():
 def test_section_aware_commands_are_configured_for_maximum_section_eight():
     exam_source = inspect.getsource(importlib.import_module("cogs.section_aware_exam"))
     timetable_source = inspect.getsource(importlib.import_module("cogs.section_aware_timetable"))
-    assert "app_commands.Range[int, 1, 8]" in exam_source
-    assert "app_commands.Range[int, 1, MAX_SECTIONS]" in timetable_source
+    assert "MAX_SECTIONS = 8" in exam_source
+    assert "app_commands.Range[int, 1, MAX_SECTIONS]" in exam_source
     assert "MAX_SECTIONS = 8" in timetable_source
+    assert "app_commands.Range[int, 1, MAX_SECTIONS]" in timetable_source
 
 
 def test_legacy_resource_discovery_requires_exact_canonical_names():
