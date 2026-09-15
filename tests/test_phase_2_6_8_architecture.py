@@ -60,14 +60,11 @@ def test_runtime_commands_have_exactly_one_owner():
     assert not mismatches, f"Runtime command ownership mismatch: {mismatches}"
 
 
-def test_security_v2_is_not_a_runtime_extension_or_command_source():
+def test_obsolete_compatibility_modules_are_removed():
     assert "cogs.security_hardening_v2" not in SchoolBot.EXTENSIONS
-    legacy = ROOT / "cogs" / "security_hardening_v2.py"
-    assert command_names(legacy) == []
-    source = legacy.read_text(encoding="utf-8")
-    assert "from cogs.setup import" not in source
-    assert "OVERRIDDEN_COMMANDS" not in source
-    assert "_patch_setup_build_callback" not in source
+    assert "cogs.edge_case_hardening" not in SchoolBot.EXTENSIONS
+    assert not (ROOT / "cogs" / "security_hardening_v2.py").exists()
+    assert not (ROOT / "cogs" / "edge_case_hardening.py").exists()
 
 
 def test_runtime_cogs_do_not_import_command_cogs():
@@ -77,6 +74,12 @@ def test_runtime_cogs_do_not_import_command_cogs():
         source = (ROOT / (extension.replace(".", "/") + ".py")).read_text(encoding="utf-8")
         assert "from cogs." not in source, extension
         assert "import cogs." not in source, extension
+
+
+def test_shared_conflict_guards_live_in_services():
+    source = (ROOT / "services" / "role_conflicts.py").read_text(encoding="utf-8")
+    assert "def student_staff_conflict" in source
+    assert "def teacher_target_conflict" in source
 
 
 def test_security_v3_declares_only_resetserver():

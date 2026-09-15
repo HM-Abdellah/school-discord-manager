@@ -1,9 +1,4 @@
-"""Compatibility helpers retained for older test/import paths.
-
-All runtime security commands now live in ``security_hardening_v3``. This
-module intentionally defines no application commands and must never be loaded
-as a runtime extension.
-"""
+"""Shared school-role conflict validation."""
 
 from __future__ import annotations
 
@@ -19,7 +14,8 @@ from services.permissions import (
 )
 
 
-def _student_staff_conflict(member: discord.Member, guild: discord.Guild) -> str | None:
+def student_staff_conflict(member: discord.Member, guild: discord.Guild) -> str | None:
+    """Return a user-facing conflict when staff roles block student assignment."""
     if member.bot:
         return "❌ Un bot ne peut pas recevoir un rôle scolaire."
     admin_role = get_managed_role(guild, ROLE_ADMIN)
@@ -27,7 +23,10 @@ def _student_staff_conflict(member: discord.Member, guild: discord.Guild) -> str
         return "❌ Cet utilisateur possède le rôle **Administration**. Retire d'abord ce rôle avant une affectation scolaire."
     professor_roles = {
         role
-        for role in (get_managed_role(guild, ROLE_PROFESSOR), get_managed_role(guild, ROLE_PROFESSOR_FEMALE))
+        for role in (
+            get_managed_role(guild, ROLE_PROFESSOR),
+            get_managed_role(guild, ROLE_PROFESSOR_FEMALE),
+        )
         if role is not None
     }
     if any(role in member.roles for role in professor_roles):
@@ -35,7 +34,8 @@ def _student_staff_conflict(member: discord.Member, guild: discord.Guild) -> str
     return None
 
 
-def _teacher_target_conflict(member: discord.Member, guild: discord.Guild) -> str | None:
+def teacher_target_conflict(member: discord.Member, guild: discord.Guild) -> str | None:
+    """Return a user-facing conflict when student/admin/bot state blocks teacher assignment."""
     if member.bot:
         return "❌ Un bot ne peut pas être enregistré comme professeur."
     admin_role = get_managed_role(guild, ROLE_ADMIN)
@@ -44,6 +44,9 @@ def _teacher_target_conflict(member: discord.Member, guild: discord.Guild) -> st
     student_role = get_managed_role(guild, ROLE_STUDENT)
     if student_role is not None and student_role in member.roles:
         return "❌ Cet utilisateur possède encore le rôle **Élève**. Retire-le d'abord."
-    if any(not role.managed and role.name.startswith(STUDENT_STREAM_ROLE_PREFIX) for role in member.roles):
+    if any(
+        not role.managed and role.name.startswith(STUDENT_STREAM_ROLE_PREFIX)
+        for role in member.roles
+    ):
         return "❌ Cet utilisateur possède encore un rôle de filière **Élève**. Retire-le d'abord."
     return None

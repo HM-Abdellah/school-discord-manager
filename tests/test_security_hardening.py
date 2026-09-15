@@ -4,7 +4,7 @@ import pytest
 
 from cogs.removestream_fix import _recorded_id, _stream_channel_names, _stream_role_names
 from cogs.server_v3 import _valid_academic_year
-from cogs.security_hardening_v2 import _student_staff_conflict, _teacher_target_conflict
+from services.role_conflicts import student_staff_conflict, teacher_target_conflict
 
 
 def test_stream_destructive_scope_builds_only_canonical_managed_names(monkeypatch):
@@ -85,7 +85,7 @@ def test_student_assignment_allows_student_reassignment_but_blocks_staff(monkeyp
     student = _role("Élève", 12)
 
     monkeypatch.setattr(
-        "cogs.security_hardening_v2.get_managed_role",
+        "services.role_conflicts.get_managed_role",
         lambda _guild, name: {
             "Administration": admin,
             "Prof": prof,
@@ -99,9 +99,9 @@ def test_student_assignment_allows_student_reassignment_but_blocks_staff(monkeyp
     teacher = SimpleNamespace(bot=False, roles=[prof])
     admin_member = SimpleNamespace(bot=False, roles=[admin])
 
-    assert _student_staff_conflict(enrolled_student, guild) is None
-    assert _student_staff_conflict(teacher, guild) is not None
-    assert _student_staff_conflict(admin_member, guild) is not None
+    assert student_staff_conflict(enrolled_student, guild) is None
+    assert student_staff_conflict(teacher, guild) is not None
+    assert student_staff_conflict(admin_member, guild) is not None
 
 
 def test_teacher_assignment_blocks_student_admin_and_bot(monkeypatch):
@@ -110,7 +110,7 @@ def test_teacher_assignment_blocks_student_admin_and_bot(monkeypatch):
     student = _role("Élève", 12)
 
     monkeypatch.setattr(
-        "cogs.security_hardening_v2.get_managed_role",
+        "services.role_conflicts.get_managed_role",
         lambda _guild, name: {
             "Administration": admin,
             "Prof": prof,
@@ -120,7 +120,7 @@ def test_teacher_assignment_blocks_student_admin_and_bot(monkeypatch):
     )
     guild = SimpleNamespace(roles=[admin, prof, student])
 
-    assert _teacher_target_conflict(SimpleNamespace(bot=True, roles=[]), guild) is not None
-    assert _teacher_target_conflict(SimpleNamespace(bot=False, roles=[student]), guild) is not None
-    assert _teacher_target_conflict(SimpleNamespace(bot=False, roles=[admin]), guild) is not None
-    assert _teacher_target_conflict(SimpleNamespace(bot=False, roles=[prof]), guild) is None
+    assert teacher_target_conflict(SimpleNamespace(bot=True, roles=[]), guild) is not None
+    assert teacher_target_conflict(SimpleNamespace(bot=False, roles=[student]), guild) is not None
+    assert teacher_target_conflict(SimpleNamespace(bot=False, roles=[admin]), guild) is not None
+    assert teacher_target_conflict(SimpleNamespace(bot=False, roles=[prof]), guild) is None

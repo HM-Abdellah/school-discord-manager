@@ -4,19 +4,19 @@ A Discord bot for generating and managing a clean, role-driven school server for
 
 ## ✨ Current architecture
 
-The server uses a **real Discord category for every stream**. The stream name is therefore the category title rather than a fake writable/readonly channel.
+Each stream is represented by a real Discord category. The stream name is therefore the category title rather than a fake writable/readonly channel.
 
 ```text
 📘・TC・🔬 TCS
 ├── 📌-TCS・informations
 ├── 🗓️-TCS・emploi-du-temps
 ├── 📝-TCS・examens
-└── 📚-TCS・Math / PC / SVT / ...
+└── 📚-TCS・Mathématiques / PC / SVT / ...
 ```
 
-Each stream has one shared academic space for its classes/groups. No Discord channel or role is created per class.
+Each stream uses shared academic spaces. The bot does not create a Discord channel or role per class.
 
-The builder is idempotent and uses a per-guild build lock. Re-running `/build` reconciles the configured School Manager resources instead of formatting the server.
+The builder is idempotent and protected by a per-guild mutation lock. Build and stream-add operations now pass through the transactional build boundary: managed identities are validated before mutation, canonical resources that are not in the managed registry are rejected instead of silently adopted, and resources created by a failed build are rolled back on a best-effort basis.
 
 ## 👥 Roles and permissions
 
@@ -27,7 +27,7 @@ Core roles:
 - `Prof (F)`
 - `Élève`
 
-Stream roles are recorded by Discord ID in the guild configuration. Management authorization uses the configured Administration role ID, while the server owner remains an owner-only management path for dangerous operations.
+Stream roles are persisted by Discord ID in the guild configuration. Management authorization uses the configured Administration role ID, while dangerous maintenance paths are owner-restricted.
 
 Destructive operations resolve targets from the persisted managed-resource registry rather than expanding their scope from matching names.
 
@@ -45,7 +45,7 @@ Example yearly workflow:
 /build
 ```
 
-Previous academic years remain available for history/archive features.
+Previous academic years remain available for history/archive features, including controlled rollback of the active year.
 
 ## ⚙️ Commands
 
@@ -94,13 +94,13 @@ Dangerous maintenance:
 /resetserver RESET SCHOOL MANAGER
 ```
 
-`/resetserver` is restricted to the server owner and targets only resources recorded as School Manager managed resources. Unrelated channels and categories are intentionally outside its scope.
+`/resetserver` is restricted to the server owner and targets only resources recorded as School Manager managed resources. Unrelated Discord resources remain outside its scope.
 
 ## 🧱 Code organization
 
 ```text
 bot.py
-  └── loads the cogs in a deliberate order
+  └── loads runtime cogs in a deliberate order
 
 cogs/
   setup.py                 interactive setup wizard
@@ -108,26 +108,33 @@ cogs/
   students.py              student assignment and history
   teachers.py              teacher/subject/absence commands
   admin.py                 admin dashboard + health checks
-  command_fixes.py         active compatibility replacements
-  security_hardening_v2.py fail-closed security overrides
-  edge_case_hardening.py  isolated config-consistency compatibility patch
+  command_fixes.py         assignteacherfull implementation
+  removestream_fix.py      fail-closed stream removal
+  section_aware_exam.py    section-aware exam workflow
+  section_aware_timetable.py section-aware timetable workflow
+  security_hardening_v3.py destructive reset boundary
   year_rollback.py         academic-year rollback workflow
 
 services/
   permissions.py           authorization + hierarchy/preflight checks
   server_builder.py        idempotent Discord resource reconciliation
-  storage.py               JSON configuration + SQLite persistence
+  build_transaction.py     transactional build + rollback orchestration
   build_guard.py           per-guild concurrency lock
+  discord_ownership.py     managed-ID validation + canonical collision checks
+  discord_registry.py      managed-resource registry helpers
+  role_conflicts.py        shared student/teacher role conflict checks
+  storage.py               SQLite authority + JSON cache persistence
+  storage_recovery.py      cache recovery from SQLite
   audit.py                 audit-event persistence
 ```
 
-`command_ui.py` and the older unused security-harden­ing layer are not part of the active extension set. The hardening cog is loaded after the normal command implementations so its strict versions are the effective application commands.
+The active runtime has one application-command owner per critical command. Shared logic belongs in `services/`; command cogs do not import other command cogs.
 
 ## 🧪 Tests and CI
 
-GitHub Actions runs the test suite on pushes to `main` and pull requests, using Python 3.12 and 3.13.
+GitHub Actions runs the test suite for pushes to `main` and pull requests targeting `main`, using Python 3.12 and 3.13.
 
-The suite covers command registration, managed-resource scope, permission edge cases, academic-year validation, storage durability, enrollment idempotency, destructive-operation boundaries, and edge-case configuration repair.
+The suite covers command registration, managed-resource ownership, transactional build rollback, permission edge cases, academic-year validation, storage durability, enrollment idempotency, destructive-operation boundaries, section handling, and concurrency semantics.
 
 ## 📚 Curriculum
 
