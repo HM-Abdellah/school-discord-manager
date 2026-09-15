@@ -61,9 +61,21 @@ def test_finalize_stream_config_only_removes_exact_journal_owned_mappings():
     }
     journal = _journal()
     journal["resources"] = [
-        {"kind": "channel", "id": 901, "name": "📌-TCS・informations"},
+        {
+            "kind": "channel",
+            "id": 901,
+            "name": "📌-TCS・informations",
+            "channel_type": "text",
+            "category_id": 500,
+        },
         {"kind": "role", "id": 777, "name": "Filière - TCS"},
-        {"kind": "channel", "id": 902, "name": "📝-TCS・examens"},
+        {
+            "kind": "channel",
+            "id": 902,
+            "name": "📝-TCS・examens",
+            "channel_type": "text",
+            "category_id": 500,
+        },
     ]
 
     candidate = removestream_fix._finalize_stream_config(config, journal)
@@ -73,6 +85,96 @@ def test_finalize_stream_config_only_removes_exact_journal_owned_mappings():
     assert "📝-TCS・examens" not in candidate["managed"]["channels"]
     assert candidate["managed"]["roles"]["Filière - TCS"] == 900
     assert candidate["managed"]["categories"] == {}
+
+
+def test_journal_target_resolves_only_matching_text_identity(monkeypatch):
+    class FakeTextChannel:
+        def __init__(self):
+            self.id = 701
+            self.name = "📌-TCS・informations"
+            self.category_id = 500
+
+    monkeypatch.setattr(removestream_fix.discord, "TextChannel", FakeTextChannel)
+    channel = FakeTextChannel()
+    guild = SimpleNamespace(get_channel=lambda resource_id: channel if resource_id == 701 else None)
+
+    target = removestream_fix._journal_target(
+        guild,
+        {
+            "kind": "channel",
+            "id": 701,
+            "name": channel.name,
+            "channel_type": "text",
+            "category_id": 500,
+        },
+    )
+
+    assert target is channel
+
+
+def test_journal_target_rejects_identity_mismatch(monkeypatch):
+    class FakeTextChannel:
+        def __init__(self):
+            self.id = 702
+            self.name = "wrong-name"
+            self.category_id = 500
+
+    monkeypatch.setattr(removestream_fix.discord, "TextChannel", FakeTextChannel)
+    channel = FakeTextChannel()
+    guild = SimpleNamespace(get_channel=lambda resource_id: channel if resource_id == 702 else None)
+
+    with pytest.raises(RuntimeError, match="désigne `wrong-name`"):
+        removestream_fix._journal_target(
+            guild,
+            {
+                "kind": "channel",
+                "id": 702,
+                "name": "📌-TCS・informations",
+                "channel_type": "text",
+                "category_id": 500,
+            },
+        )
+
+
+def test_journal_target_rejects_category_mismatch(monkeypatch):
+    class FakeTextChannel:
+        def __init__(self):
+            self.id = 703
+            self.name = "📌-TCS・informations"
+            self.category_id = 999
+
+    monkeypatch.setattr(removestream_fix.discord, "TextChannel", FakeTextChannel)
+    channel = FakeTextChannel()
+    guild = SimpleNamespace(get_channel=lambda resource_id: channel if resource_id == 703 else None)
+
+    with pytest.raises(RuntimeError, match="n'appartient plus à la catégorie attendue"):
+        removestream_fix._journal_target(
+            guild,
+            {
+                "kind": "channel",
+                "id": 703,
+                "name": channel.name,
+                "channel_type": "text",
+                "category_id": 500,
+            },
+        )
+
+
+def test_journal_target_treats_missing_exact_id_as_already_gone():
+    guild = SimpleNamespace(get_channel=lambda _resource_id: None, get_role=lambda _resource_id: None)
+    assert (
+        removestream_fix._journal_target(
+            guild,
+            {
+                "kind": "channel",
+                "id": 704,
+                "name": "📌-TCS・informations",
+                "channel_type": "text",
+                "category_id": 500,
+            },
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
