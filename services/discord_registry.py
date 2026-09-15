@@ -1,9 +1,4 @@
-"""Live Discord resource resolution and managed-registry reconciliation.
-
-Discord is authoritative for the current existence and placement of managed
-channels. Persisted managed IDs are used first, validated against live state,
-then repaired from an unambiguous live fallback when necessary.
-"""
+"""Live Discord resource resolution and managed-registry reconciliation."""
 
 from __future__ import annotations
 
@@ -84,6 +79,39 @@ def _is_expected_text_channel(
     )
 
 
+async def resolve_registered_text_channel(
+    guild: discord.Guild,
+    config: dict,
+    *,
+    channel_name: str,
+    category_name: str,
+) -> discord.TextChannel | None:
+    """Resolve a channel only through its persisted managed identity.
+
+    This is the strict path for operations that must never adopt an unmanaged
+    same-name channel. Both the persisted category ID and channel ID must
+    resolve to objects whose names and parent relationship match exactly.
+    Missing IDs, deleted resources, renames, type changes, and category moves
+    all fail closed. No live name scan or registry repair is performed.
+    """
+    _, category_id = _find_registered_id(config, "categories", category_name)
+    _, channel_id = _find_registered_id(config, "channels", channel_name)
+    if category_id is None or channel_id is None:
+        return None
+
+    try:
+        category = await guild.fetch_channel(category_id)
+        channel = await guild.fetch_channel(channel_id)
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        return None
+
+    if not _is_expected_category(category, category_name):
+        return None
+    if not _is_expected_text_channel(channel, channel_name, category.id):
+        return None
+    return channel
+
+
 async def resolve_managed_text_channel(
     guild: discord.Guild,
     config: dict,
@@ -91,14 +119,15 @@ async def resolve_managed_text_channel(
     channel_name: str,
     category_name: str,
 ) -> tuple[discord.TextChannel | None, bool]:
-    """Resolve a managed text channel from live Discord and reconcile IDs.
+    """Resolve a managed channel with controlled registry reconciliation.
 
     Resolution order:
     1. Persisted IDs, after strict live-object validation.
-    2. An unambiguous live category/channel scan using normalized names.
+    2. An unambiguous live category/channel scan for non-destructive
+       publication flows that explicitly support registry repair.
 
-    The fallback never guesses between duplicate live resources. When it
-    succeeds, the current live IDs are written back into the managed registry.
+    Callers performing security-sensitive access control or permission changes
+    should use :func:`resolve_registered_text_channel` instead.
     """
     category_key, category_id = _find_registered_id(config, "categories", category_name)
     channel_key, channel_id = _find_registered_id(config, "channels", channel_name)
