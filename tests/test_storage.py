@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from services import storage
@@ -116,7 +118,7 @@ def test_json_cache_failure_after_database_commit_does_not_lose_configuration(tm
     with storage._connect() as conn:
         row = conn.execute("SELECT config_json, is_deleted FROM guild_configs WHERE guild_id=1").fetchone()
         assert row["is_deleted"] == 0
-        assert storage.json.loads(row["config_json"]) == new_config
+        assert json.loads(row["config_json"]) == new_config
 
 
 def test_stale_json_cache_is_ignored_after_restart_when_database_is_newer(tmp_path, monkeypatch):
