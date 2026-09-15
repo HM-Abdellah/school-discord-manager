@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from functools import wraps
+
 import discord
 from discord import app_commands
 
 from config.curriculum import get_stream_abbreviation, get_stream_subjects, get_subject_internal_code
+from services.build_guard import get_build_lock
 from services.storage import get_guild_config
 
 ROLE_ADMIN = "Administration"
@@ -100,6 +103,17 @@ def _management_role(guild: discord.Guild) -> discord.Role | None:
     return get_managed_role(guild, ROLE_ADMIN)
 
 
+def management_authorized(interaction: discord.Interaction) -> bool:
+    """Return whether the invoking member is the owner or configured administrator."""
+    guild = interaction.guild
+    if guild is None:
+        return False
+    if interaction.user.id == guild.owner_id:
+        return True
+    role = _management_role(guild)
+    return role is not None and role in getattr(interaction.user, "roles", [])
+
+
 def _preflight_message(interaction: discord.Interaction, *, needs_channels: bool = False, needs_roles: bool = False) -> str | None:
     guild = interaction.guild
     if guild is None:
@@ -125,16 +139,26 @@ def _apply_default_permission(decorator, *, manage_roles: bool = False, administ
     return decorator
 
 
+def _wrap_with_mutation_lock(command):
+    """Serialize one management/owner command per guild while preserving its signature."""
+    @wraps(command)
+    async def guarded(*args, **kwargs):
+        interaction = next((arg for arg in args if isinstance(arg, discord.Interaction)), None)
+        guild = getattr(interaction, "guild", None)
+        if guild is None:
+            return await command(*args, **kwargs)
+        async with get_build_lock(guild.id):
+            return await command(*args, **kwargs)
+
+    return guarded
+
+
 def management_check() -> app_commands.check:
     async def predicate(interaction: discord.Interaction) -> bool:
         guild = interaction.guild
         if guild is None:
             return False
-        authorized = interaction.user.id == guild.owner_id
-        if not authorized:
-            role = _management_role(guild)
-            authorized = role is not None and role in getattr(interaction.user, "roles", [])
-        if not authorized:
+        if not management_authorized(interaction):
             if not interaction.response.is_done():
                 await interaction.response.send_message("❌ Outil réservé au propriétaire du serveur ou au rôle Administration configuré.", ephemeral=True)
             return False
@@ -155,7 +179,8 @@ def management_check() -> app_commands.check:
 
     def decorator(command):
         command = check_decorator(command)
-        return _apply_default_permission(command, manage_roles=True)
+        command = _apply_default_permission(command, manage_roles=True)
+        return _wrap_with_mutation_lock(command)
 
     return decorator
 
@@ -178,7 +203,8 @@ def owner_only_check() -> app_commands.check:
 
     def decorator(command):
         command = check_decorator(command)
-        return _apply_default_permission(command, administrator=True)
+        command = _apply_default_permission(command, administrator=True)
+        return _wrap_with_mutation_lock(command)
 
     return decorator
 
@@ -200,7 +226,7 @@ def professor_subject_member_overwrite() -> discord.PermissionOverwrite:
 
 
 def student_overwrite(*, can_send: bool = True) -> discord.PermissionOverwrite:
-    return discord.PermissionOverwrite(view_channel=True, send_messages=can_send, read_message_history=True, create_public_threads=can_send, send_messages_in_threads=can_send, connect=True, speak=True)
+    return discord.PermissionOverwrite(view_channel=True, send_messages=can_send, read_message_history=True, create_public_threads=can_send, send_messages_in_threads=can_send, connect=True, speak=True, stream=True)
 
 
 def student_view_overwrite() -> discord.PermissionOverwrite:
