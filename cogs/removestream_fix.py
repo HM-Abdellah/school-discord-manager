@@ -152,13 +152,6 @@ async def stream_autocomplete(
     ][:25]
 
 
-async def _fetch_channels(guild: discord.Guild) -> list[discord.abc.GuildChannel]:
-    try:
-        return list(await guild.fetch_channels())
-    except (discord.Forbidden, discord.HTTPException):
-        return list(guild.channels)
-
-
 async def _resolve_registry(
     guild: discord.Guild,
     config: dict,
@@ -172,8 +165,6 @@ async def _resolve_registry(
     voice_name = f"🔊-{_safe_name(code, 30)}-à-distance"
     expected_channels = _stream_channel_names(level, stream, stream_item)
     expected_roles = _stream_role_names(level, stream)
-
-    all_channels = await _fetch_channels(guild)
 
     category_id = _recorded_id(config, "categories", category_name)
     voice_category_id = _recorded_id(config, "categories", CATEGORY_VOICE)
@@ -252,10 +243,6 @@ async def _resolve_registry(
     missing_roles = expected_roles - set(roles)
     if missing_roles:
         missing.append(f"{len(missing_roles)} rôle(s) géré(s) avec ID manquant/invalide")
-
-    # Keep the live snapshot in this resolver for consistency with the remote API
-    # even when guild.get_channel/get_role is backed by Discord.py cache state.
-    _ = all_channels
 
     return (
         roles,
