@@ -1,9 +1,14 @@
-from bot import SchoolBot
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_edge_case_hardening_is_not_a_runtime_dependency():
-    assert "cogs.edge_case_hardening" not in SchoolBot.EXTENSIONS
+    source = (ROOT / "bot.py").read_text(encoding="utf-8")
+    assert '"cogs.edge_case_hardening"' not in source
 
 
 def test_removestream_has_a_single_runtime_owner():
-    assert SchoolBot.EXTENSIONS.count("cogs.removestream_fix") == 1
+    source = (ROOT / "bot.py").read_text(encoding="utf-8")
+    assert source.count('"cogs.removestream_fix"') == 1
