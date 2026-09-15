@@ -68,8 +68,7 @@ def test_finalize_stream_config_only_removes_exact_journal_owned_mappings():
 
     candidate = removestream_fix._finalize_stream_config(config, journal)
 
-    assert candidate["levels"][0]["name"] == "Tronc Commun"
-    assert candidate["levels"][0]["streams"] == []
+    assert candidate["levels"] == []
     assert "📌-TCS・informations" not in candidate["managed"]["channels"]
     assert "📝-TCS・examens" not in candidate["managed"]["channels"]
     assert candidate["managed"]["roles"]["Filière - TCS"] == 900
