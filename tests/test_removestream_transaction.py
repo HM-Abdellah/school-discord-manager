@@ -1,3 +1,4 @@
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
@@ -15,14 +16,14 @@ def test_journal_is_written_before_any_deletion():
         resources=[{"kind": "channel", "id": 101, "name": "📌-TCS・informations"}],
     )
 
-    transaction.install_removal_journal(config, journal, saved.append)
+    transaction.install_removal_journal(config, journal, lambda value: saved.append(deepcopy(value)))
 
     assert config[transaction.PENDING_REMOVAL_KEY]["completed"] == []
     assert saved == [config]
 
 
 @pytest.mark.asyncio
-async def test_journal_checkpoints_each_completed_delete_and_is_idempotent():
+async def test_journal_checkpoints_each_successful_delete():
     events = []
     saved = []
 
@@ -37,7 +38,7 @@ async def test_journal_checkpoints_each_completed_delete_and_is_idempotent():
 
     async def second_delete(*, reason):
         events.append(("delete", 202, reason))
-        raise RuntimeError("stop after second delete")
+        raise RuntimeError("stop before checkpoint")
 
     second.delete = second_delete
 
@@ -55,16 +56,17 @@ async def test_journal_checkpoints_each_completed_delete_and_is_idempotent():
     def resolve(resource):
         return {101: first, 202: second}[resource["id"]]
 
-    with pytest.raises(RuntimeError, match="stop after second delete"):
+    with pytest.raises(RuntimeError, match="stop before checkpoint"):
         await transaction.execute_removal_journal(
             config=config,
             journal=journal,
             resolve=resolve,
-            checkpoint=saved.append,
+            checkpoint=lambda value: saved.append(deepcopy(value)),
         )
 
+    assert events[0][0:2] == ("delete", 101)
     assert saved[0][transaction.PENDING_REMOVAL_KEY]["completed"] == ["channel:101"]
-    assert saved[1][transaction.PENDING_REMOVAL_KEY]["completed"] == ["channel:101", "role:202"]
+    assert len(saved) == 1
 
 
 @pytest.mark.asyncio
@@ -91,7 +93,7 @@ async def test_not_found_is_treated_as_already_completed():
         config=config,
         journal=journal,
         resolve=lambda _resource: target,
-        checkpoint=saved.append,
+        checkpoint=lambda value: saved.append(deepcopy(value)),
     )
 
     assert config[transaction.PENDING_REMOVAL_KEY]["completed"] == ["channel:303"]
@@ -108,3 +110,11 @@ def test_invalid_resource_is_rejected_before_execution():
 
     with pytest.raises(ValueError, match="Invalid removal resource"):
         transaction._normalize_resource(journal["resources"][0])
+
+
+def test_category_resources_are_supported():
+    resource = transaction._normalize_resource(
+        {"kind": "category", "id": 404, "name": "📘・TC・🔬 TCS"}
+    )
+    assert resource["kind"] == "category"
+    assert resource["id"] == 404
