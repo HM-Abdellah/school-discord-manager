@@ -80,5 +80,6 @@ async def test_resolver_refuses_missing_managed_ids(monkeypatch):
 
 
 def test_remove_stream_validates_managed_registry_before_resolution():
-    source = inspect.getsource(removestream_fix.SafeRemoveStream.remove_stream)
+    command_callback = removestream_fix.SafeRemoveStream.remove_stream.callback
+    source = inspect.getsource(command_callback)
     assert "await validate_managed_registry(guild, config)" in source
