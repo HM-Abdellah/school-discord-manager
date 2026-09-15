@@ -1,4 +1,4 @@
-"""Section-aware exam publishing override.
+"""Section-aware exam publishing command.
 
 A school stream may contain multiple physical classes/sections. The section
 number is metadata on the exam, not a separate Discord stream or category.
@@ -12,12 +12,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.discord_aware_commands import (
-    _persist_registry_repair,
-    _resolve_discord_managed_text_channel,
-    level_autocomplete,
-    stream_autocomplete,
-)
 from config.curriculum import (
     get_levels,
     get_stream_abbreviation,
@@ -26,11 +20,13 @@ from config.curriculum import (
     get_subject_display_name,
 )
 from services.audit import record_event
+from services.command_autocomplete import level_autocomplete, stream_autocomplete
+from services.discord_registry import persist_registry_repair, resolve_managed_text_channel
 from services.permissions import management_check
 from services.server_builder import _stream_category_name
 from services.storage import get_guild_config, save_guild_config
 
-OVERRIDDEN_COMMANDS = {"setexam"}
+OWNED_COMMANDS = {"setexam"}
 MAX_SECTIONS = 8
 
 
@@ -46,7 +42,10 @@ def _parse_exam_date(value: str):
     return None
 
 
-async def subject_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+async def subject_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
     level = str(getattr(interaction.namespace, "level", ""))
     stream = str(getattr(interaction.namespace, "stream", ""))
     if level not in get_levels() or stream not in get_streams(level):
@@ -55,7 +54,8 @@ async def subject_autocomplete(interaction: discord.Interaction, current: str) -
     return [
         app_commands.Choice(name=get_subject_display_name(subject)[:100], value=subject)
         for subject in get_stream_subjects(level, stream)
-        if current_key in subject.casefold() or current_key in get_subject_display_name(subject).casefold()
+        if current_key in subject.casefold()
+        or current_key in get_subject_display_name(subject).casefold()
     ][:25]
 
 
@@ -63,7 +63,10 @@ class SectionAwareExamCommands(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    @app_commands.command(name="setexam", description="Ajouter un examen pour un niveau, une filière et un numéro de classe.")
+    @app_commands.command(
+        name="setexam",
+        description="Ajouter un examen pour un niveau, une filière et un numéro de classe.",
+    )
     @app_commands.describe(
         level="Niveau scolaire",
         stream="Filière scolaire",
@@ -74,10 +77,22 @@ class SectionAwareExamCommands(commands.Cog):
         end_time="Heure de fin",
         details="Détails ou consignes",
     )
-    @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete, subject=subject_autocomplete)
+    @app_commands.autocomplete(
+        level=level_autocomplete,
+        stream=stream_autocomplete,
+        subject=subject_autocomplete,
+    )
     @app_commands.choices(
-        start_time=[app_commands.Choice(name=f"{h:02d}:{m:02d}", value=f"{h:02d}:{m:02d}") for h in range(7, 21) for m in (0, 30)][:25],
-        end_time=[app_commands.Choice(name=f"{h:02d}:{m:02d}", value=f"{h:02d}:{m:02d}") for h in range(7, 21) for m in (0, 30)][:25],
+        start_time=[
+            app_commands.Choice(name=f"{h:02d}:{m:02d}", value=f"{h:02d}:{m:02d}")
+            for h in range(7, 21)
+            for m in (0, 30)
+        ][:25],
+        end_time=[
+            app_commands.Choice(name=f"{h:02d}:{m:02d}", value=f"{h:02d}:{m:02d}")
+            for h in range(7, 21)
+            for m in (0, 30)
+        ][:25],
     )
     @management_check()
     async def set_exam(
@@ -105,7 +120,8 @@ class SectionAwareExamCommands(commands.Cog):
 
         match_subject = next(
             (
-                item for item in get_stream_subjects(level, stream)
+                item
+                for item in get_stream_subjects(level, stream)
                 if item.casefold() == subject.casefold()
                 or get_subject_display_name(item).casefold() == subject.casefold()
             ),
@@ -120,7 +136,10 @@ class SectionAwareExamCommands(commands.Cog):
             await interaction.followup.send("❌ Date invalide.", ephemeral=True)
             return
         if start_time.value >= end_time.value:
-            await interaction.followup.send("❌ L'heure de début doit être avant l'heure de fin.", ephemeral=True)
+            await interaction.followup.send(
+                "❌ L'heure de début doit être avant l'heure de fin.",
+                ephemeral=True,
+            )
             return
 
         code = get_stream_abbreviation(level, stream)
@@ -128,7 +147,7 @@ class SectionAwareExamCommands(commands.Cog):
         channel_name = f"📝-{code}・examens"
         config = get_guild_config(guild.id) or {}
 
-        channel, registry_repaired = await _resolve_discord_managed_text_channel(
+        channel, registry_repaired = await resolve_managed_text_channel(
             guild,
             config,
             channel_name=channel_name,
@@ -140,7 +159,7 @@ class SectionAwareExamCommands(commands.Cog):
                 ephemeral=True,
             )
             return
-        if not _persist_registry_repair(guild.id, config, registry_repaired):
+        if not persist_registry_repair(guild.id, config, registry_repaired):
             await interaction.followup.send(
                 "❌ Le channel a bien été détecté sur Discord, mais la synchronisation du registre géré a échoué. Publication annulée pour éviter un état incohérent.",
                 ephemeral=True,
@@ -168,7 +187,10 @@ class SectionAwareExamCommands(commands.Cog):
             ] = message.id
             save_guild_config(guild.id, config)
         except (discord.Forbidden, discord.HTTPException, OSError) as exc:
-            await interaction.followup.send(f"❌ Publication impossible : `{type(exc).__name__}`", ephemeral=True)
+            await interaction.followup.send(
+                f"❌ Publication impossible : `{type(exc).__name__}`",
+                ephemeral=True,
+            )
             return
 
         record_event(
@@ -187,6 +209,4 @@ class SectionAwareExamCommands(commands.Cog):
 
 
 async def setup(bot: commands.Bot) -> None:
-    for name in OVERRIDDEN_COMMANDS:
-        bot.tree.remove_command(name)
     await bot.add_cog(SectionAwareExamCommands(bot))
