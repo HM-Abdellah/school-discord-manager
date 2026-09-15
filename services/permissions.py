@@ -131,26 +131,29 @@ def _preflight_message(interaction: discord.Interaction, *, needs_channels: bool
     return None
 
 
-def _apply_default_permission(decorator, *, manage_roles: bool = False, administrator: bool = False):
+def _apply_default_permission(command, *, manage_roles: bool = False, administrator: bool = False):
     if administrator:
-        return app_commands.default_permissions(administrator=True)(decorator)
+        return app_commands.default_permissions(administrator=True)(command)
     if manage_roles:
-        return app_commands.default_permissions(manage_roles=True)(decorator)
-    return decorator
+        return app_commands.default_permissions(manage_roles=True)(command)
+    return command
 
 
-def _wrap_with_mutation_lock(command):
-    """Serialize one management/owner command per guild while preserving its signature."""
-    @wraps(command)
-    async def guarded(*args, **kwargs):
+def _wrap_command_callback(command):
+    """Serialize the callback while preserving the ApplicationCommand object."""
+    original = command.callback
+
+    @wraps(original)
+    async def guarded_callback(*args, **kwargs):
         interaction = next((arg for arg in args if isinstance(arg, discord.Interaction)), None)
         guild = getattr(interaction, "guild", None)
         if guild is None:
-            return await command(*args, **kwargs)
+            return await original(*args, **kwargs)
         async with get_build_lock(guild.id):
-            return await command(*args, **kwargs)
+            return await original(*args, **kwargs)
 
-    return guarded
+    command.callback = guarded_callback
+    return command
 
 
 def management_check() -> app_commands.check:
@@ -180,7 +183,7 @@ def management_check() -> app_commands.check:
     def decorator(command):
         command = check_decorator(command)
         command = _apply_default_permission(command, manage_roles=True)
-        return _wrap_with_mutation_lock(command)
+        return _wrap_command_callback(command)
 
     return decorator
 
@@ -204,7 +207,7 @@ def owner_only_check() -> app_commands.check:
     def decorator(command):
         command = check_decorator(command)
         command = _apply_default_permission(command, administrator=True)
-        return _wrap_with_mutation_lock(command)
+        return _wrap_command_callback(command)
 
     return decorator
 
