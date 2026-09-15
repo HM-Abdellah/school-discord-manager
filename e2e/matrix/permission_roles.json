@@ -1,0 +1,22 @@
+{
+  "phase": "3.6",
+  "name": "permission_role_matrix",
+  "actors": {
+    "OWNER": "The Discord server owner / management-authorized account A.",
+    "MEMBER": "The second available test account B without Administration role.",
+    "MEMBER_ADMIN": "Account B after the managed Administration role is explicitly granted for role-based authorization tests."
+  },
+  "cases": [
+    {"id":"AUTH-001","actor":"MEMBER","commands":["/setup","/build","/addstream","/removestream","/assignstudent","/assignteacher","/assignsubjectteachers","/reportabsence","/adminpanel","/serverhealth"],"precondition":"Account B has no server-owner status and no managed Administration role.","action":"Attempt each management command where Discord exposes it.","expectation":"The command is denied and no Discord or persisted state is mutated."},
+    {"id":"AUTH-002","actor":"OWNER","commands":["/setup","/build","/addstream","/removestream","/assignstudent","/assignteacher","/assignsubjectteachers","/reportabsence","/adminpanel","/serverhealth"],"precondition":"Account A owns the dedicated test guild and bot preflight requirements are satisfied.","action":"Run each command with valid parameters in its scenario-specific test case.","expectation":"Authorization passes; command-specific validation remains the next boundary."},
+    {"id":"AUTH-003","actor":"MEMBER_ADMIN","commands":["/setup","/build","/addstream","/removestream","/assignstudent","/assignteacher","/assignsubjectteachers","/reportabsence","/adminpanel","/serverhealth"],"precondition":"Account B has the exact managed Administration role and is not the guild owner.","action":"Run representative management commands.","expectation":"Authorization passes through the configured Administration role; owner-only commands remain owner-only."},
+    {"id":"AUTH-004","actor":"MEMBER","commands":["/resetserver","/rollbackyear"],"precondition":"Account B is not the guild owner.","action":"Attempt owner-only commands.","expectation":"The commands are denied and no state changes occur."},
+    {"id":"ROLE-001","actor":"OWNER","commands":["/assignteacher"],"precondition":"Target account B has a managed student role.","action":"Attempt to assign B as a teacher.","expectation":"Assignment is rejected while the student role conflict exists."},
+    {"id":"ROLE-002","actor":"OWNER","commands":["/assignstudent"],"precondition":"Target account B is a valid student candidate with an existing managed student-stream assignment.","action":"Assign B to a different configured stream.","expectation":"Student-stream assignment roles are normalized instead of accumulating conflicting assignments."},
+    {"id":"ROLE-003","actor":"OWNER","commands":["/assignteacher"],"precondition":"Target account B has one managed professor gender role.","action":"Assign the opposite professor gender option.","expectation":"The previous managed professor gender role is removed before/with the new assignment."},
+    {"id":"ROLE-004","actor":"OWNER","commands":["/assignsubjectteachers"],"precondition":"Two test accounts are available; a selected professor is valid and a student assignment state is known.","action":"Try to assign a member who still has a student role as a subject teacher.","expectation":"The role conflict is rejected without partially changing the subject access configuration."},
+    {"id":"ROLE-005","actor":"OWNER","commands":["/build","/resetserver"],"precondition":"Managed roles exist with known hierarchy positions.","action":"Lower the bot role below a managed role, then invoke a role-mutating command.","expectation":"Role preflight blocks the mutation rather than partially applying role changes."},
+    {"id":"ROLE-006","actor":"OWNER","commands":["/build"],"precondition":"The bot lacks Manage Channels in the E2E guild.","action":"Attempt a build.","expectation":"Channel mutation is blocked before Discord resources are changed."},
+    {"id":"ROLE-007","actor":"OWNER","commands":["/build","/assignteacher","/assignstudent"],"precondition":"The bot lacks Manage Roles in the E2E guild.","action":"Attempt role-dependent operations.","expectation":"Role mutation is blocked before managed-role state can drift."}
+  ]
+}
