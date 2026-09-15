@@ -163,7 +163,7 @@ class HardenedResetCommands(commands.Cog):
             return
         config = get_guild_config(guild.id) or {}
         try:
-            validate_managed_registry(guild, config)
+            await validate_managed_registry(guild, config)
         except RuntimeError as exc:
             await interaction.response.send_message(f"❌ Reset refusé : identité gérée incohérente (`{exc}`). Aucun resource n'a été supprimé.", ephemeral=True)
             return
