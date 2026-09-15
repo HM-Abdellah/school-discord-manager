@@ -6,32 +6,27 @@ from services import storage
 from services.server_builder import CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE, ServerBuilder
 
 
-def test_reset_guild_data_rolls_back_sqlite_when_json_replace_fails(tmp_path, monkeypatch):
+def test_reset_guild_data_keeps_sqlite_authoritative_when_json_cache_replace_fails(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     monkeypatch.setattr(storage, "DATA_DIR", data_dir)
     monkeypatch.setattr(storage, "CONFIG_FILE", data_dir / "guild_config.json")
     monkeypatch.setattr(storage, "DATABASE_FILE", data_dir / "school.db")
 
     config = {"academic_year": "2026/2027", "levels": []}
-    storage.save_all({"123": config})
+    storage.save_guild_config(123, config)
     storage.initialize_database()
     with storage._connect() as conn:
         conn.execute("INSERT INTO students(guild_id,discord_id,display_name,created_at) VALUES(123,99,'Student','2026-09-01')")
 
-    original_replace = storage.os.replace
+    original_save_all = storage.save_all
+    monkeypatch.setattr(storage, "save_all", lambda _data: (_ for _ in ()).throw(OSError("simulated JSON cache failure")))
+    storage.reset_guild_data(123)
+    monkeypatch.setattr(storage, "save_all", original_save_all)
 
-    def fail_transaction_replace(source, destination):
-        if ".transaction." in str(source):
-            raise OSError("simulated JSON replace failure")
-        original_replace(source, destination)
-
-    monkeypatch.setattr(storage.os, "replace", fail_transaction_replace)
-    with pytest.raises(OSError, match="simulated JSON replace failure"):
-        storage.reset_guild_data(123)
-
-    assert storage.get_guild_config(123) == config
+    assert storage.get_guild_config(123) is None
     with storage._connect() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM students WHERE guild_id=123").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM students WHERE guild_id=123").fetchone()[0] == 0
+        assert conn.execute("SELECT is_deleted FROM guild_configs WHERE guild_id=123").fetchone()[0] == 1
 
 
 def test_builder_capacity_counts_only_resources_that_will_actually_be_created():

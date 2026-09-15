@@ -1,4 +1,4 @@
-"""Persistent JSON configuration and SQLite academic records."""
+"""Persistent SQLite state with JSON kept as a recoverable cache/export."""
 
 from __future__ import annotations
 
@@ -117,21 +117,7 @@ def _deduplicate_active_academic_years(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_one_active_academic_year_per_guild ON academic_years(guild_id) WHERE is_active=1")
 
 
-def initialize_database() -> None:
-    with _connect() as conn:
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS academic_years (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, name TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, UNIQUE(guild_id, name));
-        CREATE TABLE IF NOT EXISTS streams (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, academic_year_id INTEGER NOT NULL, level_name TEXT NOT NULL, stream_name TEXT NOT NULL, role_name TEXT NOT NULL, UNIQUE(guild_id, academic_year_id, level_name, stream_name), FOREIGN KEY(academic_year_id) REFERENCES academic_years(id) ON DELETE CASCADE);
-        CREATE TABLE IF NOT EXISTS students (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, discord_id INTEGER, display_name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, UNIQUE(guild_id, discord_id));
-        """)
-        _migrate_legacy_enrollments(conn)
-        _deduplicate_active_enrollments(conn)
-        _deduplicate_active_academic_years(conn)
-        conn.executescript("CREATE INDEX IF NOT EXISTS idx_students_guild_discord ON students(guild_id, discord_id); CREATE INDEX IF NOT EXISTS idx_streams_guild_year ON streams(guild_id, academic_year_id); CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id);")
-
-
-def load_all() -> dict[str, Any]:
-    _ensure_storage()
+def _read_json_cache() -> dict[str, Any]:
     if not CONFIG_FILE.exists():
         return {}
     try:
@@ -141,7 +127,96 @@ def load_all() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _upsert_config_conn(conn: sqlite3.Connection, guild_id: int, config: dict[str, Any]) -> None:
+    payload = json.dumps(config, ensure_ascii=False, separators=(",", ":"))
+    conn.execute(
+        """
+        INSERT INTO guild_configs(guild_id, config_json, is_deleted, updated_at)
+        VALUES(?,?,0,?)
+        ON CONFLICT(guild_id) DO UPDATE SET
+            config_json=excluded.config_json,
+            is_deleted=0,
+            updated_at=excluded.updated_at
+        """,
+        (guild_id, payload, date.today().isoformat()),
+    )
+
+
+def _mark_config_deleted_conn(conn: sqlite3.Connection, guild_id: int) -> None:
+    conn.execute(
+        """
+        INSERT INTO guild_configs(guild_id, config_json, is_deleted, updated_at)
+        VALUES(?,NULL,1,?)
+        ON CONFLICT(guild_id) DO UPDATE SET
+            config_json=NULL,
+            is_deleted=1,
+            updated_at=excluded.updated_at
+        """,
+        (guild_id, date.today().isoformat()),
+    )
+
+
+def _load_database_configs_conn(conn: sqlite3.Connection) -> dict[str, Any]:
+    if not _table_exists(conn, "guild_configs"):
+        return {}
+    result: dict[str, Any] = {}
+    rows = conn.execute("SELECT guild_id, config_json, is_deleted FROM guild_configs ORDER BY guild_id").fetchall()
+    for row in rows:
+        if row["is_deleted"]:
+            continue
+        try:
+            config = json.loads(row["config_json"] or "null")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(config, dict):
+            result[str(row["guild_id"])] = config
+    return result
+
+
+def _import_json_cache_conn(conn: sqlite3.Connection) -> None:
+    cache = _read_json_cache()
+    if not cache:
+        return
+    for guild_key, config in cache.items():
+        if not str(guild_key).isdigit() or not isinstance(config, dict):
+            continue
+        guild_id = int(guild_key)
+        existing = conn.execute("SELECT is_deleted FROM guild_configs WHERE guild_id=?", (guild_id,)).fetchone()
+        if existing is not None:
+            continue
+        _upsert_config_conn(conn, guild_id, config)
+
+
+def initialize_database() -> None:
+    with _connect() as conn:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS academic_years (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, name TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, UNIQUE(guild_id, name));
+        CREATE TABLE IF NOT EXISTS streams (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, academic_year_id INTEGER NOT NULL, level_name TEXT NOT NULL, stream_name TEXT NOT NULL, role_name TEXT NOT NULL, UNIQUE(guild_id, academic_year_id, level_name, stream_name), FOREIGN KEY(academic_year_id) REFERENCES academic_years(id) ON DELETE CASCADE);
+        CREATE TABLE IF NOT EXISTS students (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, discord_id INTEGER, display_name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, UNIQUE(guild_id, discord_id));
+        CREATE TABLE IF NOT EXISTS guild_configs (guild_id INTEGER PRIMARY KEY, config_json TEXT, is_deleted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
+        """)
+        _migrate_legacy_enrollments(conn)
+        _deduplicate_active_enrollments(conn)
+        _deduplicate_active_academic_years(conn)
+        _import_json_cache_conn(conn)
+        conn.executescript("CREATE INDEX IF NOT EXISTS idx_students_guild_discord ON students(guild_id, discord_id); CREATE INDEX IF NOT EXISTS idx_streams_guild_year ON streams(guild_id, academic_year_id); CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id);")
+
+
+def _load_all_from_database() -> dict[str, Any]:
+    with _connect() as conn:
+        return _load_database_configs_conn(conn)
+
+
+def load_all() -> dict[str, Any]:
+    initialize_database()
+    return _load_all_from_database()
+
+
 def save_all(data: dict[str, Any]) -> None:
+    """Write the JSON compatibility cache atomically.
+
+    The cache is never the logical source of truth for guild configuration.
+    """
     _ensure_storage()
     payload = json.dumps(data, ensure_ascii=False, indent=2)
     fd, temp_name = tempfile.mkstemp(prefix=f".{CONFIG_FILE.name}.", dir=DATA_DIR, text=True)
@@ -154,6 +229,13 @@ def save_all(data: dict[str, Any]) -> None:
     finally:
         if os.path.exists(temp_name):
             os.unlink(temp_name)
+
+
+def _refresh_json_cache() -> None:
+    try:
+        save_all(_load_all_from_database())
+    except OSError as exc:
+        print(f"[STORAGE] JSON cache refresh failed; SQLite remains authoritative: {exc}", flush=True)
 
 
 def get_guild_config(guild_id: int) -> dict[str, Any] | None:
@@ -173,9 +255,9 @@ def _academic_year_key(year: str | None) -> tuple[int, int] | None:
 
 
 def save_guild_config(guild_id: int, config: dict[str, Any]) -> None:
+    """Atomically commit logical configuration to SQLite, then refresh JSON cache."""
     initialize_database()
-    old_data = load_all()
-    previous_config = old_data.get(str(guild_id))
+    previous_config = get_guild_config(guild_id)
     previous_year = previous_config.get("academic_year") if isinstance(previous_config, dict) else None
     requested_year = config.get("academic_year") if isinstance(config, dict) else None
     previous_key = _academic_year_key(previous_year)
@@ -186,26 +268,24 @@ def save_guild_config(guild_id: int, config: dict[str, Any]) -> None:
             "Une nouvelle année scolaire doit être postérieure à l'année active actuelle."
         )
 
-    new_data = deepcopy(old_data)
-    new_data[str(guild_id)] = deepcopy(config)
+    config_copy = deepcopy(config)
     with _connect() as conn:
         try:
-            _sync_configuration_to_database_conn(conn, guild_id, config)
-            save_all(new_data)
+            _sync_configuration_to_database_conn(conn, guild_id, config_copy)
+            _upsert_config_conn(conn, guild_id, config_copy)
             conn.commit()
         except Exception:
             conn.rollback()
-            try:
-                save_all(old_data)
-            except Exception:
-                pass
             raise
+    _refresh_json_cache()
 
 
 def delete_guild_config(guild_id: int) -> None:
-    data = load_all()
-    data.pop(str(guild_id), None)
-    save_all(data)
+    initialize_database()
+    with _connect() as conn:
+        _mark_config_deleted_conn(conn, guild_id)
+        conn.commit()
+    _refresh_json_cache()
 
 
 def _write_json_temp(data: dict[str, Any]) -> str:
@@ -220,35 +300,21 @@ def _write_json_temp(data: dict[str, Any]) -> str:
 
 
 def reset_guild_data(guild_id: int) -> None:
-    """Reset JSON and SQLite state with coordinated rollback on persistence failure."""
-    old_data = load_all()
-    new_data = deepcopy(old_data)
-    new_data.pop(str(guild_id), None)
-    old_config_temp = _write_json_temp(old_data)
-    new_config_temp = _write_json_temp(new_data)
-    try:
-        with _connect() as conn:
-            try:
-                conn.execute("DELETE FROM students WHERE guild_id=?", (guild_id,))
-                conn.execute("DELETE FROM streams WHERE guild_id=?", (guild_id,))
-                conn.execute("DELETE FROM academic_years WHERE guild_id=?", (guild_id,))
-                if _table_exists(conn, "audit_events"):
-                    conn.execute("DELETE FROM audit_events WHERE guild_id=?", (guild_id,))
-                os.replace(new_config_temp, CONFIG_FILE)
-                new_config_temp = ""
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                try:
-                    os.replace(old_config_temp, CONFIG_FILE)
-                    old_config_temp = ""
-                except OSError:
-                    pass
-                raise
-    finally:
-        for path in (old_config_temp, new_config_temp):
-            if path and os.path.exists(path):
-                os.unlink(path)
+    """Reset logical state in one SQLite transaction, then refresh the cache."""
+    initialize_database()
+    with _connect() as conn:
+        try:
+            conn.execute("DELETE FROM students WHERE guild_id=?", (guild_id,))
+            conn.execute("DELETE FROM streams WHERE guild_id=?", (guild_id,))
+            conn.execute("DELETE FROM academic_years WHERE guild_id=?", (guild_id,))
+            if _table_exists(conn, "audit_events"):
+                conn.execute("DELETE FROM audit_events WHERE guild_id=?", (guild_id,))
+            _mark_config_deleted_conn(conn, guild_id)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    _refresh_json_cache()
 
 
 def ensure_academic_year(guild_id: int, name: str, *, active: bool = False) -> int:

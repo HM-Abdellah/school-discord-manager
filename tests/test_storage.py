@@ -1,13 +1,20 @@
+import json
+
 import pytest
 
 from services import storage
 
 
-def test_json_save_is_atomic_and_round_trips(tmp_path, monkeypatch):
+def _configure_storage(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     monkeypatch.setattr(storage, "DATA_DIR", data_dir)
     monkeypatch.setattr(storage, "CONFIG_FILE", data_dir / "guild_config.json")
     monkeypatch.setattr(storage, "DATABASE_FILE", data_dir / "school.db")
+    return data_dir
+
+
+def test_json_save_is_atomic_and_round_trips(tmp_path, monkeypatch):
+    data_dir = _configure_storage(tmp_path, monkeypatch)
     payload = {"123": {"academic_year": "2026/2027", "levels": []}}
     storage.save_all(payload)
     assert storage.load_all() == payload
@@ -15,9 +22,7 @@ def test_json_save_is_atomic_and_round_trips(tmp_path, monkeypatch):
 
 
 def test_sqlite_uses_wal_and_busy_timeout(tmp_path, monkeypatch):
-    data_dir = tmp_path / "data"
-    monkeypatch.setattr(storage, "DATA_DIR", data_dir)
-    monkeypatch.setattr(storage, "DATABASE_FILE", data_dir / "school.db")
+    _configure_storage(tmp_path, monkeypatch)
     conn = storage._connect()
     try:
         assert str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal"
@@ -27,9 +32,7 @@ def test_sqlite_uses_wal_and_busy_timeout(tmp_path, monkeypatch):
 
 
 def test_duplicate_active_enrollments_are_deduplicated_before_unique_index(tmp_path, monkeypatch):
-    data_dir = tmp_path / "data"
-    monkeypatch.setattr(storage, "DATA_DIR", data_dir)
-    monkeypatch.setattr(storage, "DATABASE_FILE", data_dir / "school.db")
+    _configure_storage(tmp_path, monkeypatch)
     storage.initialize_database()
     with storage._connect() as conn:
         conn.execute("DROP INDEX uq_one_active_enrollment_per_student")
@@ -46,9 +49,7 @@ def test_duplicate_active_enrollments_are_deduplicated_before_unique_index(tmp_p
 
 
 def test_enrolling_same_stream_twice_is_idempotent(tmp_path, monkeypatch):
-    data_dir = tmp_path / "data"
-    monkeypatch.setattr(storage, "DATA_DIR", data_dir)
-    monkeypatch.setattr(storage, "DATABASE_FILE", data_dir / "school.db")
+    _configure_storage(tmp_path, monkeypatch)
     storage.initialize_database()
     year_id = storage.ensure_academic_year(1, "2026/2027", active=True)
     storage.sync_configuration_to_database(1, {"academic_year": "2026/2027", "levels": [{"name": "TC", "streams": [{"name": "TCS", "abbreviation": "TCS"}]}]})
@@ -60,9 +61,7 @@ def test_enrolling_same_stream_twice_is_idempotent(tmp_path, monkeypatch):
 
 
 def test_only_one_academic_year_can_be_active_per_guild(tmp_path, monkeypatch):
-    data_dir = tmp_path / "data"
-    monkeypatch.setattr(storage, "DATA_DIR", data_dir)
-    monkeypatch.setattr(storage, "DATABASE_FILE", data_dir / "school.db")
+    _configure_storage(tmp_path, monkeypatch)
     first = storage.create_academic_year(1, "2025/2026", activate=True)
     second = storage.create_academic_year(1, "2026/2027", activate=True)
     assert first != second
@@ -74,9 +73,7 @@ def test_only_one_academic_year_can_be_active_per_guild(tmp_path, monkeypatch):
 
 
 def test_active_academic_year_migration_deduplicates_before_unique_index(tmp_path, monkeypatch):
-    data_dir = tmp_path / "data"
-    monkeypatch.setattr(storage, "DATA_DIR", data_dir)
-    monkeypatch.setattr(storage, "DATABASE_FILE", data_dir / "school.db")
+    _configure_storage(tmp_path, monkeypatch)
     storage.initialize_database()
     with storage._connect() as conn:
         conn.execute("DROP INDEX uq_one_active_academic_year_per_guild")
@@ -93,10 +90,7 @@ def test_active_academic_year_migration_deduplicates_before_unique_index(tmp_pat
 
 
 def test_sync_configuration_is_idempotent_and_preserves_previous_year_history(tmp_path, monkeypatch):
-    data_dir = tmp_path / "data"
-    monkeypatch.setattr(storage, "DATA_DIR", data_dir)
-    monkeypatch.setattr(storage, "CONFIG_FILE", data_dir / "guild_config.json")
-    monkeypatch.setattr(storage, "DATABASE_FILE", data_dir / "school.db")
+    _configure_storage(tmp_path, monkeypatch)
     first_config = {"academic_year": "2025/2026", "levels": [{"name": "TC", "streams": [{"name": "TCS", "abbreviation": "TCS"}]}]}
     second_config = {"academic_year": "2026/2027", "levels": [{"name": "TC", "streams": [{"name": "TCS", "abbreviation": "TCS"}]}]}
     storage.save_guild_config(1, first_config)
@@ -111,32 +105,53 @@ def test_sync_configuration_is_idempotent_and_preserves_previous_year_history(tm
         assert conn.execute("SELECT COUNT(*) FROM streams WHERE guild_id=1 AND stream_name='TCS'").fetchone()[0] == 2
 
 
-def test_save_guild_config_rolls_back_database_when_json_write_fails(tmp_path, monkeypatch):
-    data_dir = tmp_path / "data"
-    monkeypatch.setattr(storage, "DATA_DIR", data_dir)
-    monkeypatch.setattr(storage, "CONFIG_FILE", data_dir / "guild_config.json")
-    monkeypatch.setattr(storage, "DATABASE_FILE", data_dir / "school.db")
+def test_json_cache_failure_after_database_commit_does_not_lose_configuration(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
     old_config = {"academic_year": "2025/2026", "levels": []}
     new_config = {"academic_year": "2026/2027", "levels": []}
     storage.save_guild_config(1, old_config)
-    original_save_all = storage.save_all
 
-    def fail_save(_data):
-        raise OSError("simulated JSON failure")
+    monkeypatch.setattr(storage, "save_all", lambda _data: (_ for _ in ()).throw(OSError("simulated JSON cache failure")))
+    storage.save_guild_config(1, new_config)
 
-    monkeypatch.setattr(storage, "save_all", fail_save)
-    with pytest.raises(OSError, match="simulated JSON failure"):
-        storage.save_guild_config(1, new_config)
-    monkeypatch.setattr(storage, "save_all", original_save_all)
+    assert storage.get_guild_config(1) == new_config
+    with storage._connect() as conn:
+        row = conn.execute("SELECT config_json, is_deleted FROM guild_configs WHERE guild_id=1").fetchone()
+        assert row["is_deleted"] == 0
+        assert json.loads(row["config_json"]) == new_config
 
-    assert storage.get_guild_config(1) == old_config
-    assert storage.get_active_academic_year(1)["name"] == "2025/2026"
+
+def test_stale_json_cache_is_ignored_after_restart_when_database_is_newer(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
+    old_config = {"academic_year": "2025/2026", "levels": []}
+    new_config = {"academic_year": "2026/2027", "levels": []}
+    storage.save_guild_config(1, old_config)
+
+    with storage._connect() as conn:
+        storage._upsert_config_conn(conn, 1, new_config)
+        conn.commit()
+
+    storage.CONFIG_FILE.write_text('{"1": {"academic_year": "2025/2026", "levels": []}}', encoding="utf-8")
+    assert storage.get_guild_config(1) == new_config
+
+
+def test_reset_tombstone_prevents_old_json_cache_from_resurrecting_config(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
+    config = {"academic_year": "2026/2027", "levels": []}
+    storage.save_guild_config(1, config)
+    storage.reset_guild_data(1)
+
+    assert storage.get_guild_config(1) is None
+    with storage._connect() as conn:
+        row = conn.execute("SELECT is_deleted FROM guild_configs WHERE guild_id=1").fetchone()
+        assert row["is_deleted"] == 1
+
+    storage.CONFIG_FILE.write_text('{"1": {"academic_year": "2026/2027", "levels": []}}', encoding="utf-8")
+    assert storage.get_guild_config(1) is None
 
 
 def test_legacy_enrollments_migrate_only_safe_same_guild_rows(tmp_path, monkeypatch):
-    data_dir = tmp_path / "data"
-    monkeypatch.setattr(storage, "DATA_DIR", data_dir)
-    monkeypatch.setattr(storage, "DATABASE_FILE", data_dir / "school.db")
+    _configure_storage(tmp_path, monkeypatch)
     storage.initialize_database()
     with storage._connect() as conn:
         conn.execute("DROP TABLE enrollments")
