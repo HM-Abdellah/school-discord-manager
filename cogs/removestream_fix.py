@@ -197,7 +197,8 @@ def _journal_identity_error(guild: discord.Guild, journal: dict) -> str | None:
     return None
 
 
-async def _journal_target(guild: discord.Guild, resource: dict):
+def _journal_target(guild: discord.Guild, resource: dict):
+    """Resolve a persisted target; an absent registered ID is already deleted."""
     kind = resource.get("kind")
     resource_id = resource.get("id")
     name = resource.get("name")
@@ -367,7 +368,7 @@ class SafeRemoveStream(commands.Cog):
 
         if pending is not None:
             if pending.get("level") != level or pending.get("stream") != stream:
-                await interaction.response.send_message(_fail(f"Une suppression interrompue de **{pending.get('code', '?')}** doit d'abord être récupérée avec `{pending.get('level', '?')}` / `{pending.get('stream', '?')}."), ephemeral=True)
+                await interaction.response.send_message(_fail(f"Une suppression interrompue de **{pending.get('code', '?')}** doit d'abord être récupérée avec `{pending.get('level', '?')}` / `{pending.get('stream', '?')}`."), ephemeral=True)
                 return
             lock = get_build_lock(guild.id)
             if lock.locked():
