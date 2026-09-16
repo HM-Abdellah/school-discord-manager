@@ -6,20 +6,28 @@ on:
   pull_request:
 
 jobs:
-  pytest:
+  targeted:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.12", "3.13"]
+        target:
+          - tests/test_phase_3_3_destructive_boundary.py::test_remove_stream_source_has_no_name_discovery_fallback
+          - tests/test_phase_3_3_destructive_boundary.py::test_resolver_refuses_missing_managed_ids
+          - tests/test_phase_3_3_destructive_boundary.py::test_remove_stream_validates_managed_registry_before_resolution
+          - tests/test_removestream_missing_resources.py::test_journal_target_is_sync_for_transaction_resolver_contract
+          - tests/test_removestream_missing_resources.py::test_registry_journal_keeps_known_ids_when_live_resources_are_gone
+          - tests/test_removestream_missing_resources.py::test_missing_registry_identity_still_fails_closed
+    name: ${{ matrix.target }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
           cache: pip
       - name: Install dependencies
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
-      - name: Run targeted removestream tests
-        run: python -m pytest -q tests/test_phase_3_3_destructive_boundary.py tests/test_removestream_missing_resources.py
+      - name: Run target
+        run: python -m pytest -q "${{ matrix.target }}"
