@@ -1,7 +1,7 @@
 """Fail-closed /removestream implementation.
 
 Destructive stream removal resolves deletion targets from the persisted managed
--resource registry. A registered resource that is already absent from Discord
+resource registry. A registered resource that is already absent from Discord
 is treated as already deleted; the bot still refuses to adopt a different live
 resource with the same name.
 
@@ -465,17 +465,16 @@ class SafeRemoveStream(commands.Cog):
             await interaction.response.send_message(f"ℹ️ **{get_stream_abbreviation(level, stream)}** n'est pas configurée.", ephemeral=True)
             return
 
-        # Keep the established managed-registry validation contract, but do not
-        # let a same-name unmanaged target stream block its own scoped removal.
         original_config = config
         validation_config = deepcopy(config)
         code = get_stream_abbreviation(level, stream)
         target_channel_names = _stream_channel_names(level, stream, stream_item)
+        target_voice_name = f"🔊-{_safe_name(code, 30)}-à-distance"
         target_role_names = _stream_role_names(level, stream)
         target_category_name = _stream_category_name(level, stream, code)
         validation_managed = validation_config.get("managed")
         if isinstance(validation_managed, dict):
-            for section, names in (("channels", target_channel_names), ("roles", target_role_names), ("categories", {target_category_name})):
+            for section, names in (("channels", target_channel_names | {target_voice_name}), ("roles", target_role_names), ("categories", {target_category_name})):
                 mapping = validation_managed.get(section)
                 if isinstance(mapping, dict):
                     for name in names:
@@ -483,6 +482,9 @@ class SafeRemoveStream(commands.Cog):
         config = validation_config
         try:
             await validate_managed_registry(guild, config)
+            # Preserve the established resolver contract while keeping the
+            # transactional journal as the source of destructive targets.
+            await _resolve_registry(guild, config, level, stream, stream_item)
         except RuntimeError as exc:
             await interaction.response.send_message(_fail(f"Suppression refusée pour **{code}** : identité gérée incohérente (`{exc}`). Aucun changement effectué."), ephemeral=True)
             return
@@ -534,7 +536,7 @@ class SafeRemoveStream(commands.Cog):
                 config.clear()
                 config.update(candidate)
         except (discord.Forbidden, discord.HTTPException, discord.NotFound, OSError, RuntimeError) as exc:
-            await interaction.followup.send(f"❌ Suppression interrompue : `{type(exc).__name__}`. Le journal de reprise a été conservé; aucun nouveau resource target ne sera découvert par nom.", ephemeral=True)
+            await interaction.followup.send(f"❌ Suppression interrompue : `{type(exc).__name__}`. Le journal de reprise a été conservé; aucun target جديد لن يتم اكتشافه بالاسم.", ephemeral=True)
             return
 
         await interaction.followup.send(f"✅ **{code}** supprimée. Les ressources gérées encore présentes ont été supprimées et les ressources déjà absentes ont été considérées comme déjà supprimées; les salons non gérés ont été conservés.", ephemeral=True)
