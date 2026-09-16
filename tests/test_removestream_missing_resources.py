@@ -1,3 +1,5 @@
+# Regression coverage for /removestream recovery and persisted identity handling.
+
 import inspect
 
 from config.curriculum import get_stream_subjects
