@@ -1,6 +1,6 @@
-from config.curriculum import get_stream_subjects, get_subject_display_name
+from config.curriculum import get_stream_subjects
 from cogs.removestream_fix import CATEGORY_VOICE, _registry_removal_journal
-from services.server_builder import _safe_name, _stream_category_name, _subject_channel_name
+from services.server_builder import _stream_category_name, _safe_name, _subject_channel_name
 from services.permissions import STREAM_ROLE_PREFIX, STUDENT_STREAM_ROLE_PREFIX
 
 
@@ -15,9 +15,10 @@ class EmptyGuild:
 def _config() -> tuple[dict, str, str, dict]:
     level = "1ère Année Bac"
     stream = "1ère Année Bac Lettres et Sciences Humaines"
+    code = "1BACSH"
     subjects = get_stream_subjects(level, stream)
-    stream_item = {"name": stream, "subjects": subjects, "abbreviation": "1BACSH"}
-    category_name = _stream_category_name(level, stream, "1BACSH")
+    stream_item = {"name": stream, "subjects": subjects, "abbreviation": code}
+    category_name = _stream_category_name(level, stream, code)
 
     managed_channels = {}
     next_id = 1000
@@ -25,11 +26,12 @@ def _config() -> tuple[dict, str, str, dict]:
         "📌-1BACSH・informations",
         "🗓️-1BACSH・emploi-du-temps",
         "📝-1BACSH・examens",
-        *[_subject_channel_name("1BACSH", subject) for subject in subjects],
+        *[_subject_channel_name(code, subject) for subject in subjects],
     ):
         managed_channels[name] = next_id
         next_id += 1
-    managed_channels["🔊-1BACSH-à-distance"] = next_id
+    voice_name = f"🔊-{_safe_name(code, 30)}-à-distance"
+    managed_channels[voice_name] = next_id
 
     config = {
         "levels": [{"name": level, "streams": [stream_item]}],
@@ -40,8 +42,8 @@ def _config() -> tuple[dict, str, str, dict]:
             },
             "channels": managed_channels,
             "roles": {
-                f"{STREAM_ROLE_PREFIX}1BACSH": 3000,
-                f"{STUDENT_STREAM_ROLE_PREFIX}1BACSH": 3001,
+                f"{STREAM_ROLE_PREFIX}{code}": 3000,
+                f"{STUDENT_STREAM_ROLE_PREFIX}{code}": 3001,
             },
         },
     }
