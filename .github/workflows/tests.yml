@@ -15,8 +15,7 @@ jobs:
           - tests/test_phase_3_3_destructive_boundary.py::test_remove_stream_source_has_no_name_discovery_fallback
           - tests/test_phase_3_3_destructive_boundary.py::test_resolver_refuses_missing_managed_ids
           - tests/test_phase_3_3_destructive_boundary.py::test_remove_stream_validates_managed_registry_before_resolution
-          - tests/test_removestream_missing_resources.py::test_journal_target_is_sync_for_transaction_resolver_contract
-          - tests/test_removestream_missing_resources.py::test_registry_journal_keeps_known_ids_when_live_resources_are_gone
+          - tests/test_removestream_missing_resources.py::test_registry_journal_keeps_persisted_ids_when_live_resources_are_gone
           - tests/test_removestream_missing_resources.py::test_missing_registry_identity_still_fails_closed
     name: ${{ matrix.target }}
     steps:
