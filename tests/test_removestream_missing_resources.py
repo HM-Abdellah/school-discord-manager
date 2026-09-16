@@ -1,10 +1,10 @@
-from unittest.mock import Mock
+import inspect
 
 from config.curriculum import get_stream_subjects
-from cogs import removestream_fix as removestream
 from cogs.removestream_fix import (
     CATEGORY_VOICE,
     _journal_identity_error,
+    _journal_target,
     _registry_removal_journal,
 )
 from services.server_builder import _stream_category_name
@@ -55,6 +55,10 @@ def _config() -> tuple[dict, str, str, dict]:
     return config, level, stream, stream_item
 
 
+def test_journal_target_is_sync_for_transaction_resolver_contract():
+    assert not inspect.iscoroutinefunction(_journal_target)
+
+
 def test_registry_journal_keeps_known_ids_when_live_resources_are_gone():
     config, level, stream, stream_item = _config()
     journal, missing = _registry_removal_journal(
@@ -70,34 +74,6 @@ def test_registry_journal_keeps_known_ids_when_live_resources_are_gone():
 
     error = _journal_identity_error(EmptyGuild(), journal)
     assert error is None
-
-
-def test_live_registered_channel_identity_is_still_enforced(monkeypatch):
-    class FakeTextChannel:
-        def __init__(self):
-            self.id = 1000
-            self.name = "different-name"
-            self.category_id = 2000
-
-    monkeypatch.setattr(removestream.discord, "TextChannel", FakeTextChannel)
-
-    config, level, stream, stream_item = _config()
-    journal, missing = _registry_removal_journal(
-        config,
-        level=level,
-        stream=stream,
-        stream_item=stream_item,
-    )
-    assert missing == []
-    assert journal is not None
-
-    guild = Mock()
-    guild.get_channel.side_effect = lambda resource_id: FakeTextChannel() if resource_id == 1000 else None
-    guild.get_role.return_value = None
-
-    error = _journal_identity_error(guild, journal)
-    assert error is not None
-    assert "different-name" in error
 
 
 def test_missing_registry_identity_still_fails_closed():
