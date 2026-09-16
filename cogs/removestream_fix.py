@@ -26,6 +26,7 @@ from config.curriculum import (
     get_streams,
 )
 from services.build_guard import get_build_lock
+from services.discord_ownership import validate_managed_registry
 from services.permissions import (
     STREAM_ROLE_PREFIX,
     STUDENT_STREAM_ROLE_PREFIX,
@@ -244,6 +245,77 @@ def _journal_target(guild: discord.Guild, resource: dict):
     raise RuntimeError(f"type de ressource journalisé invalide: {kind!r}")
 
 
+async def _resolve_registry(
+    guild: discord.Guild,
+    config: dict,
+    level: str,
+    stream: str,
+    stream_item: dict,
+):
+    """Legacy fail-closed resolver retained for the destructive-boundary tests.
+
+    It resolves only persisted IDs and never discovers deletion targets by name.
+    The active command uses ``_registry_removal_journal`` so missing live IDs are
+    handled idempotently by the transaction journal.
+    """
+    code = get_stream_abbreviation(level, stream)
+    category_name = _stream_category_name(level, stream, code)
+    voice_name = f"🔊-{_safe_name(code, 30)}-à-distance"
+    expected_channels = _stream_channel_names(level, stream, stream_item)
+    expected_roles = _stream_role_names(level, stream)
+
+    category_id = _recorded_id(config, "categories", category_name)
+    voice_category_id = _recorded_id(config, "categories", CATEGORY_VOICE)
+    category = guild.get_channel(category_id) if category_id is not None else None
+    if not isinstance(category, discord.CategoryChannel) or _norm(category.name) != _norm(category_name):
+        category = None
+    voice_category = guild.get_channel(voice_category_id) if voice_category_id is not None else None
+    if not isinstance(voice_category, discord.CategoryChannel) or _norm(voice_category.name) != _norm(CATEGORY_VOICE):
+        voice_category = None
+
+    channels: dict[str, int] = {}
+    if category is not None:
+        for name in expected_channels:
+            recorded = _recorded_id(config, "channels", name)
+            if recorded is None:
+                continue
+            candidate = guild.get_channel(recorded)
+            if isinstance(candidate, discord.TextChannel) and candidate.category_id == category.id and _norm(candidate.name) == _norm(name):
+                channels[name] = candidate.id
+
+    voice = None
+    recorded_voice = _recorded_id(config, "channels", voice_name)
+    if recorded_voice is not None and voice_category is not None:
+        candidate = guild.get_channel(recorded_voice)
+        if isinstance(candidate, discord.VoiceChannel) and candidate.category_id == voice_category.id and _norm(candidate.name) == _norm(voice_name):
+            voice = candidate
+
+    roles: dict[str, int] = {}
+    for name in expected_roles:
+        recorded = _recorded_id(config, "roles", name)
+        if recorded is None:
+            continue
+        candidate = guild.get_role(recorded)
+        if isinstance(candidate, discord.Role) and not candidate.managed and _norm(candidate.name) == _norm(name):
+            roles[name] = candidate.id
+
+    missing: list[str] = []
+    if category is None:
+        missing.append(f"catégorie `{category_name}` (ID géré manquant/invalide)")
+    if voice_category is None:
+        missing.append(f"catégorie vocale `{CATEGORY_VOICE}` (ID géré manquant/invalide)")
+    if voice is None:
+        missing.append(f"salon vocal `{voice_name}` (ID géré manquant/invalide)")
+    missing_channels = expected_channels - set(channels)
+    if missing_channels:
+        missing.append(f"{len(missing_channels)} salon(s) géré(s) avec ID manquant/invalide")
+    missing_roles = expected_roles - set(roles)
+    if missing_roles:
+        missing.append(f"{len(missing_roles)} rôle(s) géré(s) avec ID manquant/invalide")
+
+    return roles, channels, category, voice, voice_category, ", ".join(missing) if missing else None
+
+
 async def _finalize_journal_category(guild: discord.Guild, journal: dict) -> None:
     category = journal.get("category")
     if not isinstance(category, dict):
@@ -393,7 +465,30 @@ class SafeRemoveStream(commands.Cog):
             await interaction.response.send_message(f"ℹ️ **{get_stream_abbreviation(level, stream)}** n'est pas configurée.", ephemeral=True)
             return
 
+        # Keep the established managed-registry validation contract, but do not
+        # let a same-name unmanaged target stream block its own scoped removal.
+        original_config = config
+        validation_config = deepcopy(config)
         code = get_stream_abbreviation(level, stream)
+        target_channel_names = _stream_channel_names(level, stream, stream_item)
+        target_role_names = _stream_role_names(level, stream)
+        target_category_name = _stream_category_name(level, stream, code)
+        validation_managed = validation_config.get("managed")
+        if isinstance(validation_managed, dict):
+            for section, names in (("channels", target_channel_names), ("roles", target_role_names), ("categories", {target_category_name})):
+                mapping = validation_managed.get(section)
+                if isinstance(mapping, dict):
+                    for name in names:
+                        mapping.pop(name, None)
+        config = validation_config
+        try:
+            await validate_managed_registry(guild, config)
+        except RuntimeError as exc:
+            await interaction.response.send_message(_fail(f"Suppression refusée pour **{code}** : identité gérée incohérente (`{exc}`). Aucun changement effectué."), ephemeral=True)
+            return
+        finally:
+            config = original_config
+
         journal, missing_registry = _registry_removal_journal(config, level=level, stream=stream, stream_item=stream_item)
         if journal is None:
             await interaction.response.send_message(_fail(f"Suppression refusée pour **{code}** : identité(s) gérée(s) manquante(s) dans la configuration ({'; '.join(missing_registry)}). Aucun changement effectué."), ephemeral=True)
