@@ -1,5 +1,5 @@
 from config.curriculum import get_stream_subjects
-from services.removestream_fix import (
+from cogs.removestream_fix import (
     CATEGORY_VOICE,
     _journal_identity_error,
     _registry_removal_journal,
