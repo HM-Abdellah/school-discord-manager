@@ -1,6 +1,6 @@
-from config.curriculum import get_stream_subjects
+from config.curriculum import get_stream_subjects, get_subject_display_name
 from cogs.removestream_fix import CATEGORY_VOICE, _registry_removal_journal
-from services.server_builder import _stream_category_name
+from services.server_builder import _safe_name, _stream_category_name, _subject_channel_name
 from services.permissions import STREAM_ROLE_PREFIX, STUDENT_STREAM_ROLE_PREFIX
 
 
@@ -25,7 +25,7 @@ def _config() -> tuple[dict, str, str, dict]:
         "📌-1BACSH・informations",
         "🗓️-1BACSH・emploi-du-temps",
         "📝-1BACSH・examens",
-        *[f"📚-1BACSH・{subject}" for subject in subjects],
+        *[_subject_channel_name("1BACSH", subject) for subject in subjects],
     ):
         managed_channels[name] = next_id
         next_id += 1
@@ -61,7 +61,7 @@ def test_registry_journal_keeps_persisted_ids_when_live_resources_are_gone():
     assert journal is not None
     assert journal["level"] == level
     assert journal["stream"] == stream
-    assert journal["resources"]
+    assert len(journal["resources"]) == 14
 
 
 def test_missing_registry_identity_still_fails_closed():
