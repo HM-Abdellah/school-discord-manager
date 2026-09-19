@@ -12,7 +12,7 @@ from discord.ext import commands
 from config.curriculum import get_level, get_levels, get_stream_abbreviation, get_stream_subjects, get_streams
 from services.build_guard import get_build_lock
 from services.build_transaction import build_and_persist
-from services.permissions import _preflight_message, management_check
+from services.permissions import _preflight_message, management_authorized, management_check
 from services.storage import get_active_academic_year
 
 
@@ -155,6 +155,13 @@ class SummaryView(SetupBaseView):
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
+
+        if not management_authorized(interaction):
+            await interaction.response.send_message(
+                "❌ Tes droits d'administration ont changé. Relance /setup avec le rôle Administration configuré ou en tant que propriétaire.",
+                ephemeral=True,
+            )
             return
 
         message = _preflight_message(interaction, needs_channels=True, needs_roles=True)
