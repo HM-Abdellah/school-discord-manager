@@ -19,7 +19,7 @@ def test_permission_overwrites_are_captured_as_deterministic_bitmasks(monkeypatc
 
     assert len(captured) == 1
     assert captured[0].target_id == 42
-    assert captured[0].target_type == "member"
+    assert captured[0].target_type == "role"
     assert captured[0].allow > 0
     assert captured[0].deny > 0
 
