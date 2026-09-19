@@ -1,0 +1,35 @@
+# Git and GitHub
+.git
+.github
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python local state
+__pycache__
+*.py[cod]
+*.pyo
+.pytest_cache
+.coverage
+htmlcov
+.venv
+venv
+env
+
+# Tests and live E2E harness are not part of the runtime image
+tests
+e2e
+
+# Local runtime data is provided through the Docker volume
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/*.json
+
+# Local/IDE files
+.vscode
+.idea
+.DS_Store
+Thumbs.db

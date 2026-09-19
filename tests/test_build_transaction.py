@@ -33,6 +33,7 @@ async def test_build_and_persist_commits_working_config_only_after_build_success
 
     monkeypatch.setattr(build_transaction, "TransactionalServerBuilder", _FakeBuilder)
     monkeypatch.setattr(build_transaction, "validate_managed_registry", _no_conflict)
+    monkeypatch.setattr(build_transaction, "get_guild_config", lambda _guild_id: None)
 
     def fake_save(guild_id, config):
         saved["guild_id"] = guild_id
@@ -55,6 +56,7 @@ async def test_build_failure_rolls_back_and_does_not_mutate_caller_config(monkey
 
     monkeypatch.setattr(build_transaction, "TransactionalServerBuilder", _FailingBuilder)
     monkeypatch.setattr(build_transaction, "validate_managed_registry", _no_conflict)
+    monkeypatch.setattr(build_transaction, "get_guild_config", lambda _guild_id: None)
     monkeypatch.setattr(build_transaction, "save_guild_config", saved)
 
     with pytest.raises(RuntimeError, match="discord mutation failed"):
@@ -71,6 +73,7 @@ async def test_persistence_failure_rolls_back_discord_and_does_not_commit_config
 
     monkeypatch.setattr(build_transaction, "TransactionalServerBuilder", lambda guild: builder)
     monkeypatch.setattr(build_transaction, "validate_managed_registry", _no_conflict)
+    monkeypatch.setattr(build_transaction, "get_guild_config", lambda _guild_id: None)
 
     def fail_save(guild_id, config):
         raise OSError("disk full")
@@ -112,3 +115,52 @@ async def test_rollback_deletes_channels_before_categories_before_roles():
         "role-2",
         "role-1",
     ]
+
+
+@pytest.mark.asyncio
+async def test_build_rejects_removing_already_managed_streams(monkeypatch):
+    current = {
+        "academic_year": "2026/2027",
+        "levels": [
+            {
+                "name": "Tronc Commun",
+                "streams": [
+                    {"name": "Tronc Commun Scientifique", "abbreviation": "TCS"},
+                    {"name": "Tronc Commun Lettres", "abbreviation": "TCL"},
+                ],
+            }
+        ],
+    }
+    candidate = {
+        "academic_year": "2026/2027",
+        "levels": [
+            {
+                "name": "Tronc Commun",
+                "streams": [
+                    {"name": "Tronc Commun Scientifique", "abbreviation": "TCS"},
+                ],
+            }
+        ],
+    }
+
+    monkeypatch.setattr(build_transaction, "get_guild_config", lambda _guild_id: current)
+
+    with pytest.raises(ValueError, match="ne peut pas supprimer une filière"):
+        await build_transaction.build_and_persist(SimpleNamespace(id=123), candidate)
+
+
+@pytest.mark.asyncio
+async def test_build_rejects_while_stream_removal_is_pending(monkeypatch):
+    current = {
+        "academic_year": "2026/2027",
+        "pending_removal": {
+            "level": "Tronc Commun",
+            "stream": "Tronc Commun Scientifique",
+        },
+    }
+    candidate = {"academic_year": "2026/2027", "levels": []}
+
+    monkeypatch.setattr(build_transaction, "get_guild_config", lambda _guild_id: current)
+
+    with pytest.raises(ValueError, match="suppression de filière est interrompue"):
+        await build_transaction.build_and_persist(SimpleNamespace(id=123), candidate)

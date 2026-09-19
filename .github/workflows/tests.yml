@@ -13,10 +13,10 @@ jobs:
         python-version: ["3.12", "3.13"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -26,3 +26,11 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -q
+
+      - name: Build Docker image
+        run: docker build --tag school-discord-manager:test .
+
+      - name: Smoke-test Docker runtime
+        run: |
+          test "$(docker inspect school-discord-manager:test --format '{{.Config.User}}')" = "app"
+          docker run --rm --entrypoint python school-discord-manager:test -c "import discord, dotenv; print(discord.__version__)"

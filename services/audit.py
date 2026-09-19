@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import sqlite3
 
 from services.storage import _connect, initialize_database
 
@@ -42,30 +43,37 @@ def record_event(
     ``target`` and ``details`` accept both positional and keyword arguments for
     backward compatibility with existing command cogs.
     """
-    initialize_audit_log()
-    with _connect() as conn:
-        conn.execute(
-            "INSERT INTO audit_events(guild_id,actor_id,actor_name,action,target,details,created_at) VALUES(?,?,?,?,?,?,?)",
-            (guild_id, actor_id, actor_name, action, target, details, datetime.now(timezone.utc).isoformat()),
-        )
-        conn.execute(
-            """
-            DELETE FROM audit_events
-            WHERE guild_id=?
-              AND id NOT IN (
-                  SELECT id FROM audit_events WHERE guild_id=? ORDER BY id DESC LIMIT ?
-              )
-            """,
-            (guild_id, guild_id, MAX_EVENTS_PER_GUILD),
-        )
+    try:
+        initialize_audit_log()
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO audit_events(guild_id,actor_id,actor_name,action,target,details,created_at) VALUES(?,?,?,?,?,?,?)",
+                (guild_id, actor_id, actor_name, action, target, details, datetime.now(timezone.utc).isoformat()),
+            )
+            conn.execute(
+                """
+                DELETE FROM audit_events
+                WHERE guild_id=?
+                  AND id NOT IN (
+                      SELECT id FROM audit_events WHERE guild_id=? ORDER BY id DESC LIMIT ?
+                  )
+                """,
+                (guild_id, guild_id, MAX_EVENTS_PER_GUILD),
+            )
+    except (OSError, sqlite3.Error) as exc:
+        print(f"[AUDIT] Event recording failed; primary command state remains authoritative: {exc}", flush=True)
 
 
 def recent_events(guild_id: int, limit: int = 10) -> list[dict[str, str]]:
-    initialize_audit_log()
-    limit = max(1, min(limit, 25))
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT actor_name, action, target, details, created_at FROM audit_events WHERE guild_id=? ORDER BY id DESC LIMIT ?",
-            (guild_id, limit),
-        ).fetchall()
-    return [dict(row) for row in rows]
+    try:
+        initialize_audit_log()
+        limit = max(1, min(limit, 25))
+        with _connect() as conn:
+            rows = conn.execute(
+                "SELECT actor_name, action, target, details, created_at FROM audit_events WHERE guild_id=? ORDER BY id DESC LIMIT ?",
+                (guild_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+    except (OSError, sqlite3.Error) as exc:
+        print(f"[AUDIT] Event read failed; returning empty history: {exc}", flush=True)
+        return []

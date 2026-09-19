@@ -61,6 +61,21 @@ def _duplicate_by_name(items, expected_name: str):
     return [item for item in items if _name_key(getattr(item, "name", "")) == key]
 
 
+def _channel_type_error(section: str, resource, expected_name: str) -> str | None:
+    """Validate live Discord channel type when inspecting a real Discord object."""
+    if resource is None or not hasattr(resource, "type"):
+        return None
+    if section == "categories" and not isinstance(resource, discord.CategoryChannel):
+        return "Managed category %r points to a non-category Discord resource." % expected_name
+    if section == "channels":
+        expected_voice = expected_name.startswith("🔊-")
+        if expected_voice and not isinstance(resource, discord.VoiceChannel):
+            return "Managed channel %r points to a non-voice Discord resource." % expected_name
+        if not expected_voice and not isinstance(resource, discord.TextChannel):
+            return "Managed channel %r points to a non-text Discord resource." % expected_name
+    return None
+
+
 async def _fetch_channels(guild: discord.Guild):
     fetch_channels = getattr(guild, "fetch_channels", None)
     if fetch_channels is None:
@@ -83,6 +98,11 @@ async def validate_managed_registry(guild: discord.Guild, config: dict) -> None:
     for expected_name, registered_id in role_mappings.items():
         by_id = next((role for role in roles if role.id == registered_id), None)
         same_name = _duplicate_by_name(roles, expected_name)
+        if by_id is not None and getattr(by_id, "managed", False):
+            raise ManagedResourceConflict(
+                f"Managed role `{expected_name}` points to Discord-managed role ID {registered_id}; "
+                "that role cannot be owned safely by School Manager."
+            )
         if by_id is not None and _name_key(by_id.name) != _name_key(expected_name):
             raise ManagedResourceConflict(
                 f"Managed role `{expected_name}` points to role ID {registered_id}, "
@@ -101,6 +121,9 @@ async def validate_managed_registry(guild: discord.Guild, config: dict) -> None:
         for expected_name, registered_id in _mapping(config, section).items():
             same_name = _duplicate_by_name(channels, expected_name)
             by_id = next((channel for channel in channels if channel.id == registered_id), None)
+            type_error = _channel_type_error(section, by_id, expected_name)
+            if type_error:
+                raise ManagedResourceConflict(type_error)
             if by_id is not None and _name_key(by_id.name) != _name_key(expected_name):
                 raise ManagedResourceConflict(
                     f"Managed {section[:-1]} `{expected_name}` points to channel ID {registered_id}, "
@@ -185,11 +208,12 @@ async def validate_unmanaged_canonical_collisions(
     managed_channel_ids = set(_mapping(config, "channels").values())
 
     for role in getattr(guild, "roles", []):
-        if role.managed or role.id in managed_role_ids:
+        if role.id in managed_role_ids:
             continue
         if _name_key(role.name) in canonical_role_keys:
+            ownership = "Discord-managed" if getattr(role, "managed", False) else "unmanaged"
             raise ManagedResourceConflict(
-                f"Canonical role `{role.name}` exists as unmanaged ID {role.id}; refusing silent adoption."
+                f"Canonical role `{role.name}` exists as {ownership} ID {role.id}; refusing silent adoption."
             )
 
     channels = await _fetch_channels(guild)

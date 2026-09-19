@@ -299,6 +299,135 @@ def _write_json_temp(data: dict[str, Any]) -> str:
     return temp_name
 
 
+def snapshot_student_state(guild_id: int, discord_id: int) -> dict[str, Any]:
+    """Capture one student's logical state for cross-system rollback."""
+    initialize_database()
+    with _connect() as conn:
+        student = conn.execute(
+            "SELECT * FROM students WHERE guild_id=? AND discord_id=? LIMIT 1",
+            (guild_id, discord_id),
+        ).fetchone()
+        if student is None:
+            return {"student": None, "enrollments": []}
+        enrollments = conn.execute(
+            "SELECT * FROM enrollments WHERE student_id=? ORDER BY id",
+            (int(student["id"]),),
+        ).fetchall()
+        return {
+            "student": dict(student),
+            "enrollments": [dict(row) for row in enrollments],
+        }
+
+
+def restore_student_state(
+    guild_id: int,
+    discord_id: int,
+    snapshot: dict[str, Any],
+) -> None:
+    """Restore a previously captured student's logical state atomically."""
+    initialize_database()
+    original_student = snapshot.get("student") if isinstance(snapshot, dict) else None
+    original_enrollments = snapshot.get("enrollments", []) if isinstance(snapshot, dict) else []
+    with _connect() as conn:
+        try:
+            current = conn.execute(
+                "SELECT * FROM students WHERE guild_id=? AND discord_id=? LIMIT 1",
+                (guild_id, discord_id),
+            ).fetchone()
+
+            if original_student is None:
+                if current is not None:
+                    conn.execute("DELETE FROM students WHERE id=? AND guild_id=?", (int(current["id"]), guild_id))
+            else:
+                original_id = int(original_student["id"])
+                if current is not None and int(current["id"]) != original_id:
+                    conn.execute("DELETE FROM students WHERE id=? AND guild_id=?", (int(current["id"]), guild_id))
+                    current = None
+                if current is None:
+                    conn.execute(
+                        """
+                        INSERT INTO students(id,guild_id,discord_id,display_name,status,created_at)
+                        VALUES(?,?,?,?,?,?)
+                        """,
+                        (
+                            original_id,
+                            guild_id,
+                            original_student.get("discord_id"),
+                            original_student["display_name"],
+                            original_student["status"],
+                            original_student["created_at"],
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE students
+                        SET discord_id=?, display_name=?, status=?, created_at=?
+                        WHERE id=? AND guild_id=?
+                        """,
+                        (
+                            original_student.get("discord_id"),
+                            original_student["display_name"],
+                            original_student["status"],
+                            original_student["created_at"],
+                            original_id,
+                            guild_id,
+                        ),
+                    )
+
+                existing_rows = conn.execute(
+                    "SELECT id FROM enrollments WHERE student_id=? ORDER BY id",
+                    (original_id,),
+                ).fetchall()
+                original_ids = {
+                    int(row["id"])
+                    for row in original_enrollments
+                    if isinstance(row, dict) and isinstance(row.get("id"), int)
+                }
+                for row in existing_rows:
+                    if int(row["id"]) not in original_ids:
+                        conn.execute("DELETE FROM enrollments WHERE id=?", (int(row["id"]),))
+
+                for enrollment in original_enrollments:
+                    if not isinstance(enrollment, dict):
+                        raise ValueError("Invalid enrollment snapshot")
+                    enrollment_id = int(enrollment["id"])
+                    exists = conn.execute(
+                        "SELECT 1 FROM enrollments WHERE id=?",
+                        (enrollment_id,),
+                    ).fetchone()
+                    values = (
+                        enrollment["student_id"],
+                        enrollment["stream_id"],
+                        enrollment["start_date"],
+                        enrollment["end_date"],
+                        enrollment["status"],
+                    )
+                    if exists is None:
+                        conn.execute(
+                            """
+                            INSERT INTO enrollments(
+                                id,student_id,stream_id,start_date,end_date,status
+                            ) VALUES(?,?,?,?,?,?)
+                            """,
+                            (enrollment_id, *values),
+                        )
+                    else:
+                        conn.execute(
+                            """
+                            UPDATE enrollments
+                            SET student_id=?, stream_id=?, start_date=?, end_date=?, status=?
+                            WHERE id=?
+                            """,
+                            (*values, enrollment_id),
+                        )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    _refresh_json_cache()
+
+
 def reset_guild_data(guild_id: int) -> None:
     """Reset logical state in one SQLite transaction, then refresh the cache."""
     initialize_database()

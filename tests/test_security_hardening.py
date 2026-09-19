@@ -118,9 +118,52 @@ def test_teacher_assignment_blocks_student_admin_and_bot(monkeypatch):
             "Élève": student,
         }.get(name),
     )
-    guild = SimpleNamespace(roles=[admin, prof, student])
+    guild = SimpleNamespace(id=123, roles=[admin, prof, student])
+    monkeypatch.setattr("services.role_conflicts.get_guild_config", lambda _guild_id: {"levels": []})
 
     assert teacher_target_conflict(SimpleNamespace(bot=True, roles=[]), guild) is not None
     assert teacher_target_conflict(SimpleNamespace(bot=False, roles=[student]), guild) is not None
     assert teacher_target_conflict(SimpleNamespace(bot=False, roles=[admin]), guild) is not None
     assert teacher_target_conflict(SimpleNamespace(bot=False, roles=[prof]), guild) is None
+
+
+def test_teacher_commands_enforce_shared_teacher_target_conflict_gate():
+    source = open("cogs/teachers.py", encoding="utf-8").read()
+    full_source = open("cogs/command_fixes.py", encoding="utf-8").read()
+    assert "teacher_target_conflict(teacher, guild)" in source
+    assert "teacher_target_conflict(member, guild)" in source
+    assert "teacher_target_conflict(teacher, guild)" in full_source
+
+
+def test_student_assignment_enforces_shared_student_staff_conflict_gate():
+    source = open("cogs/students.py", encoding="utf-8").read()
+    assert "student_staff_conflict(student, guild)" in source
+
+
+class FakeComparableRole:
+    def __init__(self, name: str, role_id: int, position: int, managed: bool = False):
+        self.name = name
+        self.id = role_id
+        self.position = position
+        self.managed = managed
+
+    def is_default(self):
+        return self.position == 0
+
+    def __ge__(self, other):
+        return self.position >= other.position
+
+
+def test_reset_role_hierarchy_fails_before_mutation():
+    from cogs.security_hardening_v3 import _validate_reset_role_hierarchy
+
+    bot_role = FakeComparableRole("Bot", 99, 10)
+    protected = FakeComparableRole("Filière - TCS", 55, 12)
+    guild = SimpleNamespace(
+        me=SimpleNamespace(top_role=bot_role),
+        get_role=lambda role_id: {55: protected, 99: bot_role}.get(role_id),
+    )
+
+    message = _validate_reset_role_hierarchy(guild, {55})
+    assert message is not None
+    assert "hiérarchie" in message

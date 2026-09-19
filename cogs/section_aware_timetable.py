@@ -97,6 +97,7 @@ class SectionAwareTimetableCommands(commands.Cog):
             )
             return
 
+        message = None
         try:
             message = await channel.send(
                 content=f"📅 **Emploi du temps — {code} — Section {section}**",
@@ -107,6 +108,11 @@ class SectionAwareTimetableCommands(commands.Cog):
             ] = message.id
             save_guild_config(guild.id, config)
         except (discord.Forbidden, discord.HTTPException, OSError) as exc:
+            if message is not None:
+                try:
+                    await message.delete(reason="School Manager timetable persistence rollback")
+                except discord.HTTPException:
+                    pass
             await interaction.followup.send(
                 f"❌ Publication impossible : `{type(exc).__name__}`",
                 ephemeral=True,

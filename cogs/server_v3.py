@@ -320,7 +320,7 @@ class ServerCommands(commands.Cog):
         name="build",
         description="Synchroniser la structure sans recréer les ressources existantes.",
     )
-    @management_check()
+    @management_check(lock=False)
     async def build(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
         if guild is None:
@@ -390,7 +390,7 @@ class ServerCommands(commands.Cog):
     )
     @app_commands.describe(level="Niveau", stream="Filière à ajouter")
     @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete)
-    @management_check()
+    @management_check(lock=False)
     async def add_stream(
         self,
         interaction: discord.Interaction,
