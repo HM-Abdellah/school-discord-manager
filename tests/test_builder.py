@@ -183,14 +183,13 @@ def test_validate_capacity_rejects_existing_category_that_would_exceed_limit():
     guild = SimpleNamespace(channels=[], categories=[])
     builder = ServerBuilder(guild)
 
-    existing = [SimpleNamespace(name=f"unmanaged-{i}") for i in range(49)]
-    category = SimpleNamespace(
-        name="📘・TC・🔬 TCS",
-        id=123,
-        channels=existing,
-        text_channels=existing,
-        voice_channels=[],
-    )
+    existing = [SimpleNamespace(name=f"unmanaged-{i}") for i in range(46)]
+    category = MagicMock(spec=discord.CategoryChannel)
+    category.name = "📘・TC・🔬 TCS"
+    category.id = 123
+    category.channels = existing
+    category.text_channels = existing
+    category.voice_channels = []
     builder._channel_snapshot = [category, *existing]
 
     selected = {
@@ -208,5 +207,5 @@ def test_validate_capacity_rejects_existing_category_that_would_exceed_limit():
         ]
     }
 
-    with pytest.raises(ValueError, match="dépassement.*51|dépasserait.*51"):
+    with pytest.raises(ValueError, match="dépasserait.*51"):
         builder._validate_capacity(selected)
