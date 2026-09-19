@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import unicodedata
 
 import discord
@@ -209,7 +210,7 @@ class CommandFixes(commands.Cog):
             await interaction.followup.send("❌ Les rôles scolaires requis pour cette filière n'existent pas. Vérifie `/build`.", ephemeral=True)
             return
         config = get_guild_config(guild.id) or {}
-        working_config = __import__("copy").deepcopy(config)
+        working_config = deepcopy(config)
         tracked_roles = [role for role in (desired_role, other_role, stream_role) if role is not None]
         original_presence = snapshot_role_presence(teacher, tracked_roles)
         created_subject_roles: list[discord.Role] = []
