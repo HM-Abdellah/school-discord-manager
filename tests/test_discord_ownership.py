@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from services.discord_ownership import ManagedResourceConflict, validate_managed_registry
+from services.discord_ownership import ManagedResourceConflict, validate_managed_registry, validate_unmanaged_canonical_collisions
 
 
 @pytest.mark.asyncio
