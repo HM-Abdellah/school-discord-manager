@@ -25,7 +25,7 @@ class ChannelState:
     type: str
     category_id: int | None
     position: int
-    permission_overwrites: tuple[PermissionOverwriteState, ...]
+    permission_overwrites: tuple[PermissionOverwriteState, ...] = ()
 
 
 @dataclass(frozen=True)
