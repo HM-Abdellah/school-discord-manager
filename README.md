@@ -221,7 +221,7 @@ The E2E harness intentionally separates command execution from observation:
 
 1. A normal Discord test user performs the slash command in a dedicated test guild.
 2. The observer bot captures the real Discord state before and after the action.
-3. The snapshots are diffed by Discord ID.
+3. The snapshots are diffed by Discord ID, including channel permission-overwrite allow/deny masks.
 
 Capture before:
 
