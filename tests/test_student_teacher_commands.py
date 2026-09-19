@@ -301,6 +301,7 @@ async def test_legacy_subject_role_migration_touches_only_managed_channels(monke
         return new_role
 
     monkeypatch.setattr("cogs.command_fixes._get_or_create_global_subject_role", fake_get_or_create)
+    monkeypatch.setattr("cogs.command_fixes.get_guild_config", lambda _guild_id: config)
 
     await _migrate_legacy_subject_roles(guild, member, config)
 
