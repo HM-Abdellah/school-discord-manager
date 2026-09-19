@@ -8,6 +8,7 @@ from discord.ext import commands
 
 from config.curriculum import get_levels, get_stream_abbreviation, get_streams
 from services.audit import record_event
+from services.role_conflicts import student_staff_conflict
 from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT, STUDENT_STREAM_ROLE_PREFIX, STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX, get_managed_role, management_check, student_view_overwrite
 from services.storage import (
     enroll_student_record,
@@ -138,6 +139,10 @@ class StudentCommands(commands.Cog):
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
+        conflict = student_staff_conflict(student, guild)
+        if conflict:
+            await interaction.response.send_message(conflict, ephemeral=True)
             return
         if level not in get_levels() or stream not in get_streams(level):
             await interaction.response.send_message("❌ Niveau ou filière invalide.", ephemeral=True)
