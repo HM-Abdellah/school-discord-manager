@@ -122,9 +122,14 @@ def _configured_streams(guild: discord.Guild) -> list[tuple[str, str, str]]:
 
 async def _get_or_create_global_subject_role(guild: discord.Guild, config: dict, subject: str) -> discord.Role:
     role_name = _global_subject_role_name(subject)
-    role = get_managed_role(guild, role_name)
-    if role is not None:
-        config.setdefault("managed", {}).setdefault("roles", {})[role_name] = role.id
+    managed = config.setdefault("managed", {}).setdefault("roles", {})
+    recorded_id = managed.get(role_name)
+    if isinstance(recorded_id, int) and recorded_id > 0:
+        role = guild.get_role(recorded_id)
+        if role is None:
+            raise RuntimeError(f"Managed role ID {recorded_id} for `{role_name}` is missing from Discord.")
+        if role.managed or role.name != role_name:
+            raise RuntimeError(f"Managed role ID {recorded_id} does not identify `{role_name}`.")
         return role
 
     collision = discord.utils.get(guild.roles, name=role_name)
@@ -138,9 +143,8 @@ async def _get_or_create_global_subject_role(guild: discord.Guild, config: dict,
         mentionable=False,
         reason="School Manager global subject role",
     )
-    config.setdefault("managed", {}).setdefault("roles", {})[role_name] = role.id
+    managed[role_name] = role.id
     return role
-
 
 async def _migrate_legacy_subject_roles(guild: discord.Guild, member: discord.Member, config: dict) -> list[str]:
     legacy_map: dict[str, str] = {}
@@ -218,9 +222,11 @@ class CommandFixes(commands.Cog):
         try:
             migrated = await _migrate_legacy_subject_roles(guild, teacher, working_config)
             for subject in selected:
-                before = get_managed_role(guild, _global_subject_role_name(subject))
+                role_name = _global_subject_role_name(subject)
+                managed_roles = working_config.get("managed", {}).get("roles", {}) if isinstance(working_config.get("managed"), dict) else {}
+                before_id = managed_roles.get(role_name) if isinstance(managed_roles, dict) else None
                 role = await _get_or_create_global_subject_role(guild, working_config, subject)
-                if before is None:
+                if not isinstance(before_id, int) or before_id <= 0:
                     created_subject_roles.append(role)
                 subject_roles.append(role)
             tracked_roles.extend(subject_roles)
