@@ -72,3 +72,28 @@ async def test_duplicate_live_same_name_is_rejected_for_registered_channel():
 
     with pytest.raises(ManagedResourceConflict, match="same name exists"):
         await validate_managed_registry(guild, config)
+
+
+@pytest.mark.asyncio
+async def test_discord_managed_canonical_role_is_rejected():
+    config = {
+        "managed": {},
+        "levels": [
+            {
+                "name": "Tronc Commun",
+                "streams": [
+                    {"name": "Tronc Commun Scientifique", "abbreviation": "TCS"}
+                ],
+            }
+        ],
+    }
+    guild = SimpleNamespace(
+        roles=[SimpleNamespace(id=700, name="Filière - TCS", managed=True)],
+        channels=[],
+        fetch_channels=AsyncMock(return_value=[]),
+    )
+
+    with pytest.raises(ManagedResourceConflict, match="Discord-managed"):
+        await validate_managed_registry(guild, config)
+    with pytest.raises(ManagedResourceConflict, match="Discord-managed"):
+        await validate_unmanaged_canonical_collisions(guild, config)
