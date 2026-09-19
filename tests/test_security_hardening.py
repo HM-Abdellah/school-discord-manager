@@ -124,3 +124,16 @@ def test_teacher_assignment_blocks_student_admin_and_bot(monkeypatch):
     assert teacher_target_conflict(SimpleNamespace(bot=False, roles=[student]), guild) is not None
     assert teacher_target_conflict(SimpleNamespace(bot=False, roles=[admin]), guild) is not None
     assert teacher_target_conflict(SimpleNamespace(bot=False, roles=[prof]), guild) is None
+
+
+def test_teacher_commands_enforce_shared_teacher_target_conflict_gate():
+    source = open("cogs/teachers.py", encoding="utf-8").read()
+    full_source = open("cogs/command_fixes.py", encoding="utf-8").read()
+    assert "teacher_target_conflict(teacher, guild)" in source
+    assert "teacher_target_conflict(member, guild)" in source
+    assert "teacher_target_conflict(teacher, guild)" in full_source
+
+
+def test_student_assignment_enforces_shared_student_staff_conflict_gate():
+    source = open("cogs/students.py", encoding="utf-8").read()
+    assert "student_staff_conflict(student, guild)" in source
