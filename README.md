@@ -142,6 +142,12 @@ The live E2E gate is intentionally separate from CI. Discord slash-command execu
 
 ## 🔐 Configuration and secrets
 
+### Discord Developer Portal prerequisites
+
+The bot enables Discord's **Guild Members privileged intent** because the application uses live guild member state for role-based administration and member discovery. Before starting the bot, open **Developer Portal → Bot → Privileged Gateway Intents** and enable **Server Members Intent**. Discord currently requires privileged intents to be enabled in the application's settings; verified apps may have additional access requirements. citeturn111598search7turn111598search0
+
+The bot does **not** enable Message Content Intent in code.
+
 Never commit a real Discord bot token. Start from `.env.example`:
 
 ```env
