@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import re
 from datetime import date
 
@@ -179,7 +180,7 @@ class TeacherCommands(commands.Cog):
             return
         await interaction.response.defer(ephemeral=True)
         config = get_guild_config(guild.id) or {}
-        working_config = __import__("copy").deepcopy(config)
+        working_config = deepcopy(config)
         subject_role = get_managed_role(guild, subject_role_name)
         created_subject_role = False
         try:
@@ -264,7 +265,7 @@ class TeacherCommands(commands.Cog):
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
-        channel, _registry_repaired = await _find_managed_channel(
+        channel = await _find_managed_channel(
             guild, GENERAL_CHANNELS["absences"], category_name="🏢・INFORMATIONS & ADMINISTRATION"
         )
         if channel is None:            await interaction.response.send_message("❌ Le salon d'absences n'existe pas. Lance `/build` après `/setup`.", ephemeral=True)
