@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, _hierarchy_error, get_managed_role, management_check
+from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, _hierarchy_error, get_managed_role, management_check, owner_only_check
 
 
 class FakeRole:
@@ -122,3 +122,83 @@ def test_management_check_wraps_lock_by_default():
         return True
 
     assert hasattr(dummy, "__wrapped__")
+
+
+@pytest.mark.asyncio
+async def test_mutations_are_blocked_while_removal_recovery_is_pending(monkeypatch):
+    everyone = role("@everyone", 0, 1)
+    admin = role(ROLE_ADMIN, 5, 42)
+    bot_role = role("Bot", 10, 99)
+    guild = SimpleNamespace(
+        owner_id=999,
+        id=123,
+        roles=[everyone, admin, bot_role],
+        default_role=everyone,
+        me=SimpleNamespace(top_role=bot_role),
+        get_role=lambda rid: admin if rid == 42 else None,
+        guild_permissions=SimpleNamespace(manage_channels=True, manage_roles=True),
+    )
+    response = SimpleNamespace(is_done=lambda: False, send_message=noop)
+    user = SimpleNamespace(id=123, roles=[admin])
+    interaction = SimpleNamespace(guild=guild, user=user, response=response, command=SimpleNamespace(name="assignstudent"))
+    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {"pending_removal": {"level": "Tronc Commun", "stream": "TCS"}})
+
+    @management_check(lock=False)
+    async def dummy(_interaction):
+        return True
+
+    predicate = dummy.__discord_app_commands_checks__[0]
+    assert await predicate(interaction) is False
+
+
+@pytest.mark.asyncio
+async def test_owner_mutations_are_blocked_while_removal_recovery_is_pending(monkeypatch):
+    everyone = role("@everyone", 0, 1)
+    bot_role = role("Bot", 10, 99)
+    guild = SimpleNamespace(
+        owner_id=999,
+        id=123,
+        roles=[everyone, bot_role],
+        default_role=everyone,
+        me=SimpleNamespace(top_role=bot_role),
+        get_role=lambda _rid: None,
+        guild_permissions=SimpleNamespace(manage_channels=True, manage_roles=True),
+    )
+    response = SimpleNamespace(is_done=lambda: False, send_message=noop)
+    user = SimpleNamespace(id=999, roles=[])
+    interaction = SimpleNamespace(guild=guild, user=user, response=response, command=SimpleNamespace(name="resetserver"))
+    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {"pending_removal": {"level": "Tronc Commun", "stream": "TCS"}})
+
+    @owner_only_check(lock=False)
+    async def dummy(_interaction):
+        return True
+
+    predicate = dummy.__discord_app_commands_checks__[0]
+    assert await predicate(interaction) is False
+
+
+@pytest.mark.asyncio
+async def test_read_only_status_remains_available_during_removal_recovery(monkeypatch):
+    everyone = role("@everyone", 0, 1)
+    admin = role(ROLE_ADMIN, 5, 42)
+    bot_role = role("Bot", 10, 99)
+    guild = SimpleNamespace(
+        owner_id=999,
+        id=123,
+        roles=[everyone, admin, bot_role],
+        default_role=everyone,
+        me=SimpleNamespace(top_role=bot_role),
+        get_role=lambda rid: admin if rid == 42 else None,
+        guild_permissions=SimpleNamespace(manage_channels=True, manage_roles=True),
+    )
+    response = SimpleNamespace(is_done=lambda: False, send_message=noop)
+    user = SimpleNamespace(id=123, roles=[admin])
+    interaction = SimpleNamespace(guild=guild, user=user, response=response, command=SimpleNamespace(name="status"))
+    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {"pending_removal": {"level": "Tronc Commun", "stream": "TCS"}})
+
+    @management_check(lock=False)
+    async def dummy(_interaction):
+        return True
+
+    predicate = dummy.__discord_app_commands_checks__[0]
+    assert await predicate(interaction) is True
