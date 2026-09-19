@@ -1,0 +1,14 @@
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    volumes:
+      - school_manager_data:/app/data
+
+volumes:
+  school_manager_data:
