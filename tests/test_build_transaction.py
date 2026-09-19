@@ -147,3 +147,20 @@ async def test_build_rejects_removing_already_managed_streams(monkeypatch):
 
     with pytest.raises(ValueError, match="ne peut pas supprimer une filière"):
         await build_transaction.build_and_persist(SimpleNamespace(id=123), candidate)
+
+
+@pytest.mark.asyncio
+async def test_build_rejects_while_stream_removal_is_pending(monkeypatch):
+    current = {
+        "academic_year": "2026/2027",
+        "pending_removal": {
+            "level": "Tronc Commun",
+            "stream": "Tronc Commun Scientifique",
+        },
+    }
+    candidate = {"academic_year": "2026/2027", "levels": []}
+
+    monkeypatch.setattr(build_transaction, "get_guild_config", lambda _guild_id: current)
+
+    with pytest.raises(ValueError, match="suppression de filière est interrompue"):
+        await build_transaction.build_and_persist(SimpleNamespace(id=123), candidate)
