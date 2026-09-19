@@ -6,10 +6,11 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config.curriculum import get_levels, get_stream_abbreviation, get_streams
+from config.curriculum import get_levels, get_stream_abbreviation, get_stream_subjects, get_streams
 from services.audit import record_event
 from services.role_conflicts import student_staff_conflict
-from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT, STUDENT_STREAM_ROLE_PREFIX, STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX, get_managed_role, management_check, student_view_overwrite
+from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT, STUDENT_STREAM_ROLE_PREFIX, STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX, _legacy_role_names, get_managed_role, management_check, student_view_overwrite
+from services.server_builder import CATEGORY_VOICE, _safe_name, _stream_category_name, _subject_channel_name
 from services.storage import (
     enroll_student_record,
     get_active_academic_year,
@@ -37,17 +38,25 @@ async def stream_autocomplete(interaction: discord.Interaction, current: str) ->
     return [app_commands.Choice(name=stream, value=stream) for stream in get_streams(level) if _contains(stream, current)][:25]
 
 
-def _is_canonical_school_role(name: str) -> bool:
-    return name in {ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT} or name.startswith((STREAM_ROLE_PREFIX, STUDENT_STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX))
-
-
 def _school_role_ids(guild: discord.Guild) -> set[int]:
-    """Return configured IDs plus exact canonical legacy School Manager role IDs."""
+    """Return persisted managed role IDs plus configured legacy role identities."""
     config = get_guild_config(guild.id) or {}
     managed = config.get("managed", {})
     roles = managed.get("roles", {}) if isinstance(managed, dict) else {}
-    ids = {value for value in roles.values() if isinstance(value, int) and value > 0} if isinstance(roles, dict) else set()
-    ids.update(role.id for role in getattr(guild, "roles", []) if not role.managed and _is_canonical_school_role(role.name))
+    ids = {
+        value
+        for value in roles.values()
+        if isinstance(value, int) and value > 0
+    } if isinstance(roles, dict) else set()
+    management_role_id = config.get("management_role_id")
+    if isinstance(management_role_id, int) and management_role_id > 0:
+        ids.add(management_role_id)
+    legacy_names = _legacy_role_names(config)
+    ids.update(
+        role.id
+        for role in getattr(guild, "roles", [])
+        if not role.managed and role.name in legacy_names
+    )
     return ids
 
 
@@ -81,35 +90,68 @@ async def _restore_school_roles(member: discord.Member, guild: discord.Guild, or
 
 
 async def _grant_student_global_stream_view(guild: discord.Guild, student_role: discord.Role) -> None:
-    """Make the base student role read-only in every configured stream channel."""
+    """Make the base student role read-only only on persisted managed stream channels."""
     config = get_guild_config(guild.id) or {}
-    codes: set[str] = set()
-    for level in config.get("levels", []):
-        if not isinstance(level, dict):
+    managed = config.get("managed", {}) if isinstance(config, dict) else {}
+    managed_channels = managed.get("channels", {}) if isinstance(managed, dict) else {}
+    managed_categories = managed.get("categories", {}) if isinstance(managed, dict) else {}
+    if not isinstance(managed_channels, dict) or not isinstance(managed_categories, dict):
+        return
+
+    target_names: dict[int, tuple[str, int]] = {}
+    voice_category_id = managed_categories.get(CATEGORY_VOICE)
+    if not isinstance(voice_category_id, int) or voice_category_id <= 0:
+        voice_category_id = None
+
+    for level in config.get("levels", []) if isinstance(config, dict) else []:
+        if not isinstance(level, dict) or not isinstance(level.get("name"), str):
             continue
-        level_name = level.get("name")
-        if not isinstance(level_name, str):
-            continue
+        level_name = level["name"]
         for stream in level.get("streams", []) or []:
             if not isinstance(stream, dict) or not isinstance(stream.get("name"), str):
                 continue
-            codes.add(str(stream.get("abbreviation") or get_stream_abbreviation(level_name, stream["name"])))
-    if not codes:
+            stream_name = stream["name"]
+            code = str(stream.get("abbreviation") or get_stream_abbreviation(level_name, stream_name))
+            category_name = _stream_category_name(level_name, stream_name, code)
+            category_id = managed_categories.get(category_name)
+            if not isinstance(category_id, int) or category_id <= 0:
+                continue
+            subjects = stream.get("subjects")
+            if not isinstance(subjects, list):
+                subjects = get_stream_subjects(level_name, stream_name)
+            expected_names = {
+                f"📌-{code}・informations",
+                f"🗓️-{code}・emploi-du-temps",
+                f"📝-{code}・examens",
+                *{
+                    _subject_channel_name(code, subject)
+                    for subject in subjects
+                    if isinstance(subject, str)
+                },
+            }
+            for name in expected_names:
+                resource_id = managed_channels.get(name)
+                if isinstance(resource_id, int) and resource_id > 0:
+                    target_names[resource_id] = (name, category_id)
+            if voice_category_id is not None:
+                voice_name = f"🔊-{_safe_name(code, 30)}-à-distance"
+                resource_id = managed_channels.get(voice_name)
+                if isinstance(resource_id, int) and resource_id > 0:
+                    target_names[resource_id] = (voice_name, voice_category_id)
+
+    if not target_names:
         return
-    try:
-        channels = await guild.fetch_channels()
-    except (discord.Forbidden, discord.HTTPException):
-        channels = guild.channels
+
     view = student_view_overwrite()
     original_overwrites: list[tuple[discord.abc.GuildChannel, dict]] = []
     try:
-        for channel in channels:
-            name = getattr(channel, "name", "")
-            is_stream_text = any(name.startswith(prefix) for code in codes for prefix in (f"📌-{code}・", f"🗓️-{code}・", f"📝-{code}・", f"📚-{code}・"))
-            is_stream_voice = any(name == f"🔊-{code}-à-distance" for code in codes)
-            if not (is_stream_text or is_stream_voice):
+        for resource_id, (expected_name, expected_category_id) in target_names.items():
+            channel = guild.get_channel(resource_id)
+            if channel is None:
                 continue
             if not isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+                continue
+            if channel.name != expected_name or getattr(channel, "category_id", None) != expected_category_id:
                 continue
             original_overwrites.append((channel, dict(channel.overwrites)))
             overwrites = dict(channel.overwrites)
