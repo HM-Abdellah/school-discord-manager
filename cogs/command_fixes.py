@@ -11,6 +11,7 @@ from discord.ext import commands
 
 from config.curriculum import get_levels, get_stream_abbreviation, get_stream_subjects, get_streams, get_subject_display_name, get_subject_internal_code
 from services.audit import record_event
+from services.role_conflicts import teacher_target_conflict
 from services.role_transactions import restore_role_presence, snapshot_role_presence
 from services.permissions import (
     ROLE_ADMIN,
@@ -244,6 +245,10 @@ class CommandFixes(commands.Cog):
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
+        conflict = teacher_target_conflict(teacher, guild)
+        if conflict:
+            await interaction.response.send_message(conflict, ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
         if level not in get_levels() or stream not in get_streams(level):
