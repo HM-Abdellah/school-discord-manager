@@ -61,6 +61,21 @@ def _duplicate_by_name(items, expected_name: str):
     return [item for item in items if _name_key(getattr(item, "name", "")) == key]
 
 
+def _channel_type_error(section: str, resource, expected_name: str) -> str | None:
+    """Validate live Discord channel type when inspecting a real Discord object."""
+    if resource is None or not hasattr(resource, "type"):
+        return None
+    if section == "categories" and not isinstance(resource, discord.CategoryChannel):
+        return "Managed category %r points to a non-category Discord resource." % expected_name
+    if section == "channels":
+        expected_voice = expected_name.startswith("🔊-")
+        if expected_voice and not isinstance(resource, discord.VoiceChannel):
+            return "Managed channel %r points to a non-voice Discord resource." % expected_name
+        if not expected_voice and not isinstance(resource, discord.TextChannel):
+            return "Managed channel %r points to a non-text Discord resource." % expected_name
+    return None
+
+
 async def _fetch_channels(guild: discord.Guild):
     fetch_channels = getattr(guild, "fetch_channels", None)
     if fetch_channels is None:
@@ -106,6 +121,9 @@ async def validate_managed_registry(guild: discord.Guild, config: dict) -> None:
         for expected_name, registered_id in _mapping(config, section).items():
             same_name = _duplicate_by_name(channels, expected_name)
             by_id = next((channel for channel in channels if channel.id == registered_id), None)
+            type_error = _channel_type_error(section, by_id, expected_name)
+            if type_error:
+                raise ManagedResourceConflict(type_error)
             if by_id is not None and _name_key(by_id.name) != _name_key(expected_name):
                 raise ManagedResourceConflict(
                     f"Managed {section[:-1]} `{expected_name}` points to channel ID {registered_id}, "
