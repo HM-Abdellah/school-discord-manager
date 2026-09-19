@@ -212,59 +212,97 @@ class ServerBuilder:
         return sum(isinstance(channel, discord.CategoryChannel) for channel in self._channel_snapshot)
 
     def _validate_capacity(self, selected: dict) -> None:
-        streams = [stream for level in selected.get("levels", []) for stream in level.get("streams", [])]
+        streams = [
+            stream
+            for level in selected.get("levels", [])
+            for stream in level.get("streams", [])
+        ]
         for stream in streams:
-            if self._stream_channel_count({}, stream) > 50:
+            planned_count = self._stream_channel_count({}, stream)
+            if planned_count > 50:
                 code = stream.get("abbreviation") or stream.get("name", "stream")
-                raise ValueError(f"La filière `{code}` dépasse la limite de 50 salons dans sa catégorie.")
+                raise ValueError(
+                    f"La filière `{code}` dépasse la limite de 50 salons dans sa catégorie."
+                )
 
         fixed_category_specs = (
             (CATEGORY_GENERAL, set(GENERAL_CHANNELS.values()), set()),
-            (CATEGORY_PROFESSORS, {PROFESSOR_CHANNELS["discussion"]}, {PROFESSOR_CHANNELS["meeting"]}),
+            (
+                CATEGORY_PROFESSORS,
+                {PROFESSOR_CHANNELS["discussion"]},
+                {PROFESSOR_CHANNELS["meeting"]},
+            ),
             (CATEGORY_VOICE, set(), set()),
         )
-        required_category_names = {name for name, _, _ in fixed_category_specs}
-        required_category_names.update(
-            _stream_category_name(level["name"], stream["name"], stream.get("abbreviation"))
-            for level in selected.get("levels", [])
-            for stream in level.get("streams", [])
-        )
-        missing_categories = sum(1 for name in required_category_names if self._find_category(name) is None)
 
-        missing_channels = 0
-        for category_name, expected_text, expected_voice in fixed_category_specs:
-            category = self._find_category(category_name)
-            if category is None:
-                missing_channels += len(expected_text) + len(expected_voice)
-                continue
-            existing_text = {_normalize_channel_name(channel.name) for channel in getattr(category, "text_channels", [])}
-            existing_voice = {_normalize_channel_name(channel.name) for channel in getattr(category, "voice_channels", [])}
-            missing_channels += sum(1 for expected in expected_text if _normalize_channel_name(expected) not in existing_text)
-            missing_channels += sum(1 for expected in expected_voice if _normalize_channel_name(expected) not in existing_voice)
-
+        expected_by_category: dict[str, set[str]] = {
+            category_name: set(text_names) | set(voice_names)
+            for category_name, text_names, voice_names in fixed_category_specs
+        }
         for level in selected.get("levels", []):
             for stream in level.get("streams", []):
-                category = self._find_category(_stream_category_name(level["name"], stream["name"], stream.get("abbreviation")))
-                expected = self._planned_channel_names_for_stream(stream)
-                existing = {_normalize_channel_name(channel.name) for channel in getattr(category, "text_channels", [])} if category is not None else set()
-                missing_channels += sum(1 for expected_name in expected if _normalize_channel_name(expected_name) not in existing)
+                category_name = _stream_category_name(
+                    level["name"],
+                    stream["name"],
+                    stream.get("abbreviation"),
+                )
+                expected_by_category[category_name] = self._planned_channel_names_for_stream(stream)
 
-        voice_category = self._find_category(CATEGORY_VOICE)
-        if voice_category is None:
-            missing_channels += len(streams)
-        else:
-            existing_voice = {_normalize_channel_name(channel.name) for channel in getattr(voice_category, "voice_channels", [])}
-            missing_channels += sum(
-                1
-                for stream in streams
-                if _normalize_channel_name(f"🔊-{_safe_name(stream.get('abbreviation') or stream.get('name', ''), 30)}-à-distance") not in existing_voice
+        stream_codes = {
+            str(
+                stream.get("abbreviation")
+                or get_stream_abbreviation(level["name"], stream["name"])
             )
+            for level in selected.get("levels", [])
+            for stream in level.get("streams", [])
+        }
+        expected_by_category[CATEGORY_VOICE] = {
+            f"🔊-{_safe_name(code, 30)}-à-distance"
+            for code in stream_codes
+        }
+
+        required_category_names = set(expected_by_category)
+        missing_categories = sum(
+            1
+            for name in required_category_names
+            if self._find_category(name) is None
+        )
+
+        missing_channels = 0
+        for category_name, expected_names in expected_by_category.items():
+            category = self._find_category(category_name)
+            if category is None:
+                missing_channels += len(expected_names)
+                continue
+
+            existing_channels = list(getattr(category, "channels", []))
+            existing_names = {
+                _normalize_channel_name(getattr(channel, "name", ""))
+                for channel in existing_channels
+            }
+            missing = sum(
+                1
+                for expected_name in expected_names
+                if _normalize_channel_name(expected_name) not in existing_names
+            )
+            projected_category_channels = len(existing_channels) + missing
+            if projected_category_channels > 50:
+                raise ValueError(
+                    f"La catégorie `{category_name}` dépasserait la limite de 50 salons "
+                    f"({projected_category_channels})."
+                )
+            missing_channels += missing
 
         projected_channels = len(self._channel_snapshot) + missing_channels
         if projected_channels > 500:
-            raise ValueError(f"La construction dépasserait la limite Discord de 500 salons ({projected_channels}).")
-        if self._category_count() + missing_categories > 50:
-            raise ValueError(f"La construction dépasserait la limite Discord de 50 catégories ({self._category_count() + missing_categories}).")
+            raise ValueError(
+                f"La construction dépasserait la limite Discord de 500 salons ({projected_channels})."
+            )
+        projected_categories = self._category_count() + missing_categories
+        if projected_categories > 50:
+            raise ValueError(
+                f"La construction dépasserait la limite Discord de 50 catégories ({projected_categories})."
+            )
 
     async def build(self, selected: dict) -> BuildStats:
         print(f"[BUILD] Start guild={self.guild.id}", flush=True)
