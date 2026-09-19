@@ -29,7 +29,7 @@ PENDING_REMOVAL_KEY = "pending_removal"
 
 def _pending_removal_message(guild: discord.Guild, command_name: str) -> str | None:
     config = get_guild_config(guild.id) or {}
-    if not isinstance(config, dict) or PENDING_REMOVAL_KEY not in config:
+    if not isinstance(config, dict) or config.get(PENDING_REMOVAL_KEY) is None:
         return None
     if command_name == "removestream" or command_name in READONLY_DURING_PENDING_REMOVAL:
         return None
