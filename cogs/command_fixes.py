@@ -263,9 +263,6 @@ class CommandFixes(commands.Cog):
         if level not in get_levels() or stream not in get_streams(level):
             await interaction.followup.send("❌ Niveau ou filière invalide.", ephemeral=True)
             return
-        if any(role.name == ROLE_STUDENT or role.name.startswith(STUDENT_STREAM_ROLE_PREFIX) for role in teacher.roles if not role.managed):
-            await interaction.followup.send("❌ Cet utilisateur possède encore un rôle **Élève**. Retire d'abord son rôle élève.", ephemeral=True)
-            return
         requested = {item.strip().casefold() for item in subjects.split(",") if item.strip()}
         selected = [subject for subject in get_stream_subjects(level, stream) if subject.casefold() in requested or get_subject_display_name(subject).casefold() in requested]
         if not selected:
