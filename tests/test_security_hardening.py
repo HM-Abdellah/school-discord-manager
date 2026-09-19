@@ -118,7 +118,8 @@ def test_teacher_assignment_blocks_student_admin_and_bot(monkeypatch):
             "Élève": student,
         }.get(name),
     )
-    guild = SimpleNamespace(roles=[admin, prof, student])
+    guild = SimpleNamespace(id=123, roles=[admin, prof, student])
+    monkeypatch.setattr("services.role_conflicts.get_guild_config", lambda _guild_id: {"levels": []})
 
     assert teacher_target_conflict(SimpleNamespace(bot=True, roles=[]), guild) is not None
     assert teacher_target_conflict(SimpleNamespace(bot=False, roles=[student]), guild) is not None
