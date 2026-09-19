@@ -268,7 +268,8 @@ class TeacherCommands(commands.Cog):
         channel = await _find_managed_channel(
             guild, GENERAL_CHANNELS["absences"], category_name="🏢・INFORMATIONS & ADMINISTRATION"
         )
-        if channel is None:            await interaction.response.send_message("❌ Le salon d'absences n'existe pas. Lance `/build` après `/setup`.", ephemeral=True)
+        if channel is None:
+            await interaction.response.send_message("❌ Le salon d'absences n'existe pas. Lance `/build` après `/setup`.", ephemeral=True)
             return
         embed = discord.Embed(title="📢 Absence d'un professeur", description=f"**Professeur :** {teacher.mention}\n**Durée :** {duration}\n**Classes concernées :** {classes}\n**Date :** {date.today().isoformat()}", colour=discord.Colour.orange())
         try:
