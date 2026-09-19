@@ -21,6 +21,38 @@ def rollback_guild_config_year(guild_id: int, year: str) -> tuple[str | None, bo
     if previous_year == year:
         return year, False
 
+    target_streams = set()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT level_name, stream_name, role_name FROM streams WHERE guild_id=? AND academic_year_id=?",
+            (guild_id, int(target["id"])),
+        ).fetchall()
+    for row in rows:
+        target_streams.add(
+            (str(row["level_name"]), str(row["stream_name"]), str(row["role_name"]))
+        )
+
+    current_streams = set()
+    for level in config.get("levels", []) or []:
+        if not isinstance(level, dict) or not isinstance(level.get("name"), str):
+            continue
+        for stream in level.get("streams", []) or []:
+            if not isinstance(stream, dict) or not isinstance(stream.get("name"), str):
+                continue
+            code = str(stream.get("abbreviation") or "")
+            if not code:
+                from config.curriculum import get_stream_abbreviation
+                code = get_stream_abbreviation(level["name"], stream["name"])
+            current_streams.add(
+                (str(level["name"]), str(stream["name"]), f"Filière - {code}")
+            )
+
+    if target_streams != current_streams:
+        raise ValueError(
+            f"Impossible de basculer vers {year} : la structure des filières enregistrée pour cette année "
+            "diffère de la configuration actuellement déployée. Réconcilie la structure avant le rollback."
+        )
+
     new_config = deepcopy(config)
     new_config["academic_year"] = year
 
