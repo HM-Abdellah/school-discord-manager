@@ -273,7 +273,7 @@ async def test_legacy_subject_role_migration_touches_only_managed_channels(monke
             self.set_permissions = AsyncMock()
             self.managed = managed
 
-    old_role = FakeRole(101, "Matière - TCS - MAT")
+    old_role = FakeRole(101, "Matière - TCS - Math")
     new_role = FakeRole(202, "Matière - Mathématiques")
     managed_channel = FakeChannel(10, old_role, True)
     unmanaged_channel = FakeChannel(20, old_role, False)
