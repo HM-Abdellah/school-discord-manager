@@ -26,7 +26,7 @@ class HardenedResetCommands(commands.Cog):
 
     @app_commands.command(name="resetserver", description="Supprimer uniquement les ressources School Manager enregistrées.")
     @app_commands.describe(confirm="Écris RESET SCHOOL MANAGER pour confirmer. Réservé au propriétaire.")
-    @owner_only_check()
+    @owner_only_check(lock=False)
     async def reset_server(self, interaction: discord.Interaction, confirm: str) -> None:
         guild = interaction.guild
         if guild is None:
