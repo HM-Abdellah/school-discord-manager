@@ -187,7 +187,16 @@ async def _migrate_legacy_subject_roles(
             if subject not in migrated:
                 migrated.append(subject)
 
+            managed = config.get("managed", {}) if isinstance(config, dict) else {}
+            managed_channels = managed.get("channels", {}) if isinstance(managed, dict) else {}
+            managed_channel_ids = {
+                value
+                for value in managed_channels.values()
+                if isinstance(value, int) and value > 0
+            } if isinstance(managed_channels, dict) else set()
             for channel in guild.channels:
+                if getattr(channel, "id", None) not in managed_channel_ids:
+                    continue
                 old_overwrite = getattr(channel, "overwrites", {}).get(old_role)
                 if old_overwrite is None:
                     continue
