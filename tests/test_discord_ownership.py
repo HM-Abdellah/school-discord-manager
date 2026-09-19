@@ -98,7 +98,8 @@ async def test_discord_managed_canonical_role_is_rejected():
         await validate_unmanaged_canonical_collisions(guild, config)
 
 
-def test_managed_category_rejects_wrong_live_resource_type(monkeypatch):
+@pytest.mark.asyncio
+async def test_managed_category_rejects_wrong_live_resource_type(monkeypatch):
     from services import discord_ownership as ownership
 
     class FakeCategory:
@@ -120,15 +121,12 @@ def test_managed_category_rejects_wrong_live_resource_type(monkeypatch):
         channels=[live],
         fetch_channels=AsyncMock(return_value=[live]),
     )
-    guild.channels[0].id = 10
-    guild.channels[0].name = "School"
-
     with pytest.raises(ManagedResourceConflict, match="non-category"):
-        import asyncio
-        asyncio.run(validate_managed_registry(guild, config))
+        await validate_managed_registry(guild, config)
 
 
-def test_managed_text_channel_rejects_wrong_live_resource_type(monkeypatch):
+@pytest.mark.asyncio
+async def test_managed_text_channel_rejects_wrong_live_resource_type(monkeypatch):
     from services import discord_ownership as ownership
 
     class FakeCategory:
@@ -155,5 +153,4 @@ def test_managed_text_channel_rejects_wrong_live_resource_type(monkeypatch):
     )
 
     with pytest.raises(ManagedResourceConflict, match="non-text"):
-        import asyncio
-        asyncio.run(validate_managed_registry(guild, config))
+        await validate_managed_registry(guild, config)
