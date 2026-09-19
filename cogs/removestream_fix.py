@@ -421,7 +421,7 @@ class SafeRemoveStream(commands.Cog):
     @app_commands.command(name="removestream", description="Supprimer une filière uniquement après vérification de ses ressources gérées.")
     @app_commands.describe(level="Niveau", stream="Filière à supprimer")
     @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete)
-    @management_check()
+    @management_check(lock=False)
     async def remove_stream(self, interaction: discord.Interaction, level: str, stream: str) -> None:
         guild = interaction.guild
         if guild is None:
