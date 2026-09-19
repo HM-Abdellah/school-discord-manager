@@ -106,3 +106,19 @@ def test_hierarchy_error_identifies_low_bot_role(monkeypatch):
     message = _hierarchy_error(guild)
     assert message is not None
     assert "Filière - 1BACSE" in message
+
+
+def test_management_check_can_skip_lock_when_command_owns_transaction():
+    @management_check(lock=False)
+    async def dummy(_interaction):
+        return True
+
+    assert not hasattr(dummy, "__wrapped__")
+
+
+def test_management_check_wraps_lock_by_default():
+    @management_check()
+    async def dummy(_interaction):
+        return True
+
+    assert hasattr(dummy, "__wrapped__")
