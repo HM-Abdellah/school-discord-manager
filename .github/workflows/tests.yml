@@ -26,3 +26,11 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -q
+
+      - name: Build Docker image
+        run: docker build --tag school-discord-manager:test .
+
+      - name: Smoke-test Docker runtime
+        run: |
+          test "$(docker inspect school-discord-manager:test --format '{{.Config.User}}')" = "app"
+          docker run --rm --entrypoint python school-discord-manager:test -c "import discord, dotenv; print(discord.__version__)"
