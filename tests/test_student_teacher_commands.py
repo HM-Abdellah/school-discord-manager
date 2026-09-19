@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from cogs.command_fixes import _global_subject_role_name
 from cogs.students import _student_assignment_roles
 from cogs.teachers import MENTION_RE
 
@@ -94,7 +95,7 @@ async def test_legacy_subject_role_migration_can_scan_config_without_runtime_nam
 async def test_global_subject_role_refuses_unmanaged_same_name_collision(monkeypatch):
     from cogs.command_fixes import _get_or_create_global_subject_role
 
-    existing = SimpleNamespace(name="Matière - Mathématiques", id=777, managed=False)
+    existing = SimpleNamespace(name=_global_subject_role_name("Mathématiques"), id=777, managed=False)
     guild = SimpleNamespace(
         id=123,
         roles=[existing],
