@@ -9,7 +9,7 @@ from discord.ext import commands
 from config.curriculum import get_levels, get_stream_abbreviation, get_stream_subjects, get_streams
 from services.audit import record_event
 from services.role_conflicts import student_staff_conflict
-from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT, STUDENT_STREAM_ROLE_PREFIX, STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX, _legacy_role_names, get_managed_role, management_check, student_view_overwrite
+from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT, STUDENT_STREAM_ROLE_PREFIX, STREAM_ROLE_PREFIX, _legacy_role_names, get_managed_role, management_check, student_view_overwrite
 from services.server_builder import CATEGORY_VOICE, _safe_name, _stream_category_name, _subject_channel_name
 from services.storage import (
     enroll_student_record,
