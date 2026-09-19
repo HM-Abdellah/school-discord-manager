@@ -11,12 +11,21 @@ import discord
 
 
 @dataclass(frozen=True)
+class PermissionOverwriteState:
+    target_id: int
+    target_type: str
+    allow: int
+    deny: int
+
+
+@dataclass(frozen=True)
 class ChannelState:
     id: int
     name: str
     type: str
     category_id: int | None
     position: int
+    permission_overwrites: tuple[PermissionOverwriteState, ...]
 
 
 @dataclass(frozen=True)
@@ -58,6 +67,23 @@ def channel_type(channel: discord.abc.GuildChannel) -> str:
     return type(channel).__name__.lower()
 
 
+def capture_permission_overwrites(channel: discord.abc.GuildChannel) -> tuple[PermissionOverwriteState, ...]:
+    states: list[PermissionOverwriteState] = []
+    for target, overwrite in channel.overwrites.items():
+        allow, deny = overwrite.pair()
+        target_type = "role" if isinstance(target, discord.Role) else "member" if isinstance(target, discord.Member) else type(target).__name__.lower()
+        states.append(
+            PermissionOverwriteState(
+                target_id=int(target.id),
+                target_type=target_type,
+                allow=int(allow.value),
+                deny=int(deny.value),
+            )
+        )
+    states.sort(key=lambda item: (item.target_type, item.target_id))
+    return tuple(states)
+
+
 async def capture_guild(guild: discord.Guild) -> GuildState:
     channels = list(await guild.fetch_channels())
     channels.sort(key=lambda item: (item.position, item.id))
@@ -72,6 +98,7 @@ async def capture_guild(guild: discord.Guild) -> GuildState:
             type=channel_type(channel),
             category_id=getattr(channel, "category_id", None),
             position=channel.position,
+            permission_overwrites=capture_permission_overwrites(channel),
         )
         for channel in channels
     )
