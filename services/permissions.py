@@ -21,7 +21,7 @@ STUDENT_STREAM_ROLE_PREFIX = "Élèves - "
 SUBJECT_ROLE_PREFIX = "Matière - "
 
 CHANNEL_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream"}
-ROLE_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream", "assignstudent", "assignteacher", "assignsubjectteachers"}
+ROLE_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream", "assignstudent", "assignteacher", "assignteacherfull", "assignsubjectteachers"}
 RESET_COMMANDS = {"resetserver"}
 
 
@@ -201,7 +201,8 @@ def management_check() -> app_commands.check:
 
     def decorator(function):
         function = check_decorator(function)
-        function = _apply_default_permission(function, manage_roles=True)
+        # Authorization is intentionally enforced at runtime so the configured
+        # Administration role is not blocked by Discord's user-permission gate.
         return _wrap_with_mutation_lock(function)
 
     return decorator
