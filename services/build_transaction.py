@@ -19,7 +19,7 @@ from services.discord_ownership import (
     validate_unmanaged_canonical_collisions,
 )
 from services.server_builder import ServerBuilder
-from services.storage import save_guild_config
+from services.storage import get_guild_config, save_guild_config
 
 
 class TransactionalServerBuilder(ServerBuilder):
@@ -142,12 +142,32 @@ class TransactionalServerBuilder(ServerBuilder):
             )
 
 
+def _configured_stream_keys(config: dict[str, Any] | None) -> set[tuple[str, str]]:
+    if not isinstance(config, dict):
+        return set()
+    keys: set[tuple[str, str]] = set()
+    for level in config.get("levels", []) or []:
+        if not isinstance(level, dict) or not isinstance(level.get("name"), str):
+            continue
+        for stream in level.get("streams", []) or []:
+            if isinstance(stream, dict) and isinstance(stream.get("name"), str):
+                keys.add((level["name"], stream["name"]))
+    return keys
+
 async def build_and_persist(
     guild: discord.Guild,
     config: dict[str, Any],
 ):
     """Run a build against an isolated config and commit it only after success."""
     working_config = deepcopy(config)
+    current_config = get_guild_config(guild.id)
+    removed_streams = _configured_stream_keys(current_config) - _configured_stream_keys(working_config)
+    if removed_streams:
+        names = ", ".join(f"{level}/{stream}" for level, stream in sorted(removed_streams))
+        raise ValueError(
+            "Un build ne peut pas supprimer une filière déjà gérée. "
+            f"Utilise /removestream avant de retirer : {names}."
+        )
     await validate_managed_registry(guild, working_config)
     await validate_unmanaged_canonical_collisions(guild, working_config)
     builder = TransactionalServerBuilder(guild)
