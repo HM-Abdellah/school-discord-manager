@@ -9,7 +9,16 @@ from discord.ext import commands
 from config.curriculum import get_levels, get_stream_abbreviation, get_streams
 from services.audit import record_event
 from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT, STUDENT_STREAM_ROLE_PREFIX, STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX, get_managed_role, management_check, student_view_overwrite
-from services.storage import enroll_student_record, get_active_academic_year, get_guild_config, get_student, get_student_history, mark_student_left
+from services.storage import (
+    enroll_student_record,
+    get_active_academic_year,
+    get_guild_config,
+    get_student,
+    get_student_history,
+    mark_student_left,
+    restore_student_state,
+    snapshot_student_state,
+)
 
 
 def _contains(value: str, current: str) -> bool:
@@ -91,17 +100,30 @@ async def _grant_student_global_stream_view(guild: discord.Guild, student_role: 
     except (discord.Forbidden, discord.HTTPException):
         channels = guild.channels
     view = student_view_overwrite()
-    for channel in channels:
-        name = getattr(channel, "name", "")
-        is_stream_text = any(name.startswith(prefix) for code in codes for prefix in (f"📌-{code}・", f"🗓️-{code}・", f"📝-{code}・", f"📚-{code}・"))
-        is_stream_voice = any(name == f"🔊-{code}-à-distance" for code in codes)
-        if not (is_stream_text or is_stream_voice):
-            continue
-        if not isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
-            continue
-        overwrites = dict(channel.overwrites)
-        overwrites[student_role] = view
-        await channel.edit(overwrites=overwrites, reason="School Manager student global stream visibility")
+    original_overwrites: list[tuple[discord.abc.GuildChannel, dict]] = []
+    try:
+        for channel in channels:
+            name = getattr(channel, "name", "")
+            is_stream_text = any(name.startswith(prefix) for code in codes for prefix in (f"📌-{code}・", f"🗓️-{code}・", f"📝-{code}・", f"📚-{code}・"))
+            is_stream_voice = any(name == f"🔊-{code}-à-distance" for code in codes)
+            if not (is_stream_text or is_stream_voice):
+                continue
+            if not isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+                continue
+            original_overwrites.append((channel, dict(channel.overwrites)))
+            overwrites = dict(channel.overwrites)
+            overwrites[student_role] = view
+            await channel.edit(overwrites=overwrites, reason="School Manager student global stream visibility")
+    except (discord.Forbidden, discord.HTTPException):
+        for channel, overwrites in reversed(original_overwrites):
+            try:
+                await channel.edit(
+                    overwrites=overwrites,
+                    reason="School Manager student global stream visibility rollback",
+                )
+            except discord.HTTPException:
+                pass
+        raise
 
 
 class StudentCommands(commands.Cog):
@@ -131,6 +153,7 @@ class StudentCommands(commands.Cog):
             return
         original_school_roles = _school_roles(student, guild)
         original_student_roles = _student_assignment_roles(student, guild)
+        student_state_snapshot = snapshot_student_state(guild.id, student.id)
         await interaction.response.defer(ephemeral=True)
         try:
             cleanup_roles = [role for role in original_student_roles if role != student_role and role != student_stream_role]
@@ -144,6 +167,10 @@ class StudentCommands(commands.Cog):
                 await _restore_school_roles(student, guild, original_school_roles)
             except discord.HTTPException:
                 pass
+            try:
+                restore_student_state(guild.id, student.id, student_state_snapshot)
+            except OSError:
+                pass
             await interaction.followup.send("❌ Vérifie que le rôle du bot est assez haut dans la hiérarchie.", ephemeral=True)
             return
         except discord.HTTPException as exc:
@@ -151,12 +178,20 @@ class StudentCommands(commands.Cog):
                 await _restore_school_roles(student, guild, original_school_roles)
             except discord.HTTPException:
                 pass
+            try:
+                restore_student_state(guild.id, student.id, student_state_snapshot)
+            except OSError:
+                pass
             await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
             return
         except Exception as exc:
             try:
                 await _restore_school_roles(student, guild, original_school_roles)
             except discord.HTTPException:
+                pass
+            try:
+                restore_student_state(guild.id, student.id, student_state_snapshot)
+            except OSError:
                 pass
             await interaction.followup.send(f"❌ Affectation annulée; les rôles Discord ont été restaurés si possible : `{type(exc).__name__}: {exc}`", ephemeral=True)
             return
