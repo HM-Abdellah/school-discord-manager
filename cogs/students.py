@@ -174,7 +174,7 @@ class StudentCommands(commands.Cog):
                 pass
             try:
                 restore_student_state(guild.id, student.id, student_state_snapshot)
-            except OSError:
+            except Exception:
                 pass
             await interaction.followup.send("❌ Vérifie que le rôle du bot est assez haut dans la hiérarchie.", ephemeral=True)
             return
@@ -185,7 +185,7 @@ class StudentCommands(commands.Cog):
                 pass
             try:
                 restore_student_state(guild.id, student.id, student_state_snapshot)
-            except OSError:
+            except Exception:
                 pass
             await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
             return
@@ -196,7 +196,7 @@ class StudentCommands(commands.Cog):
                 pass
             try:
                 restore_student_state(guild.id, student.id, student_state_snapshot)
-            except OSError:
+            except Exception:
                 pass
             await interaction.followup.send(f"❌ Affectation annulée; les rôles Discord ont été restaurés si possible : `{type(exc).__name__}: {exc}`", ephemeral=True)
             return
