@@ -21,6 +21,7 @@ from config.curriculum import (
 from services.audit import record_event
 from services.discord_registry import resolve_registered_text_channel
 from services.role_transactions import restore_role_presence, snapshot_role_presence
+from services.role_conflicts import teacher_target_conflict
 from services.permissions import (
     ROLE_ADMIN,
     ROLE_PROFESSOR,
@@ -97,6 +98,10 @@ class TeacherCommands(commands.Cog):
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
+        conflict = teacher_target_conflict(teacher, guild)
+        if conflict:
+            await interaction.response.send_message(conflict, ephemeral=True)
+            return
         if _member_has_school_student_role(teacher):
             await interaction.response.send_message("❌ Cet utilisateur possède encore un rôle **Élève**. Retire d'abord son rôle élève, puis relance l'affectation professeur.", ephemeral=True)
             return
@@ -145,6 +150,19 @@ class TeacherCommands(commands.Cog):
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
+        conflicts = [
+            conflict
+            for member in (teacher1, teacher2, teacher3, teacher4, teacher5)
+            if member is not None
+            for conflict in [teacher_target_conflict(member, guild)]
+            if conflict
+        ]
+        if conflicts:
+            await interaction.response.send_message(
+                "❌ Affectation professeur refusée :\n" + "\n".join(dict.fromkeys(conflicts)),
+                ephemeral=True,
+            )
             return
         if level not in get_levels() or stream not in get_streams(level):
             await interaction.response.send_message("❌ Niveau ou filière invalide.", ephemeral=True)
