@@ -161,6 +161,10 @@ async def build_and_persist(
     """Run a build against an isolated config and commit it only after success."""
     working_config = deepcopy(config)
     current_config = get_guild_config(guild.id)
+    if isinstance(current_config, dict) and current_config.get("pending_removal") is not None:
+        raise ValueError(
+            "Une suppression de filière est interrompue et doit être reprise via /removestream avant toute nouvelle construction."
+        )
     removed_streams = _configured_stream_keys(current_config) - _configured_stream_keys(working_config)
     if removed_streams:
         names = ", ".join(f"{level}/{stream}" for level, stream in sorted(removed_streams))
