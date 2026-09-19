@@ -177,3 +177,36 @@ async def test_existing_voice_channel_is_reused_from_category_even_when_snapshot
 
     assert result is channel
     category.create_voice_channel.assert_not_awaited()
+
+
+def test_validate_capacity_rejects_existing_category_that_would_exceed_limit():
+    guild = SimpleNamespace(channels=[], categories=[])
+    builder = ServerBuilder(guild)
+
+    existing = [SimpleNamespace(name=f"unmanaged-{i}") for i in range(49)]
+    category = SimpleNamespace(
+        name="📘・TC・🔬 TCS",
+        id=123,
+        channels=existing,
+        text_channels=existing,
+        voice_channels=[],
+    )
+    builder._channel_snapshot = [category, *existing]
+
+    selected = {
+        "levels": [
+            {
+                "name": "Tronc Commun",
+                "streams": [
+                    {
+                        "name": "Tronc Commun Scientifique",
+                        "abbreviation": "TCS",
+                        "subjects": ["Mathématiques", "Physique-Chimie"],
+                    }
+                ],
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="dépassement.*51|dépasserait.*51"):
+        builder._validate_capacity(selected)
