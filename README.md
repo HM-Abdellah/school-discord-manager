@@ -256,6 +256,23 @@ Verify that the bot has `Manage Channels` and `Manage Roles`, and that the bot r
 
 That behavior is intentional when the persisted managed identity conflicts with another live resource. Reconciliation should be explicit rather than based on name matching.
 
+### An interrupted stream removal is pending
+
+A crash-safe removal journal is stored under `pending_removal`. While that journal exists, the bot blocks other state-changing management commands so a second mutation cannot race with recovery. `/removestream` for the same pending stream remains the recovery path; read-only diagnostics such as `/status`, `/years`, `/adminpanel`, `/serverhealth`, and `/studenthistory` remain available.
+
+### Operational backup
+
+The authoritative runtime state is the SQLite database in `data/school.db`. In Docker, `/app/data` is backed by the named `school_manager_data` volume. Back up that volume before major maintenance or destructive server operations, and keep the backup outside the running container.
+
+## 🚦 Release gate
+
+A release is considered operationally accepted only when all of the following are true:
+
+- GitHub CI is green on Python 3.12 and 3.13, including Docker build and runtime smoke tests.
+- The Phase 3 live E2E matrices have been executed against a dedicated Discord test guild using the documented two-account model.
+- The final operational regression pass has been completed after E2E, including restart/recovery and the destructive-resource boundaries.
+- The production `.env` contains the real secret only on the deployment host and is not committed to Git.
+
 ## 📚 Curriculum
 
 The academic catalogue lives in `config/curriculum.py`. Only streams present in that catalogue are accepted by the bot.
