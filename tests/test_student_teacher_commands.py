@@ -176,3 +176,75 @@ def test_student_state_snapshot_restore_round_trip(monkeypatch, tmp_path):
 
     rows = storage.get_student_history(guild_id, 777)
     assert [row["stream_name"] for row in rows if row["status"] == "active"] == [first_stream]
+
+
+@pytest.mark.asyncio
+async def test_student_visibility_mutation_uses_only_persisted_managed_channel_ids(monkeypatch):
+    from cogs import students as students_module
+    from services.server_builder import CATEGORY_VOICE, _stream_category_name
+
+    level = "Tronc Commun"
+    stream = "Tronc Commun Scientifique"
+    code = "TCS"
+    category_name = _stream_category_name(level, stream, code)
+
+    class FakeChannel:
+        def __init__(self, channel_id, name, category_id):
+            self.id = channel_id
+            self.name = name
+            self.category_id = category_id
+            self.overwrites = {}
+            self.edit = AsyncMock()
+
+    category_id = 200
+    managed_id = 201
+    unmanaged_id = 999
+    managed = FakeChannel(managed_id, f"📌-{code}・informations", category_id)
+    unmanaged = FakeChannel(unmanaged_id, f"📌-{code}・informations", category_id)
+    channels = {managed_id: managed, unmanaged_id: unmanaged}
+
+    config = {
+        "levels": [{"name": level, "streams": [{"name": stream, "abbreviation": code, "subjects": []}]}],
+        "managed": {
+            "categories": {category_name: category_id, CATEGORY_VOICE: 300},
+            "channels": {
+                f"📌-{code}・informations": managed_id,
+                f"🗓️-{code}・emploi-du-temps": 202,
+                f"📝-{code}・examens": 203,
+                f"🔊-{code}-à-distance": 204,
+            },
+        },
+    }
+    guild = SimpleNamespace(id=123, get_channel=lambda resource_id: channels.get(resource_id))
+    student_role = SimpleNamespace(id=501)
+
+    monkeypatch.setattr("cogs.students.get_guild_config", lambda _guild_id: config)
+    monkeypatch.setattr(students_module.discord, "TextChannel", FakeChannel)
+    monkeypatch.setattr(students_module.discord, "VoiceChannel", FakeChannel)
+
+    await students_module._grant_student_global_stream_view(guild, student_role)
+
+    managed.edit.assert_awaited_once()
+    unmanaged.edit.assert_not_awaited()
+
+
+def test_school_role_ids_do_not_adopt_unconfigured_canonical_role_names(monkeypatch):
+    from cogs.students import _school_role_ids
+
+    unrelated = SimpleNamespace(id=900, name="Élève", managed=False)
+    guild = SimpleNamespace(id=123, roles=[unrelated])
+    monkeypatch.setattr("cogs.students.get_guild_config", lambda _guild_id: {})
+
+    assert _school_role_ids(guild) == set()
+
+
+def test_teacher_conflict_ignores_unmanaged_same_name_student_stream_role(monkeypatch):
+    from services.role_conflicts import teacher_target_conflict
+
+    unrelated = SimpleNamespace(id=901, name="Élèves - TCS", managed=False)
+    guild = SimpleNamespace(id=123)
+    member = SimpleNamespace(bot=False, roles=[unrelated])
+    monkeypatch.setattr("services.role_conflicts.get_guild_config", lambda _guild_id: {"levels": []})
+    monkeypatch.setattr("services.role_conflicts.get_managed_role", lambda _guild, name: None)
+
+    assert teacher_target_conflict(member, guild) is None
