@@ -19,6 +19,7 @@ from config.curriculum import (
 )
 from services.audit import record_event
 from services.discord_registry import resolve_registered_text_channel
+from services.role_transactions import restore_role_presence, snapshot_role_presence
 from services.permissions import (
     ROLE_ADMIN,
     ROLE_PROFESSOR,
@@ -104,17 +105,24 @@ class TeacherCommands(commands.Cog):
             await interaction.response.send_message(f"❌ Le rôle géré `{role_name}` n'existe pas encore. Lance `/setup` puis `/build`.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
+        other_name = ROLE_PROFESSOR if gender.value == "female" else ROLE_PROFESSOR_FEMALE
+        other_role = get_managed_role(guild, other_name)
+        tracked_roles = [role] + ([other_role] if other_role is not None and other_role.id != role.id else [])
+        original_presence = snapshot_role_presence(teacher, tracked_roles)
         try:
-            other_name = ROLE_PROFESSOR if gender.value == "female" else ROLE_PROFESSOR_FEMALE
-            other_role = get_managed_role(guild, other_name)
+            if role not in teacher.roles:
+                await teacher.add_roles(role, reason="School manager teacher assignment")
             if other_role is not None and other_role in teacher.roles:
                 await teacher.remove_roles(other_role, reason="Teacher gender role normalization")
-            await teacher.add_roles(role, reason="School manager teacher assignment")
-        except discord.Forbidden:
-            await interaction.followup.send("❌ Impossible d'attribuer le rôle. Vérifie la hiérarchie des rôles.", ephemeral=True)
-            return
-        except discord.HTTPException as exc:
-            await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            try:
+                await restore_role_presence(
+                    teacher, tracked_roles, original_presence, reason="School Manager teacher assignment rollback"
+                )
+            except discord.HTTPException:
+                pass
+            message = "❌ Impossible d'attribuer le rôle. Vérifie la hiérarchie des rôles." if isinstance(exc, discord.Forbidden) else f"❌ Discord API : `{exc}`"
+            await interaction.followup.send(message, ephemeral=True)
             return
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "assignteacher", teacher.display_name, role_name)
         await interaction.followup.send(f"✅ {teacher.mention} a reçu le rôle **{role_name}**.", ephemeral=True)
@@ -171,11 +179,28 @@ class TeacherCommands(commands.Cog):
             return
         await interaction.response.defer(ephemeral=True)
         config = get_guild_config(guild.id) or {}
+        working_config = __import__("copy").deepcopy(config)
         subject_role = get_managed_role(guild, subject_role_name)
+        created_subject_role = False
         try:
             if subject_role is None:
-                subject_role = await guild.create_role(name=subject_role_name, permissions=discord.Permissions.none(), colour=discord.Colour.dark_blue(), mentionable=False, reason="School manager subject role created on demand")
-                config.setdefault("managed", {}).setdefault("roles", {})[subject_role_name] = subject_role.id
+                conflicting_role = discord.utils.get(guild.roles, name=subject_role_name)
+                if conflicting_role is not None:
+                    raise RuntimeError(f"Unmanaged role collision for `{subject_role_name}`.")
+                subject_role = await guild.create_role(
+                    name=subject_role_name,
+                    permissions=discord.Permissions.none(),
+                    colour=discord.Colour.dark_blue(),
+                    mentionable=False,
+                    reason="School manager subject role created on demand",
+                )
+                created_subject_role = True
+                working_config.setdefault("managed", {}).setdefault("roles", {})[subject_role_name] = subject_role.id
+
+            tracked_roles = [stream_role, subject_role]
+            original_presence = {member.id: snapshot_role_presence(member, tracked_roles) for member in selected_members}
+            original_overwrites = dict(channel.overwrites)
+
             overwrites = {guild.default_role: hidden_overwrite(), stream_role: professor_subject_view_overwrite()}
             admin_role = get_managed_role(guild, ROLE_ADMIN)
             prof_role = get_managed_role(guild, ROLE_PROFESSOR)
@@ -190,18 +215,41 @@ class TeacherCommands(commands.Cog):
             if student_stream_role is not None:
                 overwrites[student_stream_role] = student_overwrite(can_send=True)
             overwrites[subject_role] = professor_subject_member_overwrite()
+
             await channel.edit(overwrites=overwrites, reason="School manager subject teacher access")
             for member in selected_members:
                 await member.add_roles(stream_role, subject_role, reason=f"School manager teacher assignment: {code} / {curriculum_subject}")
-            save_guild_config(guild.id, config)
-        except discord.Forbidden:
-            await interaction.followup.send("❌ Permission refusée. Vérifie Manage Roles, Manage Channels et la hiérarchie.", ephemeral=True)
-            return
-        except discord.HTTPException as exc:
-            await interaction.followup.send(f"❌ Discord API : `{exc}`", ephemeral=True)
-            return
-        except OSError as exc:
-            await interaction.followup.send(f"❌ Stockage local : `{exc}`", ephemeral=True)
+            save_guild_config(guild.id, working_config)
+            config = working_config
+        except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError) as exc:
+            if 'tracked_roles' in locals():
+                for member in selected_members:
+                    try:
+                        await restore_role_presence(
+                            member, tracked_roles, original_presence.get(member.id, set()),
+                            reason="School Manager subject assignment rollback"
+                        )
+                    except discord.HTTPException:
+                        pass
+            if 'original_overwrites' in locals():
+                try:
+                    await channel.edit(overwrites=original_overwrites, reason="School Manager subject assignment rollback")
+                except discord.HTTPException:
+                    pass
+            if created_subject_role and subject_role is not None:
+                try:
+                    await subject_role.delete(reason="School Manager subject assignment rollback")
+                except discord.HTTPException:
+                    pass
+            if isinstance(exc, discord.Forbidden):
+                message = "❌ Permission refusée. Vérifie Manage Roles, Manage Channels et la hiérarchie."
+            elif isinstance(exc, discord.HTTPException):
+                message = f"❌ Discord API : `{exc}`"
+            elif isinstance(exc, OSError):
+                message = f"❌ Stockage local : `{exc}`"
+            else:
+                message = f"❌ Opération refusée : `{exc}`"
+            await interaction.followup.send(message, ephemeral=True)
             return
         subject_display = get_subject_display_name(curriculum_subject)
         mentions = ", ".join(member.mention for member in selected_members)
@@ -216,9 +264,10 @@ class TeacherCommands(commands.Cog):
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
-        channel = discord.utils.get(guild.text_channels, name=GENERAL_CHANNELS["absences"])
-        if channel is None:
-            await interaction.response.send_message("❌ Le salon d'absences n'existe pas. Lance `/build` après `/setup`.", ephemeral=True)
+        channel, _registry_repaired = await _find_managed_channel(
+            guild, GENERAL_CHANNELS["absences"], category_name="🏢・INFORMATIONS & ADMINISTRATION"
+        )
+        if channel is None:            await interaction.response.send_message("❌ Le salon d'absences n'existe pas. Lance `/build` après `/setup`.", ephemeral=True)
             return
         embed = discord.Embed(title="📢 Absence d'un professeur", description=f"**Professeur :** {teacher.mention}\n**Durée :** {duration}\n**Classes concernées :** {classes}\n**Date :** {date.today().isoformat()}", colour=discord.Colour.orange())
         try:
