@@ -175,7 +175,7 @@ def _apply_default_permission(function, *, manage_roles: bool = False, administr
     return function
 
 
-def management_check() -> app_commands.check:
+def management_check(*, lock: bool = True) -> app_commands.check:
     async def predicate(interaction: discord.Interaction) -> bool:
         guild = interaction.guild
         if guild is None:
@@ -203,12 +203,12 @@ def management_check() -> app_commands.check:
         function = check_decorator(function)
         # Authorization is intentionally enforced at runtime so the configured
         # Administration role is not blocked by Discord's user-permission gate.
-        return _wrap_with_mutation_lock(function)
+        return _wrap_with_mutation_lock(function) if lock else function
 
     return decorator
 
 
-def owner_only_check() -> app_commands.check:
+def owner_only_check(*, lock: bool = True) -> app_commands.check:
     async def predicate(interaction: discord.Interaction) -> bool:
         guild = interaction.guild
         if guild is None or interaction.user.id != guild.owner_id:
@@ -227,7 +227,7 @@ def owner_only_check() -> app_commands.check:
     def decorator(function):
         function = check_decorator(function)
         function = _apply_default_permission(function, administrator=True)
-        return _wrap_with_mutation_lock(function)
+        return _wrap_with_mutation_lock(function) if lock else function
 
     return decorator
 
