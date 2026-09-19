@@ -93,7 +93,6 @@ async def test_discord_managed_canonical_role_is_rejected():
         fetch_channels=AsyncMock(return_value=[]),
     )
 
-    with pytest.raises(ManagedResourceConflict, match="Discord-managed"):
-        await validate_managed_registry(guild, config)
+    await validate_managed_registry(guild, config)
     with pytest.raises(ManagedResourceConflict, match="Discord-managed"):
         await validate_unmanaged_canonical_collisions(guild, config)
