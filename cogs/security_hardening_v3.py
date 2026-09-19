@@ -20,6 +20,25 @@ def _managed_mapping(config: dict, section: str) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _validate_reset_role_hierarchy(guild: discord.Guild, role_ids: set[int]) -> str | None:
+    """Reject a reset before mutation when any managed role is above the bot."""
+    bot_member = guild.me
+    if bot_member is None:
+        return "Impossible de vérifier la hiérarchie du bot."
+    top_role = bot_member.top_role
+    for role_id in sorted(role_ids):
+        role = guild.get_role(role_id)
+        if role is None:
+            continue
+        if role.managed:
+            return "Le rôle géré %r est un rôle Discord-managed non supprimable." % role.name
+        if role.is_default():
+            return "Le rôle géré %r est @everyone et ne peut pas être supprimé." % role.name
+        if role >= top_role:
+            return "Le rôle géré %r est au-dessus ou au même niveau que le rôle du bot. Aucun reset ne sera exécuté tant que la hiérarchie n'est pas corrigée." % role.name
+    return None
+
+
 class HardenedResetCommands(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -49,6 +68,12 @@ class HardenedResetCommands(commands.Cog):
         role_ids = {value for value in _managed_mapping(config, "roles").values() if isinstance(value, int) and value > 0}
         channel_ids = {value for value in _managed_mapping(config, "channels").values() if isinstance(value, int) and value > 0}
         category_ids = {value for value in _managed_mapping(config, "categories").values() if isinstance(value, int) and value > 0}
+
+        hierarchy_error = _validate_reset_role_hierarchy(guild, role_ids)
+        if hierarchy_error:
+            await interaction.response.send_message(f"❌ Reset refusé : {hierarchy_error}", ephemeral=True)
+            return
+
         await interaction.response.send_message("🧹 **RESET SCHOOL MANAGER EN COURS...**", ephemeral=True)
         deleted_channels = deleted_categories = deleted_roles = retained_categories = 0
 
@@ -75,7 +100,7 @@ class HardenedResetCommands(commands.Cog):
                 top_role = guild.me.top_role if guild.me is not None else None
                 for role_id in sorted(role_ids):
                     role = guild.get_role(role_id)
-                    if role is None or role.managed or role.is_default() or (top_role is not None and role >= top_role):
+                    if role is None:
                         continue
                     await role.delete(reason="School Manager scoped reset")
                     deleted_roles += 1
