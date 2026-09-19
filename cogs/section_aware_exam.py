@@ -180,6 +180,7 @@ class SectionAwareExamCommands(commands.Cog):
         )
         embed.timestamp = discord.utils.utcnow()
 
+        message = None
         try:
             message = await channel.send(embed=embed)
             config.setdefault("managed", {}).setdefault("messages", {})[
@@ -187,6 +188,11 @@ class SectionAwareExamCommands(commands.Cog):
             ] = message.id
             save_guild_config(guild.id, config)
         except (discord.Forbidden, discord.HTTPException, OSError) as exc:
+            if message is not None:
+                try:
+                    await message.delete(reason="School Manager exam persistence rollback")
+                except discord.HTTPException:
+                    pass
             await interaction.followup.send(
                 f"❌ Publication impossible : `{type(exc).__name__}`",
                 ephemeral=True,
