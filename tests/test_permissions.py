@@ -141,7 +141,7 @@ async def test_mutations_are_blocked_while_removal_recovery_is_pending(monkeypat
     response = SimpleNamespace(is_done=lambda: False, send_message=noop)
     user = SimpleNamespace(id=123, roles=[admin])
     interaction = SimpleNamespace(guild=guild, user=user, response=response, command=SimpleNamespace(name="assignstudent"))
-    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {"pending_removal": {"level": "Tronc Commun", "stream": "TCS"}})
+    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {"management_role_id": 42, "managed": {"roles": {"Administration": 42}}, "pending_removal": {"level": "Tronc Commun", "stream": "TCS"}})
 
     @management_check(lock=False)
     async def dummy(_interaction):
@@ -167,7 +167,7 @@ async def test_owner_mutations_are_blocked_while_removal_recovery_is_pending(mon
     response = SimpleNamespace(is_done=lambda: False, send_message=noop)
     user = SimpleNamespace(id=999, roles=[])
     interaction = SimpleNamespace(guild=guild, user=user, response=response, command=SimpleNamespace(name="resetserver"))
-    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {"pending_removal": {"level": "Tronc Commun", "stream": "TCS"}})
+    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {"management_role_id": 42, "managed": {"roles": {"Administration": 42}}, "pending_removal": {"level": "Tronc Commun", "stream": "TCS"}})
 
     @owner_only_check(lock=False)
     async def dummy(_interaction):
@@ -194,7 +194,7 @@ async def test_read_only_status_remains_available_during_removal_recovery(monkey
     response = SimpleNamespace(is_done=lambda: False, send_message=noop)
     user = SimpleNamespace(id=123, roles=[admin])
     interaction = SimpleNamespace(guild=guild, user=user, response=response, command=SimpleNamespace(name="status"))
-    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {"pending_removal": {"level": "Tronc Commun", "stream": "TCS"}})
+    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {"management_role_id": 42, "managed": {"roles": {"Administration": 42}}, "pending_removal": {"level": "Tronc Commun", "stream": "TCS"}})
 
     @management_check(lock=False)
     async def dummy(_interaction):
