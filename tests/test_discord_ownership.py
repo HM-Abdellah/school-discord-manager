@@ -96,3 +96,61 @@ async def test_discord_managed_canonical_role_is_rejected():
     await validate_managed_registry(guild, config)
     with pytest.raises(ManagedResourceConflict, match="Discord-managed"):
         await validate_unmanaged_canonical_collisions(guild, config)
+
+
+def test_managed_category_rejects_wrong_live_resource_type(monkeypatch):
+    from services import discord_ownership as ownership
+
+    class FakeCategory:
+        type = object()
+
+    class FakeText:
+        type = object()
+
+    monkeypatch.setattr(ownership.discord, "CategoryChannel", FakeCategory)
+    monkeypatch.setattr(ownership.discord, "TextChannel", FakeText)
+    monkeypatch.setattr(ownership.discord, "VoiceChannel", FakeText)
+
+    config = {"managed": {"categories": {"School": 10}}}
+    guild = SimpleNamespace(
+        roles=[],
+        channels=[FakeText()],
+        fetch_channels=AsyncMock(return_value=[]),
+    )
+    guild.channels[0].id = 10
+    guild.channels[0].name = "School"
+
+    with pytest.raises(ManagedResourceConflict, match="non-category"):
+        import asyncio
+        asyncio.run(validate_managed_registry(guild, config))
+
+
+def test_managed_text_channel_rejects_wrong_live_resource_type(monkeypatch):
+    from services import discord_ownership as ownership
+
+    class FakeCategory:
+        type = object()
+
+    class FakeVoice:
+        type = object()
+
+    class FakeText:
+        type = object()
+
+    monkeypatch.setattr(ownership.discord, "CategoryChannel", FakeCategory)
+    monkeypatch.setattr(ownership.discord, "TextChannel", FakeText)
+    monkeypatch.setattr(ownership.discord, "VoiceChannel", FakeVoice)
+
+    config = {"managed": {"channels": {"📌-TCS・informations": 20}}}
+    live = FakeVoice()
+    live.id = 20
+    live.name = "📌-TCS・informations"
+    guild = SimpleNamespace(
+        roles=[],
+        channels=[live],
+        fetch_channels=AsyncMock(return_value=[live]),
+    )
+
+    with pytest.raises(ManagedResourceConflict, match="non-text"):
+        import asyncio
+        asyncio.run(validate_managed_registry(guild, config))
