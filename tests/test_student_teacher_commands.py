@@ -60,3 +60,57 @@ def test_teacher_mentions_are_deduplicated_by_member_id():
         if member_id not in unique_ids:
             unique_ids.append(member_id)
     assert unique_ids == [101, 202]
+
+
+
+@pytest.mark.asyncio
+async def test_legacy_subject_role_migration_can_scan_config_without_runtime_name_error(monkeypatch):
+    from cogs.command_fixes import _migrate_legacy_subject_roles
+
+    config = {
+        "levels": [
+            {
+                "name": "Tronc Commun",
+                "streams": [
+                    {
+                        "name": "Tronc Commun Scientifique",
+                        "abbreviation": "TCS",
+                    }
+                ],
+            }
+        ]
+    }
+    guild = SimpleNamespace(id=123, roles=[], channels=[])
+    member = SimpleNamespace(roles=[])
+
+    monkeypatch.setattr("cogs.command_fixes.get_guild_config", lambda _guild_id: config)
+
+    migrated = await _migrate_legacy_subject_roles(guild, member, config)
+
+    assert migrated == []
+
+
+@pytest.mark.asyncio
+async def test_global_subject_role_refuses_unmanaged_same_name_collision(monkeypatch):
+    from cogs.command_fixes import _get_or_create_global_subject_role
+
+    existing = SimpleNamespace(name="Matière - Mathématiques", id=777, managed=False)
+    guild = SimpleNamespace(
+        id=123,
+        roles=[existing],
+        create_role=AsyncMock(),
+    )
+
+    monkeypatch.setattr(
+        "cogs.command_fixes.get_managed_role",
+        lambda _guild, _name: None,
+    )
+
+    with pytest.raises(RuntimeError, match="Unmanaged role collision"):
+        await _get_or_create_global_subject_role(
+            guild,
+            {"managed": {"roles": {}}},
+            "Mathématiques",
+        )
+
+    guild.create_role.assert_not_awaited()
