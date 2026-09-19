@@ -216,7 +216,7 @@ async def test_student_visibility_mutation_uses_only_persisted_managed_channel_i
         },
     }
     guild = SimpleNamespace(id=123, get_channel=lambda resource_id: channels.get(resource_id))
-    student_role = SimpleNamespace(id=501)
+    student_role = object()
 
     monkeypatch.setattr("cogs.students.get_guild_config", lambda _guild_id: config)
     monkeypatch.setattr(students_module.discord, "TextChannel", FakeChannel)
