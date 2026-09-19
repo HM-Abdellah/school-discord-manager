@@ -26,8 +26,6 @@ from services.permissions import (
     ROLE_ADMIN,
     ROLE_PROFESSOR,
     ROLE_PROFESSOR_FEMALE,
-    ROLE_STUDENT,
-    STUDENT_STREAM_ROLE_PREFIX,
     get_managed_role,
     management_check,
     professor_subject_member_overwrite,
