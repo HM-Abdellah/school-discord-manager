@@ -23,6 +23,17 @@ SUBJECT_ROLE_PREFIX = "Matière - "
 CHANNEL_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream"}
 ROLE_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream", "assignstudent", "assignteacher", "assignteacherfull", "assignsubjectteachers"}
 RESET_COMMANDS = {"resetserver"}
+READONLY_DURING_PENDING_REMOVAL = {"status", "years", "studenthistory", "adminpanel", "serverhealth"}
+PENDING_REMOVAL_KEY = "pending_removal"
+
+
+def _pending_removal_message(guild: discord.Guild, command_name: str) -> str | None:
+    config = get_guild_config(guild.id) or {}
+    if not isinstance(config, dict) or PENDING_REMOVAL_KEY not in config:
+        return None
+    if command_name == "removestream" or command_name in READONLY_DURING_PENDING_REMOVAL:
+        return None
+    return "❌ Une suppression de filière est interrompue. Reprends d'abord /removestream pour rétablir un état cohérent avant toute autre modification."
 
 
 def _bot_member(guild: discord.Guild) -> discord.Member | None:
@@ -185,6 +196,11 @@ def management_check(*, lock: bool = True) -> app_commands.check:
                 await interaction.response.send_message("❌ Outil réservé au propriétaire du serveur ou au rôle Administration configuré.", ephemeral=True)
             return False
         command_name = interaction.command.name if interaction.command else ""
+        pending_message = _pending_removal_message(guild, command_name)
+        if pending_message:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(pending_message, ephemeral=True)
+            return False
         if command_name in RESET_COMMANDS or command_name in CHANNEL_MANAGEMENT_COMMANDS:
             message = _preflight_message(interaction, needs_channels=True, needs_roles=True)
         elif command_name in ROLE_MANAGEMENT_COMMANDS:
@@ -214,6 +230,12 @@ def owner_only_check(*, lock: bool = True) -> app_commands.check:
         if guild is None or interaction.user.id != guild.owner_id:
             if not interaction.response.is_done():
                 await interaction.response.send_message("❌ Cette commande est réservée au propriétaire du serveur.", ephemeral=True)
+            return False
+        command_name = interaction.command.name if interaction.command else ""
+        pending_message = _pending_removal_message(guild, command_name)
+        if pending_message:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(pending_message, ephemeral=True)
             return False
         message = _preflight_message(interaction, needs_channels=True, needs_roles=True)
         if message:
