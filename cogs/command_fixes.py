@@ -146,7 +146,16 @@ async def _get_or_create_global_subject_role(guild: discord.Guild, config: dict,
     managed[role_name] = role.id
     return role
 
-async def _migrate_legacy_subject_roles(guild: discord.Guild, member: discord.Member, config: dict) -> list[str]:
+async def _migrate_legacy_subject_roles(
+    guild: discord.Guild,
+    member: discord.Member,
+    config: dict,
+) -> tuple[
+    list[str],
+    list[discord.Role],
+    list[discord.Role],
+    list[tuple[discord.abc.GuildChannel, discord.Role, discord.PermissionOverwrite | None]],
+]:
     legacy_map: dict[str, str] = {}
     for level_name, stream_name, code in _configured_streams(guild):
         for subject in get_stream_subjects(level_name, stream_name):
@@ -154,7 +163,7 @@ async def _migrate_legacy_subject_roles(guild: discord.Guild, member: discord.Me
 
     old_roles = [role for role in member.roles if not role.managed and role.name in legacy_map]
     if not old_roles:
-        return []
+        return [], [], [], []
 
     migrated: list[str] = []
     new_roles: list[discord.Role] = []
@@ -218,7 +227,9 @@ async def _migrate_legacy_subject_roles(guild: discord.Guild, member: discord.Me
             except discord.HTTPException:
                 pass
         raise
-    return migrated
+    tracked_roles = list(old_roles) + [role for role in new_roles if role not in old_roles]
+    return migrated, created_roles, tracked_roles, original_permissions
+
 
 class CommandFixes(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
@@ -256,11 +267,22 @@ class CommandFixes(commands.Cog):
         config = get_guild_config(guild.id) or {}
         working_config = deepcopy(config)
         tracked_roles = [role for role in (desired_role, other_role, stream_role) if role is not None]
-        original_presence = snapshot_role_presence(teacher, tracked_roles)
+        initial_role_ids = {role.id for role in teacher.roles}
         created_subject_roles: list[discord.Role] = []
         subject_roles: list[discord.Role] = []
+        migration_permission_backups: list[
+            tuple[discord.abc.GuildChannel, discord.Role, discord.PermissionOverwrite | None]
+        ] = []
         try:
-            migrated = await _migrate_legacy_subject_roles(guild, teacher, working_config)
+            migrated, migration_created_roles, migration_tracked_roles, migration_permission_backups = await _migrate_legacy_subject_roles(
+                guild, teacher, working_config
+            )
+            for role in migration_tracked_roles:
+                if role not in tracked_roles:
+                    tracked_roles.append(role)
+            for role in migration_created_roles:
+                if role not in created_subject_roles:
+                    created_subject_roles.append(role)
             for subject in selected:
                 role_name = _global_subject_role_name(subject)
                 managed_roles = working_config.get("managed", {}).get("roles", {}) if isinstance(working_config.get("managed"), dict) else {}
@@ -269,8 +291,9 @@ class CommandFixes(commands.Cog):
                 if not isinstance(before_id, int) or before_id <= 0:
                     created_subject_roles.append(role)
                 subject_roles.append(role)
-            tracked_roles.extend(subject_roles)
-            original_presence = snapshot_role_presence(teacher, tracked_roles)
+            for role in subject_roles:
+                if role not in tracked_roles:
+                    tracked_roles.append(role)
             if desired_role not in teacher.roles:
                 await teacher.add_roles(desired_role, reason="School Manager full teacher assignment")
             await teacher.add_roles(stream_role, *subject_roles, reason="School Manager full teacher assignment")
@@ -281,10 +304,20 @@ class CommandFixes(commands.Cog):
         except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError) as exc:
             try:
                 await restore_role_presence(
-                    teacher, tracked_roles, original_presence, reason="School Manager full teacher assignment rollback"
+                    teacher, tracked_roles, initial_role_ids,
+                    reason="School Manager full teacher assignment rollback"
                 )
             except discord.HTTPException:
                 pass
+            for channel, role, overwrite in reversed(migration_permission_backups):
+                try:
+                    await channel.set_permissions(
+                        role,
+                        overwrite=overwrite,
+                        reason="School Manager legacy role migration rollback",
+                    )
+                except discord.HTTPException:
+                    pass
             for created_role in reversed(created_subject_roles):
                 try:
                     await created_role.delete(reason="School Manager full teacher assignment rollback")
