@@ -160,3 +160,8 @@ def test_bot_startup_has_no_runtime_fix_dependency():
     source = Path("bot.py").read_text(encoding="utf-8")
     assert "runtime_fixes" not in source
     assert "apply_runtime_fixes" not in source
+
+
+def test_setup_build_callback_rechecks_current_management_authorization():
+    source = Path("cogs/setup.py").read_text(encoding="utf-8")
+    assert "if not management_authorized(interaction):" in source
