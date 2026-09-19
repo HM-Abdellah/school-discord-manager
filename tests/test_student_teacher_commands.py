@@ -248,3 +248,61 @@ def test_teacher_conflict_ignores_unmanaged_same_name_student_stream_role(monkey
     monkeypatch.setattr("services.role_conflicts.get_managed_role", lambda _guild, name: None)
 
     assert teacher_target_conflict(member, guild) is None
+
+
+@pytest.mark.asyncio
+async def test_legacy_subject_role_migration_touches_only_managed_channels(monkeypatch):
+    from cogs.command_fixes import _migrate_legacy_subject_roles
+
+    class FakeRole:
+        def __init__(self, role_id, name):
+            self.id = role_id
+            self.name = name
+            self.managed = False
+
+        def __hash__(self):
+            return hash(self.id)
+
+        def __eq__(self, other):
+            return isinstance(other, FakeRole) and self.id == other.id
+
+    class FakeChannel:
+        def __init__(self, channel_id, old_role, managed):
+            self.id = channel_id
+            self.overwrites = {old_role: object()}
+            self.set_permissions = AsyncMock()
+            self.managed = managed
+
+    old_role = FakeRole(101, "Matière - TCS - MAT")
+    new_role = FakeRole(202, "Matière - Mathématiques")
+    managed_channel = FakeChannel(10, old_role, True)
+    unmanaged_channel = FakeChannel(20, old_role, False)
+    guild = SimpleNamespace(
+        id=123,
+        channels=[managed_channel, unmanaged_channel],
+    )
+    member = FakeMember([old_role])
+    config = {
+        "levels": [
+            {
+                "name": "Tronc Commun",
+                "streams": [
+                    {
+                        "name": "Tronc Commun Scientifique",
+                        "abbreviation": "TCS",
+                    }
+                ],
+            }
+        ],
+        "managed": {"channels": {"managed": 10}, "roles": {}},
+    }
+
+    async def fake_get_or_create(_guild, _config, _subject):
+        return new_role
+
+    monkeypatch.setattr("cogs.command_fixes._get_or_create_global_subject_role", fake_get_or_create)
+
+    await _migrate_legacy_subject_roles(guild, member, config)
+
+    managed_channel.set_permissions.assert_awaited_once()
+    unmanaged_channel.set_permissions.assert_not_awaited()
