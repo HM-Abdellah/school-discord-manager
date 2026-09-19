@@ -5,8 +5,13 @@ import discord
 from e2e.state import capture_permission_overwrites, diff_snapshots
 
 
-def test_permission_overwrites_are_captured_as_deterministic_bitmasks():
-    role = SimpleNamespace(id=42)
+def test_permission_overwrites_are_captured_as_deterministic_bitmasks(monkeypatch):
+    class FakeRole:
+        def __init__(self, role_id):
+            self.id = role_id
+
+    monkeypatch.setattr("e2e.state.discord.Role", FakeRole)
+    role = FakeRole(42)
     overwrite = discord.PermissionOverwrite(view_channel=True, send_messages=False)
     channel = SimpleNamespace(overwrites={role: overwrite})
 
