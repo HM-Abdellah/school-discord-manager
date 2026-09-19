@@ -536,7 +536,7 @@ class SafeRemoveStream(commands.Cog):
                 config.clear()
                 config.update(candidate)
         except (discord.Forbidden, discord.HTTPException, discord.NotFound, OSError, RuntimeError) as exc:
-            await interaction.followup.send(f"❌ Suppression interrompue : `{type(exc).__name__}`. Le journal de reprise a été conservé; aucun target جديد لن يتم اكتشافه بالاسم.", ephemeral=True)
+            await interaction.followup.send(f"❌ Suppression interrompue : `{type(exc).__name__}`. Le journal de reprise a été conservé; aucune nouvelle target ne sera découverte par son nom.", ephemeral=True)
             return
 
         await interaction.followup.send(f"✅ **{code}** supprimée. Les ressources gérées encore présentes ont été supprimées et les ressources déjà absentes ont été considérées comme déjà supprimées; les salons non gérés ont été conservés.", ephemeral=True)
