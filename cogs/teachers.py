@@ -81,10 +81,6 @@ async def _find_managed_channel(guild: discord.Guild, expected_name: str, *, cat
     )
 
 
-def _member_has_school_student_role(member: discord.Member) -> bool:
-    return any(role.name == ROLE_STUDENT or role.name.startswith(STUDENT_STREAM_ROLE_PREFIX) for role in member.roles if not role.managed)
-
-
 class TeacherCommands(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -101,9 +97,6 @@ class TeacherCommands(commands.Cog):
         conflict = teacher_target_conflict(teacher, guild)
         if conflict:
             await interaction.response.send_message(conflict, ephemeral=True)
-            return
-        if _member_has_school_student_role(teacher):
-            await interaction.response.send_message("❌ Cet utilisateur possède encore un rôle **Élève**. Retire d'abord son rôle élève, puis relance l'affectation professeur.", ephemeral=True)
             return
         role_name = ROLE_PROFESSOR_FEMALE if gender.value == "female" else ROLE_PROFESSOR
         role = get_managed_role(guild, role_name)
@@ -191,7 +184,7 @@ class TeacherCommands(commands.Cog):
                 seen_ids.add(member.id)
                 selected_members.append(member)
         prof_role_ids = {role.id for role in (get_managed_role(guild, ROLE_PROFESSOR), get_managed_role(guild, ROLE_PROFESSOR_FEMALE)) if role is not None}
-        invalid = [member for member in selected_members if _member_has_school_student_role(member) or not any(role.id in prof_role_ids for role in member.roles)]
+        invalid = [member for member in selected_members if not any(role.id in prof_role_ids for role in member.roles)]
         if invalid:
             names = ", ".join(member.display_name for member in invalid)
             await interaction.response.send_message(f"❌ Ces membres ne sont pas des professeurs valides (ou possèdent encore un rôle Élève) : {names}", ephemeral=True)
