@@ -7,7 +7,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from services.audit import recent_events
-from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, _preflight_message, management_check
+from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, _preflight_message, get_managed_role, management_check
 from services.storage import get_guild_config, list_academic_years
 
 
@@ -28,8 +28,25 @@ class AdminCommands(commands.Cog):
         config = get_guild_config(guild.id) or {}
         years = list_academic_years(guild.id)
         active_year = next((row["name"] for row in years if row["is_active"]), config.get("academic_year", "—"))
-        students = sum(1 for member in guild.members if any(role.name == "Élève" for role in member.roles))
-        teachers = sum(1 for member in guild.members if any(role.name in {ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE} for role in member.roles))
+        student_role = get_managed_role(guild, "Élève")
+        professor_roles = {
+            role
+            for role in (
+                get_managed_role(guild, ROLE_PROFESSOR),
+                get_managed_role(guild, ROLE_PROFESSOR_FEMALE),
+            )
+            if role is not None
+        }
+        students = sum(
+            1
+            for member in guild.members
+            if student_role is not None and student_role in member.roles
+        )
+        teachers = sum(
+            1
+            for member in guild.members
+            if any(role in professor_roles for role in member.roles)
+        )
         streams = sum(len(level.get("streams", [])) for level in config.get("levels", []))
         events = recent_events(guild.id, 5)
         recent = "\n".join(f"• `{event['action']}` — {event['target'] or '—'}" for event in events) or "Aucune action enregistrée."
