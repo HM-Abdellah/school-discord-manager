@@ -112,10 +112,13 @@ def test_managed_category_rejects_wrong_live_resource_type(monkeypatch):
     monkeypatch.setattr(ownership.discord, "VoiceChannel", FakeText)
 
     config = {"managed": {"categories": {"School": 10}}}
+    live = FakeText()
+    live.id = 10
+    live.name = "School"
     guild = SimpleNamespace(
         roles=[],
-        channels=[FakeText()],
-        fetch_channels=AsyncMock(return_value=[]),
+        channels=[live],
+        fetch_channels=AsyncMock(return_value=[live]),
     )
     guild.channels[0].id = 10
     guild.channels[0].name = "School"
