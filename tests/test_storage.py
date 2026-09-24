@@ -133,6 +133,7 @@ def test_json_cache_failure_after_database_commit_does_not_lose_configuration(tm
     old_config = {"academic_year": "2025/2026", "levels": []}
     new_config = {"academic_year": "2026/2027", "levels": []}
     storage.save_guild_config(1, old_config)
+    storage.create_and_activate_academic_year(1, "2026/2027", new_config)
 
     monkeypatch.setattr(storage, "save_all", lambda _data: (_ for _ in ()).throw(OSError("simulated JSON cache failure")))
     storage.save_guild_config(1, new_config)
