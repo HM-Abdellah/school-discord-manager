@@ -84,7 +84,7 @@ class HardenedResetCommands(commands.Cog):
                 archive_name = archive_path.name
             except (OSError, sqlite3.Error) as exc:
                 await interaction.response.send_message(
-                    f"❌ Reset refusé : impossible de créer l`archive de l`année active (`{type(exc).__name__}: {exc}`). Aucun resource Discord n`a été supprimé.",
+                    f"❌ Reset refusé : impossible de créer l'archive de l'année active (`{type(exc).__name__}: {exc}`). Aucun resource Discord n'a été supprimé.",
                     ephemeral=True,
                 )
                 return
