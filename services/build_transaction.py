@@ -16,6 +16,7 @@ import discord
 
 from services.discord_ownership import (
     validate_managed_registry,
+    validate_managed_registry_completeness,
     validate_unmanaged_canonical_collisions,
 )
 from services.server_builder import ServerBuilder
@@ -178,6 +179,7 @@ async def build_and_persist(
 
     try:
         stats = await builder.build(working_config)
+        validate_managed_registry_completeness(working_config)
         save_guild_config(guild.id, working_config)
     except Exception:
         await builder.rollback()
