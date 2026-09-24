@@ -164,7 +164,7 @@ def test_stale_json_cache_is_ignored_after_restart_when_database_is_newer(tmp_pa
 
 def test_archive_guild_database_survives_reset_and_records_active_year(tmp_path, monkeypatch):
     _configure_storage(tmp_path, monkeypatch)
-    year_id = storage.create_and_activate_academic_year(
+    storage.create_and_activate_academic_year(
         1,
         "2026/2027",
         {
@@ -177,6 +177,9 @@ def test_archive_guild_database_survives_reset_and_records_active_year(tmp_path,
             ],
         },
     )
+    active_year = storage.get_active_academic_year(1)
+    assert active_year is not None
+    year_id = int(active_year["id"])
     with storage._connect() as conn:
         student_id = conn.execute(
             "INSERT INTO students(guild_id,discord_id,display_name,created_at) VALUES(1,99,'Student','2026-09-01')"
