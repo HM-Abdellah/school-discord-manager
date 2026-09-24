@@ -35,14 +35,23 @@ def _resolve_subject_channel(channel: discord.abc.GuildChannel) -> tuple[str, st
 
 
 async def _all_public_threads(channel: discord.TextChannel) -> list[discord.Thread]:
-    """Return active and archived public threads visible to the bot."""
-    threads: dict[int, discord.Thread] = {thread.id: thread for thread in channel.threads}
+    """Return active and archived public threads.
+
+    The archived-thread query is part of the idempotency check. If Discord does
+    not let us inspect the archive, fail closed instead of risking duplicates.
+    """
+    threads: dict[int, discord.Thread] = {
+        thread.id: thread
+        for thread in channel.threads
+        if thread.type == discord.ChannelType.public_thread
+    }
 
     try:
         async for thread in channel.archived_threads(limit=None):
-            threads[thread.id] = thread
+            if thread.type == discord.ChannelType.public_thread:
+                threads[thread.id] = thread
     except (discord.Forbidden, discord.HTTPException):
-        pass
+        raise
 
     return list(threads.values())
 
@@ -81,7 +90,16 @@ class SectionThreads(commands.Cog):
             return
 
         level, stream, subject = resolved
-        existing = await _all_public_threads(channel)
+
+        try:
+            existing = await _all_public_threads(channel)
+        except (discord.Forbidden, discord.HTTPException):
+            await interaction.response.send_message(
+                "❌ Impossible de vérifier les threads archivés de ce salon. Aucun nouveau thread n'a été créé.",
+                ephemeral=True,
+            )
+            return
+
         existing_names = {thread.name for thread in existing}
         missing_names = [
             f"Section {number}"
