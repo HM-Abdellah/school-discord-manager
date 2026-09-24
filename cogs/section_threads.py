@@ -20,7 +20,7 @@ MAX_SECTIONS = 20
 
 def _resolve_subject_channel(channel: discord.abc.GuildChannel) -> tuple[str, str, str] | None:
     """Return (level, stream, subject) when the channel is a managed subject channel."""
-    if not isinstance(channel, discord.TextChannel) or channel.category is None:
+    if channel.category is None:
         return None
 
     for level in get_levels():
