@@ -186,3 +186,47 @@ async def test_build_rejects_while_stream_removal_is_pending(monkeypatch):
 
     with pytest.raises(ValueError, match="suppression de filière est interrompue"):
         await build_transaction.build_and_persist(SimpleNamespace(id=123), candidate)
+
+
+def test_channel_registry_completeness_accepts_discord_lowercased_keys():
+    from services.discord_ownership import (
+        _expected_canonical_names,
+        _name_key,
+        validate_managed_registry_completeness,
+    )
+
+    config = {
+        "academic_year": "2026/2027",
+        "levels": [
+            {
+                "name": "Tronc Commun",
+                "streams": [
+                    {
+                        "name": "Tronc Commun Scientifique",
+                        "abbreviation": "TCS",
+                    }
+                ],
+            }
+        ],
+        "managed": {
+            "roles": {},
+            "categories": {},
+            "channels": {},
+        },
+    }
+
+    role_names, category_names, channel_names = _expected_canonical_names(config)
+    config["managed"]["roles"] = {
+        name: index
+        for index, name in enumerate(sorted(role_names), start=1000)
+    }
+    config["managed"]["categories"] = {
+        name: index
+        for index, name in enumerate(sorted(category_names), start=2000)
+    }
+    config["managed"]["channels"] = {
+        _name_key(name): index
+        for index, name in enumerate(sorted(channel_names), start=3000)
+    }
+
+    validate_managed_registry_completeness(config)
