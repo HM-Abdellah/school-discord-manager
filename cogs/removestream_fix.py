@@ -56,8 +56,23 @@ def _managed_mapping(config: dict, section: str) -> dict[str, object]:
 
 
 def _recorded_id(config: dict, section: str, name: str) -> int | None:
-    value = _managed_mapping(config, section).get(name)
-    return value if isinstance(value, int) and value > 0 else None
+    mapping = _managed_mapping(config, section)
+
+    value = mapping.get(name)
+    if isinstance(value, int) and value > 0:
+        return value
+
+    # Discord normalizes text-channel names to lowercase. Resolve the persisted
+    # key using the same NFKC + casefold contract used by ownership validation.
+    wanted = _norm(name)
+    matches = [
+        item_value
+        for item_name, item_value in mapping.items()
+        if _norm(str(item_name)) == wanted
+        and isinstance(item_value, int)
+        and item_value > 0
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _norm(value: str) -> str:
