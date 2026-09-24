@@ -37,6 +37,7 @@ from services.server_builder import (
     _subject_channel_name,
 )
 from services.storage import (
+    create_and_activate_academic_year,
     get_active_academic_year,
     get_guild_config,
     list_academic_years,
@@ -500,6 +501,7 @@ class ServerCommands(commands.Cog):
             ephemeral=True,
         )
 
+
     @app_commands.command(
         name="newyear",
         description="Créer une nouvelle année scolaire et la rendre active.",
@@ -521,27 +523,47 @@ class ServerCommands(commands.Cog):
                 ephemeral=True,
             )
             return
+
         active = get_active_academic_year(guild.id)
-        if active is not None and str(active["name"]) == year:
+        if active is not None:
+            active_name = str(active["name"])
+            if active_name == year:
+                await interaction.response.send_message(
+                    f"ℹ️ **{year}** est déjà l'année scolaire active.",
+                    ephemeral=True,
+                )
+                return
+            active_parts = tuple(int(part) for part in active_name.split("/"))
+            requested_parts = tuple(int(part) for part in year.split("/"))
+            if requested_parts <= active_parts:
+                await interaction.response.send_message(
+                    f"❌ **{year}** n'est pas une nouvelle année scolaire. Utilise `/rollbackyear` pour revenir vers une année antérieure.",
+                    ephemeral=True,
+                )
+                return
+
+        if any(str(row["name"]) == year for row in list_academic_years(guild.id)):
             await interaction.response.send_message(
-                f"ℹ️ **{year}** est déjà l'année scolaire active.",
+                f"❌ **{year}** est déjà enregistrée comme année scolaire. Utilise `/rollbackyear` si tu veux l'activer.",
                 ephemeral=True,
             )
             return
 
         config = deepcopy(get_guild_config(guild.id) or {"levels": []})
         config["academic_year"] = year
+
         await interaction.response.defer(ephemeral=True)
         try:
-            save_guild_config(guild.id, config)
-        except OSError as exc:
+            create_and_activate_academic_year(guild.id, year, config)
+        except (ValueError, OSError) as exc:
             await interaction.followup.send(
                 f"❌ Impossible d'enregistrer l'année scolaire : `{exc}`",
                 ephemeral=True,
             )
             return
+
         await interaction.followup.send(
-            f"✅ **{year}** est maintenant l'année scolaire active.",
+            f"✅ **{year}** est maintenant l'année scolaire active. La structure Discord existante reste inchangée.",
             ephemeral=True,
         )
 
