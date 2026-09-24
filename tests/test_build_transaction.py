@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import services.build_transaction as build_transaction
+from services.discord_ownership import ManagedResourceConflict
 
 
 class _FakeBuilder:
@@ -33,6 +34,7 @@ async def test_build_and_persist_commits_working_config_only_after_build_success
 
     monkeypatch.setattr(build_transaction, "TransactionalServerBuilder", _FakeBuilder)
     monkeypatch.setattr(build_transaction, "validate_managed_registry", _no_conflict)
+    monkeypatch.setattr(build_transaction, "validate_managed_registry_completeness", lambda _config: None)
     monkeypatch.setattr(build_transaction, "get_guild_config", lambda _guild_id: None)
 
     def fake_save(guild_id, config):
@@ -50,12 +52,31 @@ async def test_build_and_persist_commits_working_config_only_after_build_success
 
 
 @pytest.mark.asyncio
+async def test_incomplete_managed_registry_blocks_persistence_and_rolls_back(monkeypatch):
+    original = {"academic_year": "2026/2027", "levels": []}
+    builder = _FakeBuilder(SimpleNamespace(id=123))
+    saved = AsyncMock()
+
+    monkeypatch.setattr(build_transaction, "TransactionalServerBuilder", lambda guild: builder)
+    monkeypatch.setattr(build_transaction, "validate_managed_registry", _no_conflict)
+    monkeypatch.setattr(build_transaction, "save_guild_config", saved)
+
+    with pytest.raises(ManagedResourceConflict, match="Managed registry incomplete after build"):
+        await build_transaction.build_and_persist(SimpleNamespace(id=123), original)
+
+    saved.assert_not_awaited()
+    builder.rollback.assert_awaited_once()
+    assert original == {"academic_year": "2026/2027", "levels": []}
+
+
+@pytest.mark.asyncio
 async def test_build_failure_rolls_back_and_does_not_mutate_caller_config(monkeypatch):
     original = {"academic_year": "2026/2027", "levels": []}
     saved = AsyncMock()
 
     monkeypatch.setattr(build_transaction, "TransactionalServerBuilder", _FailingBuilder)
     monkeypatch.setattr(build_transaction, "validate_managed_registry", _no_conflict)
+    monkeypatch.setattr(build_transaction, "validate_managed_registry_completeness", lambda _config: None)
     monkeypatch.setattr(build_transaction, "get_guild_config", lambda _guild_id: None)
     monkeypatch.setattr(build_transaction, "save_guild_config", saved)
 
@@ -73,6 +94,7 @@ async def test_persistence_failure_rolls_back_discord_and_does_not_commit_config
 
     monkeypatch.setattr(build_transaction, "TransactionalServerBuilder", lambda guild: builder)
     monkeypatch.setattr(build_transaction, "validate_managed_registry", _no_conflict)
+    monkeypatch.setattr(build_transaction, "validate_managed_registry_completeness", lambda _config: None)
     monkeypatch.setattr(build_transaction, "get_guild_config", lambda _guild_id: None)
 
     def fail_save(guild_id, config):
