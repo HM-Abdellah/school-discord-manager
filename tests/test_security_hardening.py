@@ -167,3 +167,9 @@ def test_reset_role_hierarchy_fails_before_mutation():
     message = _validate_reset_role_hierarchy(guild, {55})
     assert message is not None
     assert "hiérarchie" in message
+
+
+def test_reset_archives_before_discord_deletion():
+    source = open("cogs/security_hardening_v3.py", encoding="utf-8").read()
+    assert "archive_path = archive_guild_database" in source
+    assert source.index("archive_path = archive_guild_database") < source.index("await channel.delete")
