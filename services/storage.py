@@ -255,22 +255,35 @@ def _academic_year_key(year: str | None) -> tuple[int, int] | None:
 
 
 def save_guild_config(guild_id: int, config: dict[str, Any]) -> None:
-    """Atomically commit logical configuration to SQLite, then refresh JSON cache."""
-    initialize_database()
-    previous_config = get_guild_config(guild_id)
-    previous_year = previous_config.get("academic_year") if isinstance(previous_config, dict) else None
-    requested_year = config.get("academic_year") if isinstance(config, dict) else None
-    previous_key = _academic_year_key(previous_year)
-    requested_key = _academic_year_key(requested_year)
-    if previous_key is not None and requested_key is not None and requested_key < previous_key:
-        raise OSError(
-            f"Impossible de revenir de {previous_year} à {requested_year}. "
-            "Une nouvelle année scolaire doit être postérieure à l'année active actuelle."
-        )
+    """Commit current deployment config without changing the active academic year.
 
+    The active academic year is authoritative in the academic_years table.
+    The config's academic_year field is only a compatibility mirror.
+    """
+    initialize_database()
     config_copy = deepcopy(config)
+
     with _connect() as conn:
         try:
+            active = conn.execute(
+                "SELECT * FROM academic_years WHERE guild_id=? AND is_active=1 ORDER BY id DESC LIMIT 1",
+                (guild_id,),
+            ).fetchone()
+            if active is None:
+                requested_year = config_copy.get("academic_year") or f"{date.today().year}/{date.today().year + 1}"
+                conn.execute(
+                    "INSERT INTO academic_years(guild_id,name,is_active,created_at) VALUES(?,?,1,?)",
+                    (guild_id, requested_year, date.today().isoformat()),
+                )
+                active = conn.execute(
+                    "SELECT * FROM academic_years WHERE guild_id=? AND name=?",
+                    (guild_id, requested_year),
+                ).fetchone()
+
+            if active is None:
+                raise OSError("Impossible de déterminer l'année scolaire active.")
+
+            config_copy["academic_year"] = str(active["name"])
             _sync_configuration_to_database_conn(conn, guild_id, config_copy)
             _upsert_config_conn(conn, guild_id, config_copy)
             conn.commit()
@@ -278,7 +291,6 @@ def save_guild_config(guild_id: int, config: dict[str, Any]) -> None:
             conn.rollback()
             raise
     _refresh_json_cache()
-
 
 def delete_guild_config(guild_id: int) -> None:
     initialize_database()
@@ -462,6 +474,75 @@ def create_academic_year(guild_id: int, name: str, *, activate: bool = True) -> 
     return ensure_academic_year(guild_id, name, active=activate)
 
 
+def activate_academic_year(
+    guild_id: int,
+    name: str,
+    *,
+    config: dict[str, Any] | None = None,
+) -> None:
+    """Atomically switch the logical active academic year without mutating Discord."""
+    initialize_database()
+    config_copy = deepcopy(config) if isinstance(config, dict) else None
+    with _connect() as conn:
+        try:
+            target = conn.execute(
+                "SELECT * FROM academic_years WHERE guild_id=? AND name=? LIMIT 1",
+                (guild_id, name),
+            ).fetchone()
+            if target is None:
+                raise ValueError(f"L'année {name} n'est pas enregistrée.")
+
+            conn.execute("UPDATE academic_years SET is_active=0 WHERE guild_id=?", (guild_id,))
+            conn.execute(
+                "UPDATE academic_years SET is_active=1 WHERE guild_id=? AND id=?",
+                (guild_id, int(target["id"])),
+            )
+
+            if config_copy is not None:
+                config_copy["academic_year"] = name
+                _sync_configuration_to_database_conn(conn, guild_id, config_copy)
+                _upsert_config_conn(conn, guild_id, config_copy)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    _refresh_json_cache()
+
+
+def create_and_activate_academic_year(
+    guild_id: int,
+    name: str,
+    config: dict[str, Any] | None = None,
+) -> None:
+    """Create a new year and activate it atomically with its logical stream snapshot."""
+    initialize_database()
+    config_copy = deepcopy(config) if isinstance(config, dict) else {"levels": []}
+    config_copy["academic_year"] = name
+
+    with _connect() as conn:
+        try:
+            existing = conn.execute(
+                "SELECT id FROM academic_years WHERE guild_id=? AND name=? LIMIT 1",
+                (guild_id, name),
+            ).fetchone()
+            if existing is not None:
+                raise ValueError(f"L'année {name} est déjà enregistrée.")
+
+            conn.execute("UPDATE academic_years SET is_active=0 WHERE guild_id=?", (guild_id,))
+            conn.execute(
+                "INSERT INTO academic_years(guild_id,name,is_active,created_at) VALUES(?,?,1,?)",
+                (guild_id, name, date.today().isoformat()),
+            )
+            _sync_configuration_to_database_conn(conn, guild_id, config_copy)
+            _upsert_config_conn(conn, guild_id, config_copy)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    _refresh_json_cache()
+
+
+
 def get_active_academic_year(guild_id: int) -> sqlite3.Row | None:
     initialize_database()
     with _connect() as conn:
@@ -475,20 +556,46 @@ def list_academic_years(guild_id: int) -> list[sqlite3.Row]:
 
 
 def _sync_configuration_to_database_conn(conn: sqlite3.Connection, guild_id: int, config: dict[str, Any]) -> None:
-    year_name = config.get("academic_year") or f"{date.today().year}/{date.today().year + 1}"
-    today = date.today().isoformat()
-    conn.execute("UPDATE academic_years SET is_active=0 WHERE guild_id=?", (guild_id,))
-    conn.execute("INSERT OR IGNORE INTO academic_years(guild_id,name,is_active,created_at) VALUES(?,?,1,?)", (guild_id, year_name, today))
-    conn.execute("UPDATE academic_years SET is_active=1 WHERE guild_id=? AND name=?", (guild_id, year_name))
-    year_id = int(conn.execute("SELECT id FROM academic_years WHERE guild_id=? AND name=?", (guild_id, year_name)).fetchone()[0])
+    """Snapshot configured streams into the active academic year without switching years."""
+    active = conn.execute(
+        "SELECT * FROM academic_years WHERE guild_id=? AND is_active=1 ORDER BY id DESC LIMIT 1",
+        (guild_id,),
+    ).fetchone()
+    if active is None:
+        year_name = config.get("academic_year") or f"{date.today().year}/{date.today().year + 1}"
+        conn.execute(
+            "INSERT OR IGNORE INTO academic_years(guild_id,name,is_active,created_at) VALUES(?,?,1,?)",
+            (guild_id, year_name, date.today().isoformat()),
+        )
+        active = conn.execute(
+            "SELECT * FROM academic_years WHERE guild_id=? AND is_active=1 ORDER BY id DESC LIMIT 1",
+            (guild_id,),
+        ).fetchone()
+
+    if active is None:
+        raise OSError("Impossible de déterminer l'année scolaire active.")
+
+    year_id = int(active["id"])
     for level in config.get("levels", []):
         for stream in level.get("streams", []):
             stream_name = str(stream["name"])
             code = stream.get("abbreviation") or get_stream_abbreviation(level["name"], stream_name)
             role_name = f"Filière - {code}"
-            conn.execute("INSERT OR IGNORE INTO streams(guild_id,academic_year_id,level_name,stream_name,role_name) VALUES(?,?,?,?,?)", (guild_id, year_id, level["name"], stream_name, role_name))
-            conn.execute("UPDATE streams SET role_name=? WHERE guild_id=? AND academic_year_id=? AND level_name=? AND stream_name=?", (role_name, guild_id, year_id, level["name"], stream_name))
+            conn.execute(
+                "INSERT OR IGNORE INTO streams(guild_id,academic_year_id,level_name,stream_name,role_name) VALUES(?,?,?,?,?)",
+                (guild_id, year_id, level["name"], stream_name, role_name),
+            )
+            conn.execute(
+                "UPDATE streams SET role_name=? WHERE guild_id=? AND academic_year_id=? AND level_name=? AND stream_name=?",
+                (role_name, guild_id, year_id, level["name"], stream_name),
+            )
 
+
+def sync_configuration_to_database(guild_id: int, config: dict[str, Any]) -> None:
+    initialize_database()
+    with _connect() as conn:
+        _sync_configuration_to_database_conn(conn, guild_id, config)
+        conn.commit()
 
 def sync_configuration_to_database(guild_id: int, config: dict[str, Any]) -> None:
     initialize_database()
