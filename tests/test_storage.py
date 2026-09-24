@@ -197,6 +197,9 @@ def test_archive_guild_database_survives_reset_and_records_active_year(tmp_path,
     archive = storage.archive_guild_database(1, "2026/2027")
     assert archive == tmp_path / "data" / "archives" / "2026-2027.db"
     assert archive.exists()
+    assert not sqlite3.connect(archive).in_transaction
+    assert not archive.with_name(archive.name + "-wal").exists()
+    assert not archive.with_name(archive.name + "-shm").exists()
 
     with sqlite3.connect(archive) as conn:
         conn.row_factory = sqlite3.Row
