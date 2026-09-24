@@ -466,41 +466,55 @@ def archive_guild_database(guild_id: int, academic_year_name: str) -> Path:
         dir=archive_dir,
     )
     os.close(fd)
+    source = None
+    target = None
     try:
-        with _connect() as source:
-            with sqlite3.connect(temp_name) as target:
-                source.backup(target)
-                # The live database uses WAL. Convert the archive to DELETE journal mode
-                # so the archived .db is self-contained and needs no sidecar -wal/-shm files.
-                journal_mode = target.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
-                if str(journal_mode).lower() != "delete":
-                    raise sqlite3.DatabaseError(
-                        f"Archive journal mode conversion failed: {journal_mode}"
-                    )
-                target.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS archive_metadata (
-                        id INTEGER PRIMARY KEY CHECK (id=1),
-                        guild_id INTEGER NOT NULL,
-                        academic_year TEXT NOT NULL,
-                        archived_at TEXT NOT NULL
-                    )
-                    """
-                )
-                target.execute("DELETE FROM archive_metadata")
-                target.execute(
-                    "INSERT INTO archive_metadata(id,guild_id,academic_year,archived_at) VALUES(1,?,?,?)",
-                    (guild_id, str(academic_year_name), datetime.now(timezone.utc).isoformat()),
-                )
-                integrity = target.execute("PRAGMA integrity_check").fetchone()[0]
-                if integrity != "ok":
-                    raise sqlite3.DatabaseError(f"Archive integrity check failed: {integrity}")
-                target.commit()
+        source = _connect()
+        target = sqlite3.connect(temp_name)
+        source.backup(target)
+        # The live database uses WAL. Convert the archive to DELETE journal mode
+        # so the archived .db is self-contained and needs no sidecar -wal/-shm files.
+        journal_mode = target.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
+        if str(journal_mode).lower() != "delete":
+            raise sqlite3.DatabaseError(
+                f"Archive journal mode conversion failed: {journal_mode}"
+            )
+        target.execute(
+            """
+            CREATE TABLE IF NOT EXISTS archive_metadata (
+                id INTEGER PRIMARY KEY CHECK (id=1),
+                guild_id INTEGER NOT NULL,
+                academic_year TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        target.execute("DELETE FROM archive_metadata")
+        target.execute(
+            "INSERT INTO archive_metadata(id,guild_id,academic_year,created_at) VALUES(1,?,?,?)",
+            (guild_id, str(academic_year_name), datetime.now(timezone.utc).isoformat()),
+        )
+        integrity = target.execute("PRAGMA integrity_check").fetchone()[0]
+        if integrity != "ok":
+            raise sqlite3.DatabaseError(f"Archive integrity check failed: {integrity}")
+        target.commit()
+        target.close()
+        target = None
+        source.close()
+        source = None
+
         os.replace(temp_name, archive_path)
         return archive_path
     except Exception:
+        if target is not None:
+            target.close()
+        if source is not None:
+            source.close()
         if os.path.exists(temp_name):
-            os.unlink(temp_name)
+            try:
+                os.unlink(temp_name)
+            except PermissionError:
+                pass
         raise
 
 
