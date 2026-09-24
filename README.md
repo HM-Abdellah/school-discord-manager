@@ -35,6 +35,8 @@ Managed stream roles are persisted by Discord ID. Destructive operations resolve
 
 Logical academic data is stored in SQLite at `data/school.db`. The JSON file is a cache/export layer and is refreshed from SQLite.
 
+Academic years are **logical state and history**, not Discord deployments. The `academic_years` table is authoritative for the active year. The Discord configuration and managed-resource registry represent the **currently deployed Discord structure**. Changing or rolling back the active academic year does not delete, rebuild, rename, or otherwise mutate Discord channels or roles.
+
 Student enrollment is idempotent. Reassigning the same active stream does not create a duplicate active enrollment, while moving a student records the previous enrollment as transferred.
 
 Example yearly workflow:
@@ -44,6 +46,8 @@ Example yearly workflow:
 /setup
 /build
 ```
+
+`/newyear` creates and activates a new logical year while keeping the existing Discord structure unchanged. `/rollbackyear` switches the logical active year only; it is not a Discord rollback.
 
 Previous academic years remain available for history and controlled rollback.
 
@@ -181,7 +185,7 @@ Linux/macOS activation can use `source .venv/bin/activate`.
 
 ## 🐳 Docker
 
-The production runtime is intentionally small: it contains the bot application and runtime dependencies, runs as a non-root `app` user, and keeps mutable SQLite/JSON state in `/app/data`.
+The production runtime is intentionally small: it contains only the bot application and runtime dependencies, runs as a non-root `app` user, and keeps mutable SQLite/JSON state in `/app/data`. Docker Compose additionally drops Linux capabilities, disables privilege escalation, mounts the application filesystem read-only, and keeps `/app/data` as the writable persistent volume.
 
 Create `.env` first:
 
