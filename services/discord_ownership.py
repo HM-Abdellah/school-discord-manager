@@ -214,6 +214,16 @@ def validate_managed_registry_completeness(config: dict) -> None:
         mapping = mapping if isinstance(mapping, dict) else {}
         for name in sorted(expected_names):
             value = mapping.get(name)
+            if section == "channels" and not isinstance(value, int):
+                wanted = _name_key(name)
+                matches = [
+                    item_value
+                    for item_name, item_value in mapping.items()
+                    if _name_key(str(item_name)) == wanted
+                    and isinstance(item_value, int)
+                    and item_value > 0
+                ]
+                value = matches[0] if len(matches) == 1 else None
             if not isinstance(value, int) or value <= 0:
                 missing.append(f"{section[:-1]} `{name}`")
 
