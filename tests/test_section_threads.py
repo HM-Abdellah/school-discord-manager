@@ -16,11 +16,7 @@ def test_resolve_managed_subject_channel():
         category=category,
     )
 
-    # The resolver only accepts real discord.TextChannel instances, so exercise
-    # the matching rule through a lightweight subclass-like object is not enough.
-    assert subject in get_stream_subjects(level, stream)
-    assert category.name.startswith("📚")
-    assert channel.name.startswith(f"📚-{code}・")
+    assert _resolve_subject_channel(channel) == (level, stream, subject)
 
 
 def test_every_configured_stream_has_resolvable_subject_names():
