@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import pytest
 
@@ -158,6 +159,52 @@ def test_stale_json_cache_is_ignored_after_restart_when_database_is_newer(tmp_pa
     storage.CONFIG_FILE.write_text('{"1": {"academic_year": "2025/2026", "levels": []}}', encoding="utf-8")
     assert storage.get_guild_config(1) == new_config
 
+
+
+
+def test_archive_guild_database_survives_reset_and_records_active_year(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
+    year_id = storage.create_and_activate_academic_year(
+        1,
+        "2026/2027",
+        {
+            "academic_year": "2026/2027",
+            "levels": [
+                {
+                    "name": "TC",
+                    "streams": [{"name": "TCS", "abbreviation": "TCS"}],
+                }
+            ],
+        },
+    )
+    with storage._connect() as conn:
+        student_id = conn.execute(
+            "INSERT INTO students(guild_id,discord_id,display_name,created_at) VALUES(1,99,'Student','2026-09-01')"
+        ).lastrowid
+        stream_id = conn.execute(
+            "SELECT id FROM streams WHERE guild_id=1 AND academic_year_id=? AND stream_name='TCS'",
+            (year_id,),
+        ).fetchone()["id"]
+        conn.execute(
+            "INSERT INTO enrollments(student_id,stream_id,start_date,status) VALUES(?,?,?,'active')",
+            (student_id, stream_id, "2026-09-01"),
+        )
+        conn.commit()
+
+    archive = storage.archive_guild_database(1, "2026/2027")
+    assert archive == tmp_path / "data" / "archives" / "2026-2027.db"
+    assert archive.exists()
+
+    with sqlite3.connect(archive) as conn:
+        conn.row_factory = sqlite3.Row
+        metadata = conn.execute("SELECT guild_id,academic_year FROM archive_metadata WHERE id=1").fetchone()
+        assert dict(metadata) == {"guild_id": 1, "academic_year": "2026/2027"}
+        assert conn.execute("SELECT COUNT(*) FROM students WHERE guild_id=1").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM enrollments").fetchone()[0] == 1
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+    storage.reset_guild_data(1)
+    assert archive.exists()
 
 def test_reset_tombstone_prevents_old_json_cache_from_resurrecting_config(tmp_path, monkeypatch):
     _configure_storage(tmp_path, monkeypatch)
