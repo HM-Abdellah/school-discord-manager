@@ -89,20 +89,43 @@ def test_active_academic_year_migration_deduplicates_before_unique_index(tmp_pat
         assert conn.execute("SELECT COUNT(*) FROM academic_years WHERE guild_id=1 AND is_active=1").fetchone()[0] == 1
 
 
-def test_sync_configuration_is_idempotent_and_preserves_previous_year_history(tmp_path, monkeypatch):
+
+def test_save_guild_config_does_not_switch_active_academic_year(tmp_path, monkeypatch):
     _configure_storage(tmp_path, monkeypatch)
-    first_config = {"academic_year": "2025/2026", "levels": [{"name": "TC", "streams": [{"name": "TCS", "abbreviation": "TCS"}]}]}
-    second_config = {"academic_year": "2026/2027", "levels": [{"name": "TC", "streams": [{"name": "TCS", "abbreviation": "TCS"}]}]}
+    first_config = {
+        "academic_year": "2025/2026",
+        "levels": [{"name": "TC", "streams": [{"name": "TCS", "abbreviation": "TCS"}]}],
+    }
+    second_config = {
+        "academic_year": "2026/2027",
+        "levels": [{"name": "TC", "streams": [{"name": "TCS", "abbreviation": "TCS"}]}],
+    }
+
     storage.save_guild_config(1, first_config)
+    storage.create_and_activate_academic_year(1, "2026/2027", second_config)
     storage.save_guild_config(1, second_config)
-    storage.save_guild_config(1, second_config)
-    assert storage.get_guild_config(1) == second_config
-    years = storage.list_academic_years(1)
-    assert {row["name"] for row in years} == {"2025/2026", "2026/2027"}
-    active = [row for row in years if row["is_active"]]
-    assert len(active) == 1
+
+    assert storage.get_guild_config(1)["academic_year"] == "2026/2027"
+    active = storage.get_active_academic_year(1)
+    assert active is not None
+    assert active["name"] == "2026/2027"
     with storage._connect() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM streams WHERE guild_id=1 AND stream_name='TCS'").fetchone()[0] == 2
+        assert conn.execute(
+            "SELECT COUNT(*) FROM streams WHERE guild_id=1 AND stream_name='TCS'"
+        ).fetchone()[0] == 2
+
+
+def test_save_guild_config_cannot_reactivate_an_older_year(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
+    storage.save_guild_config(1, {"academic_year": "2027/2028", "levels": []})
+    storage.create_and_activate_academic_year(1, "2028/2029", {"academic_year": "2028/2029", "levels": []})
+
+    storage.save_guild_config(1, {"academic_year": "2027/2028", "levels": []})
+
+    active = storage.get_active_academic_year(1)
+    assert active is not None
+    assert active["name"] == "2028/2029"
+    assert storage.get_guild_config(1)["academic_year"] == "2028/2029"
 
 
 def test_json_cache_failure_after_database_commit_does_not_lose_configuration(tmp_path, monkeypatch):
