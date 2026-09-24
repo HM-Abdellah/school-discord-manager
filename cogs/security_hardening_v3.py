@@ -76,24 +76,24 @@ class HardenedResetCommands(commands.Cog):
             await interaction.response.send_message(f"❌ Reset refusé : {hierarchy_error}", ephemeral=True)
             return
 
-        active_year = get_active_academic_year(guild.id)
-        archive_name = None
-        if active_year is not None:
-            try:
-                archive_path = archive_guild_database(guild.id, str(active_year["name"]))
-                archive_name = archive_path.name
-            except (OSError, sqlite3.Error) as exc:
-                await interaction.response.send_message(
-                    f"❌ Reset refusé : impossible de créer l'archive de l'année active (`{type(exc).__name__}: {exc}`). Aucun resource Discord n'a été supprimé.",
-                    ephemeral=True,
-                )
-                return
-
         await interaction.response.send_message("🧹 **RESET SCHOOL MANAGER EN COURS...**", ephemeral=True)
         deleted_channels = deleted_categories = deleted_roles = retained_categories = 0
+        archive_name = None
 
         try:
             async with get_build_lock(guild.id):
+                active_year = get_active_academic_year(guild.id)
+                if active_year is not None:
+                    try:
+                        archive_path = archive_guild_database(guild.id, str(active_year["name"]))
+                        archive_name = archive_path.name
+                    except (OSError, sqlite3.Error) as exc:
+                        await interaction.followup.send(
+                            f"❌ Reset refusé : impossible de créer l'archive de l'année active (`{type(exc).__name__}: {exc}`). Aucun resource Discord n'a été supprimé.",
+                            ephemeral=True,
+                        )
+                        return
+
                 for channel_id in sorted(channel_ids):
                     channel = guild.get_channel(channel_id)
                     if channel is None or not isinstance(channel, discord.abc.GuildChannel):
