@@ -472,6 +472,7 @@ def archive_guild_database(guild_id: int, academic_year_name: str) -> Path:
         source = _connect()
         target = sqlite3.connect(temp_name)
         source.backup(target)
+
         # The live database uses WAL. Convert the archive to DELETE journal mode
         # so the archived .db is self-contained and needs no sidecar -wal/-shm files.
         journal_mode = target.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
@@ -479,25 +480,31 @@ def archive_guild_database(guild_id: int, academic_year_name: str) -> Path:
             raise sqlite3.DatabaseError(
                 f"Archive journal mode conversion failed: {journal_mode}"
             )
+
         target.execute(
             """
             CREATE TABLE IF NOT EXISTS archive_metadata (
                 id INTEGER PRIMARY KEY CHECK (id=1),
                 guild_id INTEGER NOT NULL,
                 academic_year TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                archived_at TEXT NOT NULL
             )
             """
         )
         target.execute("DELETE FROM archive_metadata")
         target.execute(
-            "INSERT INTO archive_metadata(id,guild_id,academic_year,created_at) VALUES(1,?,?,?)",
+            "INSERT INTO archive_metadata(id,guild_id,academic_year,archived_at) VALUES(1,?,?,?)",
             (guild_id, str(academic_year_name), datetime.now(timezone.utc).isoformat()),
         )
+
         integrity = target.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
             raise sqlite3.DatabaseError(f"Archive integrity check failed: {integrity}")
+
         target.commit()
+
+        # sqlite3.Connection's context manager commits/rolls back, but does not
+        # close the connection. Explicitly close before os.replace() for Windows.
         target.close()
         target = None
         source.close()
@@ -505,7 +512,7 @@ def archive_guild_database(guild_id: int, academic_year_name: str) -> Path:
 
         os.replace(temp_name, archive_path)
         return archive_path
-    except Exception:
+    finally:
         if target is not None:
             target.close()
         if source is not None:
@@ -513,9 +520,8 @@ def archive_guild_database(guild_id: int, academic_year_name: str) -> Path:
         if os.path.exists(temp_name):
             try:
                 os.unlink(temp_name)
-            except PermissionError:
+            except OSError:
                 pass
-        raise
 
 
 def reset_guild_data(guild_id: int) -> None:
