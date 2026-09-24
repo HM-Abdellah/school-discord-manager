@@ -470,6 +470,13 @@ def archive_guild_database(guild_id: int, academic_year_name: str) -> Path:
         with _connect() as source:
             with sqlite3.connect(temp_name) as target:
                 source.backup(target)
+                # The live database uses WAL. Convert the archive to DELETE journal mode
+                # so the archived .db is self-contained and needs no sidecar -wal/-shm files.
+                journal_mode = target.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
+                if str(journal_mode).lower() != "delete":
+                    raise sqlite3.DatabaseError(
+                        f"Archive journal mode conversion failed: {journal_mode}"
+                    )
                 target.execute(
                     """
                     CREATE TABLE IF NOT EXISTS archive_metadata (
