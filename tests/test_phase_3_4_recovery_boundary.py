@@ -231,3 +231,42 @@ async def test_category_is_deleted_only_after_fresh_empty_check(monkeypatch):
     await removestream_fix._finalize_journal_category(guild, _journal())
 
     assert deleted == ["School Manager scoped empty stream category removal"]
+
+
+def test_recorded_id_accepts_discord_lowercased_channel_key():
+    config = {
+        "managed": {
+            "channels": {
+                "📌-tcs・informations": 123456789,
+            }
+        }
+    }
+
+    assert (
+        removestream_fix._recorded_id(
+            config,
+            "channels",
+            "📌-TCS・informations",
+        )
+        == 123456789
+    )
+
+
+def test_recorded_id_rejects_ambiguous_normalized_keys():
+    config = {
+        "managed": {
+            "channels": {
+                "📌-tcs・informations": 123,
+                "📌-TCS・Informations": 456,
+            }
+        }
+    }
+
+    assert (
+        removestream_fix._recorded_id(
+            config,
+            "channels",
+            "📌-TCS・informations",
+        )
+        is None
+    )
