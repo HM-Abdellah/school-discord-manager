@@ -193,6 +193,38 @@ def _expected_canonical_names(config: dict) -> tuple[set[str], set[str], set[str
     return role_names, category_names, channel_names
 
 
+def validate_managed_registry_completeness(config: dict) -> None:
+    """Fail closed before persistence when the build registry is incomplete.
+
+    The builder is responsible for recording every managed canonical resource
+    it creates or reuses. Persisting a partial registry would make future
+    destructive operations unable to prove ownership safely.
+    """
+    role_names, category_names, channel_names = _expected_canonical_names(config)
+    managed = config.get("managed", {}) if isinstance(config, dict) else {}
+    managed = managed if isinstance(managed, dict) else {}
+
+    missing: list[str] = []
+    for section, expected_names in (
+        ("roles", role_names),
+        ("categories", category_names),
+        ("channels", channel_names),
+    ):
+        mapping = managed.get(section)
+        mapping = mapping if isinstance(mapping, dict) else {}
+        for name in sorted(expected_names):
+            value = mapping.get(name)
+            if not isinstance(value, int) or value <= 0:
+                missing.append(f"{section[:-1]} `{name}`")
+
+    if missing:
+        preview = "; ".join(missing[:20])
+        suffix = f"; ... ({len(missing)} total)" if len(missing) > 20 else ""
+        raise ManagedResourceConflict(
+            "Managed registry incomplete after build: " + preview + suffix
+        )
+
+
 async def validate_unmanaged_canonical_collisions(
     guild: discord.Guild,
     config: dict,
