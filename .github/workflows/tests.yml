@@ -34,3 +34,8 @@ jobs:
         run: |
           test "$(docker inspect school-discord-manager:test --format '{{.Config.User}}')" = "app"
           docker run --rm --entrypoint python school-discord-manager:test -c "import discord, dotenv; print(discord.__version__)"
+
+      - name: Validate Docker Compose
+        run: |
+          cp .env.example .env
+          docker compose config

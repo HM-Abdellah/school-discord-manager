@@ -1,8 +1,6 @@
 services:
   bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/hm-abdellah/school-discord-manager:latest
     restart: unless-stopped
     init: true
     read_only: true
