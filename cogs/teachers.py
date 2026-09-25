@@ -274,20 +274,38 @@ class TeacherCommands(commands.Cog):
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
+
+        # Acknowledge immediately: channel resolution and publishing both require
+        # Discord API calls and can exceed Discord's initial interaction deadline.
+        await interaction.response.defer(ephemeral=True)
+
         channel = await _find_managed_channel(
             guild, GENERAL_CHANNELS["absences"], category_name="🏢・INFORMATIONS & ADMINISTRATION"
         )
         if channel is None:
-            await interaction.response.send_message("❌ Le salon d'absences n'existe pas. Lance `/build` après `/setup`.", ephemeral=True)
+            await interaction.followup.send("❌ Le salon d'absences n'existe pas. Lance `/build` après `/setup`.", ephemeral=True)
             return
-        embed = discord.Embed(title="📢 Absence d'un professeur", description=f"**Professeur :** {teacher.mention}\n**Durée :** {duration}\n**Classes concernées :** {classes}\n**Date :** {date.today().isoformat()}", colour=discord.Colour.orange())
+
+        embed = discord.Embed(
+            title="📢 Absence d'un professeur",
+            description=f"**Professeur :** {teacher.mention}\n**Durée :** {duration}\n**Classes concernées :** {classes}\n**Date :** {date.today().isoformat()}",
+            colour=discord.Colour.orange(),
+        )
         try:
             await channel.send(embed=embed)
         except discord.Forbidden:
-            await interaction.response.send_message("❌ Le bot ne peut pas publier dans le salon d'absences.", ephemeral=True)
+            await interaction.followup.send("❌ Le bot ne peut pas publier dans le salon d'absences.", ephemeral=True)
             return
-        record_event(guild.id, interaction.user.id, interaction.user.display_name, "reportabsence", teacher.display_name, f"{duration} | {classes}")
-        await interaction.response.send_message(f"✅ Absence publiée dans {channel.mention}.", ephemeral=True)
+
+        record_event(
+            guild.id,
+            interaction.user.id,
+            interaction.user.display_name,
+            "reportabsence",
+            teacher.display_name,
+            f"{duration} | {classes}",
+        )
+        await interaction.followup.send(f"✅ Absence publiée dans {channel.mention}.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:
