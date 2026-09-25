@@ -22,11 +22,8 @@ env
 tests
 e2e
 
-# Local runtime data is provided through the Docker volume
-data/*.db
-data/*.sqlite
-data/*.sqlite3
-data/*.json
+# Runtime state is provided through the Docker volume
+data/
 
 # Local/IDE files
 .vscode
