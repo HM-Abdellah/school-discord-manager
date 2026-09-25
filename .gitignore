@@ -26,3 +26,6 @@ data/*.sqlite3
 # OS files
 .DS_Store
 Thumbs.db
+
+data/
+diagnose.py
