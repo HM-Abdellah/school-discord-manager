@@ -196,15 +196,17 @@ DISCORD_TOKEN=YOUR_REAL_DISCORD_BOT_TOKEN
 DISCORD_GUILD_ID=YOUR_TEST_SERVER_ID
 ```
 
-Build and run with Docker Compose:
+Run the published GHCR image with Docker Compose:
 
 ```bash
-docker compose build
+docker compose pull
 docker compose up -d
 docker compose logs -f bot
 ```
 
-The Compose service uses a named volume called `school_manager_data` mounted at `/app/data`, so both the live database and `data/archives/` survive container recreation.
+The image is published as `ghcr.io/hm-abdellah/school-discord-manager:latest`. The GitHub Actions publish workflow runs only after the `tests` workflow succeeds on `main`.
+
+The Compose service uses a named volume called `school_manager_data` mounted at `/app/data`, so both the live database and `data/archives/` survive container recreation. Runtime state is intentionally excluded from the image.
 
 Stop the service with:
 
@@ -212,14 +214,14 @@ Stop the service with:
 docker compose down
 ```
 
-For a one-off image build:
+For a one-off local image build (development/verification only):
 
 ```bash
 docker build -t school-discord-manager:latest .
 docker run --rm --env-file .env -v school_manager_data:/app/data school-discord-manager:latest
 ```
 
-The image does not include the tests or E2E observer harness. Those remain development and verification tooling.
+The published deployment path does not require a local Docker build; the host pulls the image from GHCR. The image does not include the tests or E2E observer harness. Those remain development and verification tooling.
 
 ## 🧪 Live E2E verification
 
