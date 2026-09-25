@@ -16,9 +16,8 @@ COPY bot.py ./
 COPY cogs ./cogs
 COPY config ./config
 COPY services ./services
-COPY data ./data
 
-RUN chown -R app:app /app
+RUN mkdir -p /app/data && chown -R app:app /app
 
 USER app
 
