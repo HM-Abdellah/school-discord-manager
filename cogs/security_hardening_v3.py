@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -9,7 +11,7 @@ from discord.ext import commands
 from services.build_guard import get_build_lock
 from services.discord_ownership import validate_managed_registry
 from services.permissions import owner_only_check
-from services.storage import get_guild_config, reset_guild_data
+from services.storage import archive_guild_database, get_active_academic_year, get_guild_config, reset_guild_data
 
 OWNED_COMMANDS = {"resetserver"}
 
@@ -76,9 +78,22 @@ class HardenedResetCommands(commands.Cog):
 
         await interaction.response.send_message("🧹 **RESET SCHOOL MANAGER EN COURS...**", ephemeral=True)
         deleted_channels = deleted_categories = deleted_roles = retained_categories = 0
+        archive_name = None
 
         try:
             async with get_build_lock(guild.id):
+                active_year = get_active_academic_year(guild.id)
+                if active_year is not None:
+                    try:
+                        archive_path = archive_guild_database(guild.id, str(active_year["name"]))
+                        archive_name = archive_path.name
+                    except (OSError, sqlite3.Error) as exc:
+                        await interaction.followup.send(
+                            f"❌ Reset refusé : impossible de créer l'archive de l'année active (`{type(exc).__name__}: {exc}`). Aucun resource Discord n'a été supprimé.",
+                            ephemeral=True,
+                        )
+                        return
+
                 for channel_id in sorted(channel_ids):
                     channel = guild.get_channel(channel_id)
                     if channel is None or not isinstance(channel, discord.abc.GuildChannel):
@@ -114,8 +129,9 @@ class HardenedResetCommands(commands.Cog):
             return
 
         suffix = f" Catégories conservées car elles contiennent des ressources non gérées : **{retained_categories}**." if retained_categories else ""
+        archive_suffix = f" Archive créée : `{archive_name}`." if archive_name else " Aucune année active à archiver."
         await interaction.followup.send(
-            f"✅ Reset terminé. Channels: **{deleted_channels}** · Catégories: **{deleted_categories}** · Rôles: **{deleted_roles}**. Seuls les IDs gérés enregistrés ont été ciblés.{suffix}",
+            f"✅ Reset terminé. Channels: **{deleted_channels}** · Catégories: **{deleted_categories}** · Rôles: **{deleted_roles}**. Seuls les IDs gérés enregistrés ont été ciblés.{suffix}{archive_suffix}",
             ephemeral=True,
         )
 

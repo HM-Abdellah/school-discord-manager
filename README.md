@@ -35,6 +35,8 @@ Managed stream roles are persisted by Discord ID. Destructive operations resolve
 
 Logical academic data is stored in SQLite at `data/school.db`. The JSON file is a cache/export layer and is refreshed from SQLite.
 
+Before `/resetserver` deletes the managed School Manager state, the bot creates a standalone SQLite archive of the current database under `data/archives/<academic-year>.db`. The archive is written atomically and integrity-checked; if archive creation fails, the destructive reset is refused. Existing archive names are never overwritten: a UTC timestamp suffix is used when needed.
+
 Academic years are **logical state and history**, not Discord deployments. The `academic_years` table is authoritative for the active year. The Discord configuration and managed-resource registry represent the **currently deployed Discord structure**. Changing or rolling back the active academic year does not delete, rebuild, rename, or otherwise mutate Discord channels or roles.
 
 Student enrollment is idempotent. Reassigning the same active stream does not create a duplicate active enrollment, while moving a student records the previous enrollment as transferred.
@@ -202,7 +204,7 @@ docker compose up -d
 docker compose logs -f bot
 ```
 
-The Compose service uses a named volume called `school_manager_data` mounted at `/app/data`, so the database survives container recreation.
+The Compose service uses a named volume called `school_manager_data` mounted at `/app/data`, so both the live database and `data/archives/` survive container recreation.
 
 Stop the service with:
 
@@ -266,7 +268,7 @@ A crash-safe removal journal is stored under `pending_removal`. While that journ
 
 ### Operational backup
 
-The authoritative runtime state is the SQLite database in `data/school.db`. In Docker, `/app/data` is backed by the named `school_manager_data` volume. Back up that volume before major maintenance or destructive server operations, and keep the backup outside the running container.
+The authoritative runtime state is the SQLite database in `data/school.db`. In Docker, `/app/data` is backed by the named `school_manager_data` volume. In addition to normal operational backups, `/resetserver` creates a pre-reset archive under `data/archives/` for the active academic year before deleting managed resources. Keep external backups of the Docker volume as an additional disaster-recovery layer.
 
 ## 🚦 Release gate
 

@@ -253,11 +253,14 @@ class CommandFixes(commands.Cog):
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
+        # Acknowledge before synchronous state checks so Discord cannot expire
+        # the interaction while SQLite/config inspection is in progress.
+        await interaction.response.defer(ephemeral=True)
+
         conflict = teacher_target_conflict(teacher, guild)
         if conflict:
-            await interaction.response.send_message(conflict, ephemeral=True)
+            await interaction.followup.send(conflict, ephemeral=True)
             return
-        await interaction.response.defer(ephemeral=True)
         if level not in get_levels() or stream not in get_streams(level):
             await interaction.followup.send("❌ Niveau ou filière invalide.", ephemeral=True)
             return

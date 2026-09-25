@@ -167,3 +167,23 @@ def test_reset_role_hierarchy_fails_before_mutation():
     message = _validate_reset_role_hierarchy(guild, {55})
     assert message is not None
     assert "hiérarchie" in message
+
+
+def test_reset_archives_before_discord_deletion():
+    source = open("cogs/security_hardening_v3.py", encoding="utf-8").read()
+    assert "archive_path = archive_guild_database" in source
+    assert source.index("archive_path = archive_guild_database") < source.index("await channel.delete")
+
+
+def test_latency_sensitive_commands_acknowledge_before_slow_work():
+    teacher_source = open("cogs/teachers.py", encoding="utf-8").read()
+    full_teacher_source = open("cogs/command_fixes.py", encoding="utf-8").read()
+
+    report = teacher_source[teacher_source.index("async def report_absence"):teacher_source.index("\n\nasync def setup", teacher_source.index("async def report_absence"))]
+    full = full_teacher_source[full_teacher_source.index("async def assign_teacher_full"):full_teacher_source.index("\n\nasync def setup", full_teacher_source.index("async def assign_teacher_full"))]
+
+    assert report.index("await interaction.response.defer(ephemeral=True)") < report.index("_find_managed_channel(")
+    assert report.index("await interaction.followup.send") > report.index("await interaction.response.defer(ephemeral=True)")
+    assert full.index("await interaction.response.defer(ephemeral=True)") < full.index("teacher_target_conflict(")
+    assert "await interaction.followup.send(conflict" in full
+
