@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import timedelta
 from typing import Any
 
 import discord
@@ -343,7 +344,9 @@ class ClassQROnboarding(commands.Cog):
         class_role: discord.Role | None = None
         created_role = False
 
+        revoked_before = 0
         try:
+            revoked_before = await _revoke_class_qrs(self.bot, guild.id, class_key)
             class_role, created_role = await _get_or_create_class_role(
                 guild,
                 working_config,
@@ -415,6 +418,23 @@ class ClassQROnboarding(commands.Cog):
                 self.bot,
                 source_channel,
                 (student_role, class_role),
+            )
+            invite_code = invite_url.rsplit("/", 1)[-1]
+            now = discord.utils.utcnow()
+            expires_at = now + timedelta(seconds=DEFAULT_QR_MAX_AGE)
+            record_class_qr_invite(
+                guild.id,
+                invite_code,
+                class_key,
+                level,
+                stream,
+                code,
+                int(section),
+                class_role.id,
+                interaction.user.id,
+                now.isoformat(),
+                expires_at.isoformat(),
+                DEFAULT_QR_MAX_USES,
             )
             qr = qr_file(
                 invite_url,
