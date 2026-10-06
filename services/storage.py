@@ -124,6 +124,24 @@ def _deduplicate_active_academic_years(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_one_active_academic_year_per_guild ON academic_years(guild_id) WHERE is_active=1")
 
 
+def _deduplicate_active_class_qr_invites(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        UPDATE class_qr_invites
+        SET revoked_at=COALESCE(revoked_at, datetime('now'))
+        WHERE revoked_at IS NULL
+          AND id NOT IN (
+              SELECT MAX(id)
+              FROM class_qr_invites
+              WHERE revoked_at IS NULL
+              GROUP BY guild_id, class_key
+          )
+    """)
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_one_active_class_qr_per_guild_class "
+        "ON class_qr_invites(guild_id, class_key) WHERE revoked_at IS NULL"
+    )
+
+
 def _read_json_cache() -> dict[str, Any]:
     if not CONFIG_FILE.exists():
         return {}
@@ -207,6 +225,7 @@ def initialize_database() -> None:
         _migrate_enrollment_sections(conn)
         _deduplicate_active_enrollments(conn)
         _deduplicate_active_academic_years(conn)
+        _deduplicate_active_class_qr_invites(conn)
         _import_json_cache_conn(conn)
         conn.executescript("CREATE INDEX IF NOT EXISTS idx_students_guild_discord ON students(guild_id, discord_id); CREATE INDEX IF NOT EXISTS idx_streams_guild_year ON streams(guild_id, academic_year_id); CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id); CREATE INDEX IF NOT EXISTS idx_class_qr_invites_guild_class ON class_qr_invites(guild_id, class_key, revoked_at);")
 
@@ -481,31 +500,43 @@ def record_class_qr_invite(
 ) -> int:
     if not 1 <= int(section) <= 8:
         raise ValueError("Section must be between 1 and 8.")
+    if not 1 <= int(max_uses) <= 42:
+        raise ValueError("max_uses must be between 1 and 42.")
     with _connect() as conn:
-        cursor = conn.execute(
-            """
-            INSERT INTO class_qr_invites(
-                guild_id,invite_code,class_key,level_name,stream_name,stream_code,
-                section,class_role_id,created_by,created_at,expires_at,max_uses
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                guild_id,
-                invite_code,
-                class_key,
-                level_name,
-                stream_name,
-                stream_code,
-                int(section),
-                class_role_id,
-                created_by,
-                created_at,
-                expires_at,
-                max_uses,
-            ),
-        )
-        conn.commit()
-        return int(cursor.lastrowid)
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO class_qr_invites(
+                    guild_id,invite_code,class_key,level_name,stream_name,stream_code,
+                    section,class_role_id,created_by,created_at,expires_at,max_uses
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    guild_id,
+                    invite_code,
+                    class_key,
+                    level_name,
+                    stream_name,
+                    stream_code,
+                    int(section),
+                    class_role_id,
+                    created_by,
+                    created_at,
+                    expires_at,
+                    max_uses,
+                ),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
+        except sqlite3.IntegrityError as exc:
+            conn.rollback()
+            existing = conn.execute(
+                "SELECT 1 FROM class_qr_invites WHERE guild_id=? AND class_key=? AND revoked_at IS NULL LIMIT 1",
+                (guild_id, class_key),
+            ).fetchone()
+            if existing is not None:
+                raise RuntimeError("Un QR actif existe déjà pour cette classe.") from exc
+            raise
 
 
 def get_class_qr_invites(
@@ -916,3 +947,5 @@ def get_student_history(guild_id: int, discord_id: int) -> list[sqlite3.Row]:
             FROM students st JOIN enrollments e ON e.student_id=st.id JOIN streams s ON s.id=e.stream_id JOIN academic_years ay ON ay.id=s.academic_year_id
             WHERE st.guild_id=? AND st.discord_id=? ORDER BY e.start_date DESC, e.id DESC
         """, (guild_id, discord_id)).fetchall()
+
+[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
