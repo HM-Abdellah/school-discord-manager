@@ -793,7 +793,11 @@ def enroll_student_record(
         ).fetchone()
 
         requested_section = section
-        if requested_section is None and current is not None:
+        if (
+            requested_section is None
+            and current is not None
+            and int(current["stream_id"]) == int(stream["id"])
+        ):
             requested_section = current["section"]
 
         if (
