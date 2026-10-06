@@ -403,6 +403,7 @@ class ClassQROnboarding(commands.Cog):
             )
             return
 
+        invite_code = None
         try:
             source_channel = next(
                 (
@@ -441,14 +442,16 @@ class ClassQROnboarding(commands.Cog):
                 invite_url,
                 "school-manager-" + code + "-" + str(int(section)) + ".png",
             )
-        except (discord.Forbidden, discord.HTTPException) as exc:
+        except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError, ValueError) as exc:
+            if invite_code:
+                try:
+                    await delete_invite(self.bot, invite_code)
+                except discord.HTTPException:
+                    pass
             await interaction.followup.send(
-                "❌ Impossible de générer l'invitation Discord : " + str(exc),
+                "❌ QR non créé : " + type(exc).__name__ + ": " + str(exc),
                 ephemeral=True,
             )
-            return
-        except (RuntimeError, ValueError) as exc:
-            await interaction.followup.send("❌ " + str(exc), ephemeral=True)
             return
 
         class_key = _class_key(code, int(section))
