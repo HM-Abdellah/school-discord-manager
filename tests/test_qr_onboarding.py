@@ -196,7 +196,7 @@ def test_class_qr_registry_records_and_filters_active_invites(tmp_path, monkeypa
         42,
         "2026-10-06T10:00:00+00:00",
         "2026-10-06T10:30:00+00:00",
-        100,
+        36,
     )
     rows = storage.get_class_qr_invites(1, "2BACPC-2")
     assert len(rows) == 1
@@ -225,7 +225,7 @@ def test_class_qr_registry_is_cleared_by_guild_reset(tmp_path, monkeypatch):
         42,
         "2026-10-06T10:00:00+00:00",
         "2026-10-06T10:30:00+00:00",
-        100,
+        36,
     )
 
     storage.reset_guild_data(1)
@@ -317,6 +317,134 @@ async def test_member_join_persists_the_class_from_its_registered_role(monkeypat
     assert captured["kwargs"]["section"] == 2
 
 
+def test_class_qr_registry_rejects_two_active_qrs_for_same_class(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(storage, "CONFIG_FILE", tmp_path / "guild_config.json")
+    monkeypatch.setattr(storage, "DATABASE_FILE", tmp_path / "school.db")
+
+    storage.initialize_database()
+    args = (
+        1,
+        "abc123",
+        "2BACPC-2",
+        "2ème Année Bac",
+        "2ème Année Bac Sciences Physiques",
+        "2BACPC",
+        2,
+        900,
+        42,
+        "2026-10-06T10:00:00+00:00",
+        "2026-10-06T10:30:00+00:00",
+        36,
+    )
+    storage.record_class_qr_invite(*args)
+
+    with pytest.raises(RuntimeError, match="QR actif existe déjà"):
+        storage.record_class_qr_invite(*args[:1], "def456", *args[2:])
+
+
+def test_revoked_class_qr_allows_a_new_active_qr_for_same_class(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(storage, "CONFIG_FILE", tmp_path / "guild_config.json")
+    monkeypatch.setattr(storage, "DATABASE_FILE", tmp_path / "school.db")
+
+    storage.initialize_database()
+    base = (
+        1,
+        "abc123",
+        "2BACPC-2",
+        "2ème Année Bac",
+        "2ème Année Bac Sciences Physiques",
+        "2BACPC",
+        2,
+        900,
+        42,
+        "2026-10-06T10:00:00+00:00",
+        "2026-10-06T10:30:00+00:00",
+        36,
+    )
+    storage.record_class_qr_invite(*base)
+    storage.mark_class_qr_invite_revoked(1, "abc123")
+
+    replacement = (base[0], "def456", *base[2:])
+    storage.record_class_qr_invite(*replacement)
+
+    rows = storage.get_class_qr_invites(1, "2BACPC-2")
+    assert [row["invite_code"] for row in rows] == ["def456"]
+
+
+def test_existing_duplicate_active_class_qrs_are_deduplicated_on_database_initialization(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(storage, "CONFIG_FILE", tmp_path / "guild_config.json")
+    monkeypatch.setattr(storage, "DATABASE_FILE", tmp_path / "school.db")
+
+    with storage._connect() as conn:
+        conn.execute(
+            """
+            CREATE TABLE class_qr_invites (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                invite_code TEXT NOT NULL UNIQUE,
+                class_key TEXT NOT NULL,
+                level_name TEXT NOT NULL,
+                stream_name TEXT NOT NULL,
+                stream_code TEXT NOT NULL,
+                section INTEGER NOT NULL,
+                class_role_id INTEGER NOT NULL,
+                created_by INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                max_uses INTEGER NOT NULL,
+                revoked_at TEXT
+            )
+            """
+        )
+        conn.executemany(
+            """
+            INSERT INTO class_qr_invites(
+                guild_id,invite_code,class_key,level_name,stream_name,stream_code,
+                section,class_role_id,created_by,created_at,expires_at,max_uses
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                (1, "old123", "2BACPC-2", "2ème Année Bac", "PC", "2BACPC", 2, 900, 42, "2026-10-06T10:00:00+00:00", "2026-10-06T10:30:00+00:00", 36),
+                (1, "new456", "2BACPC-2", "2ème Année Bac", "PC", "2BACPC", 2, 900, 42, "2026-10-06T10:01:00+00:00", "2026-10-06T10:31:00+00:00", 36),
+            ],
+        )
+        conn.commit()
+
+    storage.initialize_database()
+    rows = storage.get_class_qr_invites(1, "2BACPC-2", include_revoked=True)
+    active = [row for row in rows if row["revoked_at"] is None]
+    revoked = [row for row in rows if row["revoked_at"] is not None]
+
+    assert [row["invite_code"] for row in active] == ["new456"]
+    assert [row["invite_code"] for row in revoked] == ["old123"]
+
+
+def test_class_qr_registry_rejects_invalid_capacity(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(storage, "CONFIG_FILE", tmp_path / "guild_config.json")
+    monkeypatch.setattr(storage, "DATABASE_FILE", tmp_path / "school.db")
+
+    storage.initialize_database()
+    with pytest.raises(ValueError, match="max_uses must be between 1 and 42"):
+        storage.record_class_qr_invite(
+            1,
+            "abc123",
+            "2BACPC-2",
+            "2ème Année Bac",
+            "2ème Année Bac Sciences Physiques",
+            "2BACPC",
+            2,
+            900,
+            42,
+            "2026-10-06T10:00:00+00:00",
+            "2026-10-06T10:30:00+00:00",
+            43,
+        )
+
+
 @pytest.mark.asyncio
 async def test_revoke_class_qrs_deletes_discord_invites_and_marks_them_revoked(monkeypatch):
     from cogs.qr_onboarding import _revoke_class_qrs
@@ -347,3 +475,5 @@ async def test_revoke_class_qrs_deletes_discord_invites_and_marks_them_revoked(m
     assert result == 2
     assert deleted == ["abc123", "def456"]
     assert marked == [(123, "abc123"), (123, "def456")]
+
+[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
