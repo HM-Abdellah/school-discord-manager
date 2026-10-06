@@ -253,3 +253,71 @@ def test_legacy_enrollments_migrate_only_safe_same_guild_rows(tmp_path, monkeypa
         assert sum(row["status"] == "transferred" for row in rows if row["student_id"] == student1) == 1
         assert all(row["status"] in {"active", "transferred", "left_school"} for row in rows)
         assert conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='enrollments_legacy_v1'").fetchone()[0] == 1
+
+
+def test_enrollment_section_is_persisted_and_changes_create_history(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
+    storage.save_guild_config(
+        1,
+        {
+            "academic_year": "2026/2027",
+            "levels": [
+                {
+                    "name": "2BAC",
+                    "streams": [
+                        {
+                            "name": "PC",
+                            "abbreviation": "2BACPC",
+                            "subjects": [],
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    year_id = storage.get_active_academic_year(1)["id"]
+
+    storage.enroll_student_record(1, 99, "Student", year_id, "2BAC", "PC", section=2)
+    storage.enroll_student_record(1, 99, "Student", year_id, "2BAC", "PC", section=3)
+
+    rows = storage.get_student_history(1, 99)
+    assert rows[0]["section"] == 3
+    assert rows[0]["status"] == "active"
+    assert rows[1]["section"] == 2
+    assert rows[1]["status"] == "transferred"
+
+
+def test_legacy_enrollment_database_gets_section_column(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
+    storage.initialize_database()
+    with storage._connect() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(enrollments)").fetchall()}
+    assert "section" in columns
+
+
+def test_configuration_save_preserves_existing_class_role_registry(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
+    first = {
+        "academic_year": "2026/2027",
+        "levels": [],
+        "class_roles": {
+            "2BACPC-2": {
+                "role_id": 900,
+                "level_name": "2ème Année Bac",
+                "stream_name": "2ème Année Bac Sciences Physiques",
+                "stream_code": "2BACPC",
+                "section": 2,
+            }
+        },
+    }
+    second = {
+        "academic_year": "2026/2027",
+        "levels": [],
+    }
+
+    storage.save_guild_config(1, first)
+    storage.save_guild_config(1, second)
+
+    restored = storage.get_guild_config(1)
+    assert restored is not None
+    assert restored["class_roles"]["2BACPC-2"]["role_id"] == 900
