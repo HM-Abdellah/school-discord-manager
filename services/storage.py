@@ -948,4 +948,3 @@ def get_student_history(guild_id: int, discord_id: int) -> list[sqlite3.Row]:
             WHERE st.guild_id=? AND st.discord_id=? ORDER BY e.start_date DESC, e.id DESC
         """, (guild_id, discord_id)).fetchall()
 
-[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
