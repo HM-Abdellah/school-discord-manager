@@ -3,6 +3,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from services import storage
+
 from cogs.qr_onboarding import (
     _class_key,
     _class_role_name,
@@ -158,3 +160,71 @@ async def test_class_role_access_copies_explicit_stream_student_overwrites():
 
     channel.set_permissions.assert_awaited_once()
     assert channel.set_permissions.await_args.kwargs["overwrite"] is source
+
+
+def test_class_qr_registry_records_and_filters_active_invites(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(storage, "CONFIG_FILE", tmp_path / "guild_config.json")
+    monkeypatch.setattr(storage, "DATABASE_FILE", tmp_path / "school.db")
+
+    storage.initialize_database()
+    storage.record_class_qr_invite(
+        1,
+        "abc123",
+        "2BACPC-2",
+        "2ème Année Bac",
+        "2ème Année Bac Sciences Physiques",
+        "2BACPC",
+        2,
+        900,
+        42,
+        "2026-10-06T10:00:00+00:00",
+        "2026-10-06T10:30:00+00:00",
+        100,
+    )
+    rows = storage.get_class_qr_invites(1, "2BACPC-2")
+    assert len(rows) == 1
+    assert rows[0]["invite_code"] == "abc123"
+
+    storage.mark_class_qr_invite_revoked(1, "abc123")
+    assert storage.get_class_qr_invites(1, "2BACPC-2") == []
+    assert len(storage.get_class_qr_invites(1, "2BACPC-2", include_revoked=True)) == 1
+
+
+def test_class_qr_registry_is_cleared_by_guild_reset(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(storage, "CONFIG_FILE", tmp_path / "guild_config.json")
+    monkeypatch.setattr(storage, "DATABASE_FILE", tmp_path / "school.db")
+
+    storage.initialize_database()
+    storage.record_class_qr_invite(
+        1,
+        "abc123",
+        "TCS-1",
+        "Tronc Commun",
+        "Tronc Commun Scientifique",
+        "TCS",
+        1,
+        901,
+        42,
+        "2026-10-06T10:00:00+00:00",
+        "2026-10-06T10:30:00+00:00",
+        100,
+    )
+
+    storage.reset_guild_data(1)
+    assert storage.get_class_qr_invites(1, include_revoked=True) == []
+
+
+@pytest.mark.asyncio
+async def test_delete_invite_uses_invite_route():
+    from services.qr_invites import delete_invite
+
+    request = AsyncMock(return_value=None)
+    bot = SimpleNamespace(http=SimpleNamespace(request=request))
+    await delete_invite(bot, "abc123")
+
+    route = request.await_args.args[0]
+    assert route.method == "DELETE"
+    assert route.path == "/invites/{invite_code}"
+    assert request.await_args.kwargs["reason"] == "School Manager class QR revoked"
