@@ -29,7 +29,7 @@ from services.qr_invites import (
     qr_file,
 )
 from services.server_builder import CATEGORY_VOICE, _safe_name, _stream_category_name, _subject_channel_name
-from services.storage import get_guild_config, save_guild_config
+from services.storage import enroll_student_record, get_active_academic_year, get_guild_config, save_guild_config
 
 
 def _contains(value: str, current: str) -> bool:
@@ -409,6 +409,96 @@ class ClassQROnboarding(commands.Cog):
             file=qr,
             ephemeral=True,
         )
+
+
+    @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member) -> None:
+        """Persist a member that entered through a registered class QR role."""
+        if member.bot:
+            return
+
+        config = get_guild_config(member.guild.id) or {}
+        registry = config.get("class_roles", {})
+        if not isinstance(registry, dict):
+            return
+
+        role_ids = {role.id for role in member.roles}
+        matches = []
+        for key, entry in registry.items():
+            if not isinstance(entry, dict):
+                continue
+            role_id = entry.get("role_id")
+            if not isinstance(role_id, int) or role_id not in role_ids:
+                continue
+            level = entry.get("level_name")
+            stream = entry.get("stream_name")
+            code = entry.get("stream_code")
+            section = entry.get("section")
+            if (
+                not isinstance(level, str)
+                or not isinstance(stream, str)
+                or not isinstance(code, str)
+                or not isinstance(section, int)
+            ):
+                continue
+            matches.append((str(key), level, stream, code, section))
+
+        if len(matches) != 1:
+            if len(matches) > 1:
+                print(
+                    "[QR] Ambiguous class roles for member="
+                    + str(member.id)
+                    + " guild="
+                    + str(member.guild.id),
+                    flush=True,
+                )
+            return
+
+        class_key, level, stream, code, section = matches[0]
+        year = get_active_academic_year(member.guild.id)
+        if year is None:
+            print(
+                "[QR] Cannot persist "
+                + class_key
+                + ": no active academic year for guild="
+                + str(member.guild.id),
+                flush=True,
+            )
+            return
+
+        student_role = get_managed_role(member.guild, ROLE_STUDENT)
+        try:
+            if student_role is not None and student_role not in member.roles:
+                await member.add_roles(
+                    student_role,
+                    reason="School Manager class QR onboarding",
+                )
+
+            enroll_student_record(
+                member.guild.id,
+                member.id,
+                member.display_name,
+                int(year["id"]),
+                level,
+                stream,
+                section=section,
+            )
+            record_event(
+                member.guild.id,
+                self.bot.user.id if self.bot.user else 0,
+                self.bot.user.display_name if self.bot.user else "School Manager",
+                "class_qr_join",
+                member.display_name,
+                class_key,
+            )
+        except (discord.Forbidden, discord.HTTPException, OSError, ValueError) as exc:
+            print(
+                "[QR] Failed to persist class onboarding for member="
+                + str(member.id)
+                + ": "
+                + str(exc),
+                flush=True,
+            )
 
 
 async def setup(bot: commands.Bot) -> None:
