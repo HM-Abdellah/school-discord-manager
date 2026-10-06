@@ -28,6 +28,9 @@ EXPECTED_RUNTIME_OWNERS = {
     "assignteacherfull": "cogs.command_fixes",
     "assignsubjectteachers": "cogs.teachers",
     "reportabsence": "cogs.teachers",
+    "createclassqr": "cogs.qr_onboarding",
+    "revokeclassqr": "cogs.qr_onboarding",
+    "listclassqr": "cogs.qr_onboarding",
 }
 
 
@@ -77,6 +80,7 @@ def test_critical_commands_have_one_source_definition_and_expected_owner():
         "cogs.section_aware_exam": "cogs/section_aware_exam.py",
         "cogs.section_aware_timetable": "cogs/section_aware_timetable.py",
         "cogs.year_rollback": "cogs/year_rollback.py",
+        "cogs.qr_onboarding": "cogs/qr_onboarding.py",
     }
     definitions: dict[str, list[str]] = {command: [] for command in EXPECTED_RUNTIME_OWNERS}
     for module, path in modules.items():
@@ -165,3 +169,12 @@ def test_bot_startup_has_no_runtime_fix_dependency():
 def test_setup_build_callback_rechecks_current_management_authorization():
     source = Path("cogs/setup.py").read_text(encoding="utf-8")
     assert "if not management_authorized(interaction):" in source
+
+
+def test_class_qr_commands_are_admin_visible_only():
+    module = importlib.import_module("cogs.qr_onboarding")
+    bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
+    cog = module.ClassQROnboarding(bot)
+    command = cog.create_class_qr
+    assert command.default_permissions is not None
+    assert command.default_permissions.manage_roles is True
