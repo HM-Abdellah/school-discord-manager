@@ -202,3 +202,54 @@ async def test_read_only_status_remains_available_during_removal_recovery(monkey
 
     predicate = dummy.__discord_app_commands_checks__[0]
     assert await predicate(interaction) is True
+
+
+def test_stream_specific_access_does_not_use_base_student_role():
+    from services.permissions import (
+        public_voice_overwrites,
+        stream_area_overwrites,
+        subject_channel_overwrites,
+    )
+
+    everyone = object()
+    admin = object()
+    professor = object()
+    professor_female = object()
+    student = object()
+    teacher_stream = object()
+    student_stream = object()
+
+    stream = stream_area_overwrites(
+        everyone,
+        admin,
+        professor,
+        professor_female,
+        student,
+        teacher_stream,
+        student_stream,
+    )
+    subject = subject_channel_overwrites(
+        everyone,
+        admin,
+        professor,
+        professor_female,
+        teacher_stream,
+        student_stream,
+        student_role=student,
+    )
+    voice = public_voice_overwrites(
+        everyone,
+        admin,
+        professor,
+        professor_female,
+        student,
+        teacher_stream,
+        student_stream,
+    )
+
+    assert student not in stream
+    assert student not in subject
+    assert student not in voice
+    assert student_stream in stream
+    assert student_stream in subject
+    assert student_stream in voice
