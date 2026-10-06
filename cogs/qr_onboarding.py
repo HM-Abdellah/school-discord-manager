@@ -564,10 +564,7 @@ class ClassQROnboarding(commands.Cog):
             return
 
         await interaction.followup.send(
-            "## 🔐 QR de classes actifs
-
-" + "
-".join(lines),
+            "## 🔐 QR de classes actifs\\n\\n" + "\\n".join(lines),
             ephemeral=True,
         )
 
