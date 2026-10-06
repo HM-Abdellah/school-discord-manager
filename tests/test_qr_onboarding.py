@@ -228,3 +228,105 @@ async def test_delete_invite_uses_invite_route():
     assert route.method == "DELETE"
     assert route.path == "/invites/{invite_code}"
     assert request.await_args.kwargs["reason"] == "School Manager class QR revoked"
+
+
+@pytest.mark.asyncio
+async def test_member_join_persists_the_class_from_its_registered_role(monkeypatch):
+    from cogs.qr_onboarding import ClassQROnboarding
+
+    class Role:
+        def __init__(self, role_id, name):
+            self.id = role_id
+            self.name = name
+
+        def __hash__(self):
+            return hash(self.id)
+
+    class Guild:
+        id = 123
+
+    class Member:
+        bot = False
+        id = 700
+        display_name = "Student"
+        guild = Guild()
+
+        def __init__(self):
+            self.class_role = Role(900, "Élèves - 2BACPC-2")
+            self.roles = [self.class_role]
+            self.add_roles = AsyncMock()
+
+    member = Member()
+    bot = SimpleNamespace(
+        user=SimpleNamespace(id=999, display_name="School Manager"),
+    )
+    cog = ClassQROnboarding(bot)
+
+    config = {
+        "class_roles": {
+            "2BACPC-2": {
+                "role_id": 900,
+                "level_name": "2ème Année Bac",
+                "stream_name": "2ème Année Bac Sciences Physiques",
+                "stream_code": "2BACPC",
+                "section": 2,
+            }
+        }
+    }
+    student_role = Role(901, "Élève")
+    captured = {}
+
+    monkeypatch.setattr("cogs.qr_onboarding.get_guild_config", lambda _guild_id: config)
+    monkeypatch.setattr(
+        "cogs.qr_onboarding.get_active_academic_year",
+        lambda _guild_id: {"id": 42},
+    )
+    monkeypatch.setattr(
+        "cogs.qr_onboarding.get_managed_role",
+        lambda _guild, name: student_role if name == "Élève" else None,
+    )
+    monkeypatch.setattr(
+        "cogs.qr_onboarding.enroll_student_record",
+        lambda *args, **kwargs: captured.update(args=args, kwargs=kwargs),
+    )
+    monkeypatch.setattr("cogs.qr_onboarding.record_event", lambda *args, **kwargs: None)
+
+    await cog.on_member_join(member)
+
+    member.add_roles.assert_awaited_once_with(
+        student_role,
+        reason="School Manager class QR onboarding",
+    )
+    assert captured["args"][-1] == 2
+
+
+@pytest.mark.asyncio
+async def test_revoke_class_qrs_deletes_discord_invites_and_marks_them_revoked(monkeypatch):
+    from cogs.qr_onboarding import _revoke_class_qrs
+
+    rows = [
+        {"invite_code": "abc123"},
+        {"invite_code": "def456"},
+    ]
+    deleted = []
+
+    monkeypatch.setattr(
+        "cogs.qr_onboarding.get_class_qr_invites",
+        lambda _guild_id, _class_key, include_revoked=False: rows,
+    )
+
+    async def fake_delete(_bot, code):
+        deleted.append(code)
+
+    marked = []
+    monkeypatch.setattr("cogs.qr_onboarding.delete_invite", fake_delete)
+    monkeypatch.setattr(
+        "cogs.qr_onboarding.mark_class_qr_invite_revoked",
+        lambda guild_id, code: marked.append((guild_id, code)),
+    )
+
+    result = await _revoke_class_qrs(SimpleNamespace(), 123, "2BACPC-2")
+
+    assert result == 2
+    assert deleted == ["abc123", "def456"]
+    assert marked == [(123, "abc123"), (123, "def456")]
