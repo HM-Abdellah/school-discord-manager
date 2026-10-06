@@ -295,6 +295,7 @@ class ClassQROnboarding(commands.Cog):
 
         config = get_guild_config(guild.id) or {}
         working_config = deepcopy(config)
+        await interaction.response.defer(ephemeral=True)
         class_role: discord.Role | None = None
         created_role = False
 
@@ -353,8 +354,6 @@ class ClassQROnboarding(commands.Cog):
                 ephemeral=True,
             )
             return
-
-        await interaction.response.defer(ephemeral=True)
 
         try:
             source_channel = next(
