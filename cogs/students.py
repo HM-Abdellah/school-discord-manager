@@ -208,7 +208,6 @@ class StudentCommands(commands.Cog):
                 await student.remove_roles(*cleanup_roles, reason="Student role normalization")
             await student.add_roles(student_role, student_stream_role, reason="Student stream assignment")
             enroll_student_record(guild.id, student.id, student.display_name, int(year["id"]), level, stream)
-            await _grant_student_global_stream_view(guild, student_role)
         except discord.Forbidden:
             try:
                 await _restore_school_roles(student, guild, original_school_roles)
@@ -244,7 +243,7 @@ class StudentCommands(commands.Cog):
             return
         code = get_stream_abbreviation(level, stream)
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "assignstudent", student.display_name, f"{level}: {code}")
-        await interaction.followup.send(f"✅ {student.mention} est maintenant dans **{code}** ({level}). Les autres filières restent visibles en lecture seule.", ephemeral=True)
+        await interaction.followup.send(f"✅ {student.mention} est maintenant dans **{code}** ({level}). Seule sa filière scolaire est accessible.", ephemeral=True)
 
     @app_commands.command(name="studenthistory", description="Voir l'historique scolaire d'un élève.")
     @app_commands.describe(student="Élève")
