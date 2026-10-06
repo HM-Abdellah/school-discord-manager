@@ -476,4 +476,3 @@ async def test_revoke_class_qrs_deletes_discord_invites_and_marks_them_revoked(m
     assert deleted == ["abc123", "def456"]
     assert marked == [(123, "abc123"), (123, "def456")]
 
-[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
