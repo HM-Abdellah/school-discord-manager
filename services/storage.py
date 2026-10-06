@@ -273,6 +273,22 @@ def save_guild_config(guild_id: int, config: dict[str, Any]) -> None:
 
     with _connect() as conn:
         try:
+            existing_config_row = conn.execute(
+                "SELECT config_json, is_deleted FROM guild_configs WHERE guild_id=? LIMIT 1",
+                (guild_id,),
+            ).fetchone()
+            if (
+                "class_roles" not in config_copy
+                and existing_config_row is not None
+                and not existing_config_row["is_deleted"]
+            ):
+                try:
+                    existing_config = json.loads(existing_config_row["config_json"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    existing_config = {}
+                if isinstance(existing_config, dict) and isinstance(existing_config.get("class_roles"), dict):
+                    config_copy["class_roles"] = deepcopy(existing_config["class_roles"])
+
             active = conn.execute(
                 "SELECT * FROM academic_years WHERE guild_id=? AND is_active=1 ORDER BY id DESC LIMIT 1",
                 (guild_id,),
