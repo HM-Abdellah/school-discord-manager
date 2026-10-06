@@ -26,10 +26,19 @@ from services.qr_invites import (
     DEFAULT_QR_MAX_AGE,
     DEFAULT_QR_MAX_USES,
     create_role_invite,
+    delete_invite,
     qr_file,
 )
 from services.server_builder import CATEGORY_VOICE, _safe_name, _stream_category_name, _subject_channel_name
-from services.storage import enroll_student_record, get_active_academic_year, get_guild_config, save_guild_config
+from services.storage import (
+    enroll_student_record,
+    get_active_academic_year,
+    get_class_qr_invites,
+    get_guild_config,
+    mark_class_qr_invite_revoked,
+    record_class_qr_invite,
+    save_guild_config,
+)
 
 
 def _contains(value: str, current: str) -> bool:
@@ -233,6 +242,41 @@ async def _grant_class_role_access(
             except discord.HTTPException:
                 pass
         raise
+
+
+
+def _class_keys(config: dict[str, Any]) -> list[str]:
+    registry = config.get("class_roles", {})
+    if not isinstance(registry, dict):
+        return []
+    return sorted(str(key) for key in registry)
+
+
+async def class_key_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    config = get_guild_config(interaction.guild.id) if interaction.guild else {}
+    return [
+        app_commands.Choice(name=key[:100], value=key)
+        for key in _class_keys(config or {})
+        if _contains(key, current)
+    ][:25]
+
+
+async def _revoke_class_qrs(bot: discord.Client, guild_id: int, class_key: str) -> int:
+    rows = get_class_qr_invites(guild_id, class_key, include_revoked=False)
+    revoked = 0
+    for row in rows:
+        code = str(row["invite_code"])
+        try:
+            await delete_invite(bot, code)
+        except discord.HTTPException as exc:
+            if exc.status != 404:
+                raise
+        mark_class_qr_invite_revoked(guild_id, code)
+        revoked += 1
+    return revoked
 
 
 class ClassQROnboarding(commands.Cog):
