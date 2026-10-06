@@ -475,6 +475,100 @@ class ClassQROnboarding(commands.Cog):
         )
 
 
+    @app_commands.command(
+        name="revokeclassqr",
+        description="Révoquer les QR actifs d'une classe.",
+    )
+    @app_commands.describe(class_key="Classe, par exemple 2BACPC-2")
+    @app_commands.autocomplete(class_key=class_key_autocomplete)
+    @app_commands.default_permissions(manage_roles=True)
+    @management_check()
+    async def revoke_class_qr(
+        self,
+        interaction: discord.Interaction,
+        class_key: str,
+    ) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            count = await _revoke_class_qrs(self.bot, interaction.guild.id, class_key)
+        except (discord.Forbidden, discord.HTTPException, OSError) as exc:
+            await interaction.followup.send(
+                "❌ Révocation impossible : " + type(exc).__name__ + ": " + str(exc),
+                ephemeral=True,
+            )
+            return
+
+        record_event(
+            interaction.guild.id,
+            interaction.user.id,
+            interaction.user.display_name,
+            "revokeclassqr",
+            class_key,
+            "count=" + str(count),
+        )
+        if count:
+            message = "✅ " + str(count) + " QR actif(s) révoqué(s) pour " + class_key + "."
+        else:
+            message = "ℹ️ Aucun QR actif trouvé pour " + class_key + "."
+        await interaction.followup.send(message, ephemeral=True)
+
+
+    @app_commands.command(
+        name="listclassqr",
+        description="Afficher les QR de classes encore actifs.",
+    )
+    @app_commands.describe(class_key="Filtrer par classe, par exemple 2BACPC-2")
+    @app_commands.autocomplete(class_key=class_key_autocomplete)
+    @app_commands.default_permissions(manage_roles=True)
+    @management_check()
+    async def list_class_qr(
+        self,
+        interaction: discord.Interaction,
+        class_key: str | None = None,
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        rows = get_class_qr_invites(guild.id, class_key, include_revoked=False)
+        now = discord.utils.utcnow()
+        lines: list[str] = []
+
+        for row in rows:
+            try:
+                expires_at = discord.utils.parse_time(str(row["expires_at"]))
+            except (TypeError, ValueError):
+                continue
+            if expires_at <= now:
+                continue
+            lines.append(
+                "• " + str(row["class_key"]) + " — " + str(row["invite_code"]) + " — "
+                + discord.utils.format_dt(expires_at, "R")
+            )
+
+        if not lines:
+            await interaction.followup.send(
+                "ℹ️ Aucun QR actif non expiré."
+                + ("" if class_key is None else " pour " + class_key + "."),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send(
+            "## 🔐 QR de classes actifs
+
+" + "
+".join(lines),
+            ephemeral=True,
+        )
+
+
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
         """Persist a member that entered through a registered class QR role."""
