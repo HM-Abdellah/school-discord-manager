@@ -72,3 +72,16 @@ def qr_file(invite_url: str, filename: str) -> discord.File:
     image.save(buffer, format="PNG")
     buffer.seek(0)
     return discord.File(buffer, filename=filename)
+
+
+async def delete_invite(bot: discord.Client, invite_code: str) -> None:
+    """Revoke a Discord invite by code."""
+    route = Route(
+        "DELETE",
+        "/invites/{invite_code}",
+        invite_code=invite_code,
+    )
+    await bot.http.request(
+        route,
+        reason="School Manager class QR revoked",
+    )
