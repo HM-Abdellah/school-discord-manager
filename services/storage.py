@@ -201,13 +201,14 @@ def initialize_database() -> None:
         CREATE TABLE IF NOT EXISTS streams (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, academic_year_id INTEGER NOT NULL, level_name TEXT NOT NULL, stream_name TEXT NOT NULL, role_name TEXT NOT NULL, UNIQUE(guild_id, academic_year_id, level_name, stream_name), FOREIGN KEY(academic_year_id) REFERENCES academic_years(id) ON DELETE CASCADE);
         CREATE TABLE IF NOT EXISTS students (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, discord_id INTEGER, display_name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, UNIQUE(guild_id, discord_id));
         CREATE TABLE IF NOT EXISTS guild_configs (guild_id INTEGER PRIMARY KEY, config_json TEXT, is_deleted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS class_qr_invites (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, invite_code TEXT NOT NULL UNIQUE, class_key TEXT NOT NULL, level_name TEXT NOT NULL, stream_name TEXT NOT NULL, stream_code TEXT NOT NULL, section INTEGER NOT NULL CHECK(section BETWEEN 1 AND 8), class_role_id INTEGER NOT NULL, created_by INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, max_uses INTEGER NOT NULL, revoked_at TEXT, FOREIGN KEY(guild_id) REFERENCES academic_years(guild_id) ON DELETE CASCADE);
         """)
         _migrate_legacy_enrollments(conn)
         _migrate_enrollment_sections(conn)
         _deduplicate_active_enrollments(conn)
         _deduplicate_active_academic_years(conn)
         _import_json_cache_conn(conn)
-        conn.executescript("CREATE INDEX IF NOT EXISTS idx_students_guild_discord ON students(guild_id, discord_id); CREATE INDEX IF NOT EXISTS idx_streams_guild_year ON streams(guild_id, academic_year_id); CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id);")
+        conn.executescript("CREATE INDEX IF NOT EXISTS idx_students_guild_discord ON students(guild_id, discord_id); CREATE INDEX IF NOT EXISTS idx_streams_guild_year ON streams(guild_id, academic_year_id); CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id); CREATE INDEX IF NOT EXISTS idx_class_qr_invites_guild_class ON class_qr_invites(guild_id, class_key, revoked_at);")
 
 
 def _load_all_from_database() -> dict[str, Any]:
@@ -462,6 +463,81 @@ def restore_student_state(
             conn.rollback()
             raise
     _refresh_json_cache()
+
+
+def record_class_qr_invite(
+    guild_id: int,
+    invite_code: str,
+    class_key: str,
+    level_name: str,
+    stream_name: str,
+    stream_code: str,
+    section: int,
+    class_role_id: int,
+    created_by: int,
+    created_at: str,
+    expires_at: str,
+    max_uses: int,
+) -> int:
+    if not 1 <= int(section) <= 8:
+        raise ValueError("Section must be between 1 and 8.")
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO class_qr_invites(
+                guild_id,invite_code,class_key,level_name,stream_name,stream_code,
+                section,class_role_id,created_by,created_at,expires_at,max_uses
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                guild_id,
+                invite_code,
+                class_key,
+                level_name,
+                stream_name,
+                stream_code,
+                int(section),
+                class_role_id,
+                created_by,
+                created_at,
+                expires_at,
+                max_uses,
+            ),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+
+
+def get_class_qr_invites(
+    guild_id: int,
+    class_key: str | None = None,
+    *,
+    include_revoked: bool = False,
+) -> list[sqlite3.Row]:
+    initialize_database()
+    clauses = ["guild_id=?"]
+    params: list[Any] = [guild_id]
+    if class_key is not None:
+        clauses.append("class_key=?")
+        params.append(class_key)
+    if not include_revoked:
+        clauses.append("revoked_at IS NULL")
+    query = (
+        "SELECT * FROM class_qr_invites WHERE "
+        + " AND ".join(clauses)
+        + " ORDER BY created_at DESC, id DESC"
+    )
+    with _connect() as conn:
+        return conn.execute(query, tuple(params)).fetchall()
+
+
+def mark_class_qr_invite_revoked(guild_id: int, invite_code: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE class_qr_invites SET revoked_at=? WHERE guild_id=? AND invite_code=? AND revoked_at IS NULL",
+            (datetime.now(timezone.utc).isoformat(), guild_id, invite_code),
+        )
+        conn.commit()
 
 
 def archive_guild_database(guild_id: int, academic_year_name: str) -> Path:
