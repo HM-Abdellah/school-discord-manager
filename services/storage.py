@@ -61,6 +61,7 @@ def _create_enrollments_table(conn: sqlite3.Connection) -> None:
             start_date TEXT NOT NULL,
             end_date TEXT,
             status TEXT NOT NULL DEFAULT 'active',
+            section INTEGER CHECK(section IS NULL OR section BETWEEN 1 AND 8),
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
             FOREIGN KEY(stream_id) REFERENCES streams(id) ON DELETE CASCADE
         )
@@ -93,6 +94,12 @@ def _migrate_legacy_enrollments(conn: sqlite3.Connection) -> None:
                 JOIN streams s ON s.id=c.stream_id
                 WHERE st.guild_id=s.guild_id
             """)
+
+
+def _migrate_enrollment_sections(conn: sqlite3.Connection) -> None:
+    """Add the optional section field to databases created before class QR support."""
+    if _table_exists(conn, "enrollments") and "section" not in _table_columns(conn, "enrollments"):
+        conn.execute("ALTER TABLE enrollments ADD COLUMN section INTEGER")
 
 
 def _deduplicate_active_enrollments(conn: sqlite3.Connection) -> None:
@@ -196,6 +203,7 @@ def initialize_database() -> None:
         CREATE TABLE IF NOT EXISTS guild_configs (guild_id INTEGER PRIMARY KEY, config_json TEXT, is_deleted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
         """)
         _migrate_legacy_enrollments(conn)
+        _migrate_enrollment_sections(conn)
         _deduplicate_active_enrollments(conn)
         _deduplicate_active_academic_years(conn)
         _import_json_cache_conn(conn)
@@ -419,19 +427,19 @@ def restore_student_state(
                         conn.execute(
                             """
                             INSERT INTO enrollments(
-                                id,student_id,stream_id,start_date,end_date,status
-                            ) VALUES(?,?,?,?,?,?)
+                                id,student_id,stream_id,start_date,end_date,status,section
+                            ) VALUES(?,?,?,?,?,?,?)
                             """,
-                            (enrollment_id, *values),
+                            (enrollment_id, values[0], values[1], values[2], values[3], values[4], enrollment.get("section")),
                         )
                     else:
                         conn.execute(
                             """
                             UPDATE enrollments
-                            SET student_id=?, stream_id=?, start_date=?, end_date=?, status=?
+                            SET student_id=?, stream_id=?, start_date=?, end_date=?, status=?, section=?
                             WHERE id=?
                             """,
-                            (*values, enrollment_id),
+                            (values[0], values[1], values[2], values[3], values[4], enrollment.get("section"), enrollment_id),
                         )
             conn.commit()
         except Exception:
@@ -721,25 +729,72 @@ def enroll_student(guild_id: int, student_id: int, academic_year_id: int, level_
         conn.execute("UPDATE students SET status='active' WHERE id=? AND guild_id=?", (student_id, guild_id))
 
 
-def enroll_student_record(guild_id: int, discord_id: int, display_name: str, academic_year_id: int, level_name: str, stream_name: str) -> int:
+def enroll_student_record(
+    guild_id: int,
+    discord_id: int,
+    display_name: str,
+    academic_year_id: int,
+    level_name: str,
+    stream_name: str,
+    section: int | None = None,
+) -> int:
     initialize_database()
+    if section is not None:
+        section = int(section)
+        if not 1 <= section <= 8:
+            raise ValueError("Section must be between 1 and 8.")
+
     with _connect() as conn:
-        stream = conn.execute("SELECT * FROM streams WHERE guild_id=? AND academic_year_id=? AND level_name=? AND stream_name=? LIMIT 1", (guild_id, academic_year_id, level_name, stream_name)).fetchone()
+        stream = conn.execute(
+            "SELECT * FROM streams WHERE guild_id=? AND academic_year_id=? AND level_name=? AND stream_name=? LIMIT 1",
+            (guild_id, academic_year_id, level_name, stream_name),
+        ).fetchone()
         if stream is None:
             raise ValueError("Selected stream is not configured for the active academic year.")
-        row = conn.execute("SELECT id FROM students WHERE guild_id=? AND discord_id=?", (guild_id, discord_id)).fetchone()
+
+        row = conn.execute(
+            "SELECT id FROM students WHERE guild_id=? AND discord_id=?",
+            (guild_id, discord_id),
+        ).fetchone()
         today = date.today().isoformat()
+
         if row:
             student_id = int(row["id"])
-            conn.execute("UPDATE students SET display_name=?, status='active' WHERE id=?", (display_name, student_id))
+            conn.execute(
+                "UPDATE students SET display_name=?, status='active' WHERE id=?",
+                (display_name, student_id),
+            )
         else:
-            cur = conn.execute("INSERT INTO students(guild_id,discord_id,display_name,created_at,status) VALUES(?,?,?,?, 'active')", (guild_id, discord_id, display_name, today))
+            cur = conn.execute(
+                "INSERT INTO students(guild_id,discord_id,display_name,created_at,status) VALUES(?,?,?,?, 'active')",
+                (guild_id, discord_id, display_name, today),
+            )
             student_id = int(cur.lastrowid)
-        current = conn.execute("SELECT stream_id FROM enrollments WHERE student_id=? AND status='active' ORDER BY id DESC LIMIT 1", (student_id,)).fetchone()
-        if current and int(current["stream_id"]) == int(stream["id"]):
+
+        current = conn.execute(
+            "SELECT stream_id, section FROM enrollments WHERE student_id=? AND status='active' ORDER BY id DESC LIMIT 1",
+            (student_id,),
+        ).fetchone()
+
+        requested_section = section
+        if requested_section is None and current is not None:
+            requested_section = current["section"]
+
+        if (
+            current
+            and int(current["stream_id"]) == int(stream["id"])
+            and current["section"] == requested_section
+        ):
             return student_id
-        conn.execute("UPDATE enrollments SET end_date=?, status='transferred' WHERE student_id=? AND status='active'", (today, student_id))
-        conn.execute("INSERT INTO enrollments(student_id,stream_id,start_date,status) VALUES(?,?,?,'active')", (student_id, int(stream["id"]), today))
+
+        conn.execute(
+            "UPDATE enrollments SET end_date=?, status='transferred' WHERE student_id=? AND status='active'",
+            (today, student_id),
+        )
+        conn.execute(
+            "INSERT INTO enrollments(student_id,stream_id,section,start_date,status) VALUES(?,?,?,?, 'active')",
+            (student_id, int(stream["id"]), requested_section, today),
+        )
         return student_id
 
 
@@ -760,7 +815,7 @@ def get_student_history(guild_id: int, discord_id: int) -> list[sqlite3.Row]:
     initialize_database()
     with _connect() as conn:
         return conn.execute("""
-            SELECT ay.name AS academic_year, s.level_name, s.stream_name, e.start_date, e.end_date, e.status
+            SELECT ay.name AS academic_year, s.level_name, s.stream_name, e.section, e.start_date, e.end_date, e.status
             FROM students st JOIN enrollments e ON e.student_id=st.id JOIN streams s ON s.id=e.stream_id JOIN academic_years ay ON ay.id=s.academic_year_id
             WHERE st.guild_id=? AND st.discord_id=? ORDER BY e.start_date DESC, e.id DESC
         """, (guild_id, discord_id)).fetchall()
