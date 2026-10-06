@@ -138,8 +138,15 @@ async def test_class_role_access_copies_explicit_stream_student_overwrites():
                 return self._source
             return SimpleNamespace(is_empty=lambda: True)
 
-    stream_role = SimpleNamespace(name="Élèves - 2BACPC")
-    class_role = SimpleNamespace(name="Élèves - 2BACPC-2")
+    class Role:
+        def __init__(self, name):
+            self.name = name
+
+        def __hash__(self):
+            return hash(self.name)
+
+    stream_role = Role("Élèves - 2BACPC")
+    class_role = Role("Élèves - 2BACPC-2")
     source = SimpleNamespace(is_empty=lambda: False)
 
     channel = FakeChannel(source)
