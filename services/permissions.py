@@ -70,6 +70,11 @@ def _managed_role_ids(guild: discord.Guild) -> set[int]:
     management_role_id = config.get("management_role_id")
     if isinstance(management_role_id, int) and management_role_id > 0:
         ids.add(management_role_id)
+    class_roles = config.get("class_roles", {})
+    if isinstance(class_roles, dict):
+        for entry in class_roles.values():
+            if isinstance(entry, dict) and isinstance(entry.get("role_id"), int) and entry["role_id"] > 0:
+                ids.add(entry["role_id"])
     expected = _legacy_role_names(config)
     ids.update(role.id for role in getattr(guild, "roles", []) if not role.managed and role.name in expected)
     return ids
