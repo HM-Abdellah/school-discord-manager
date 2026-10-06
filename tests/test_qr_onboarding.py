@@ -121,3 +121,33 @@ async def test_role_invite_payload_contains_student_and_class_roles():
 def test_qr_defaults_are_bounded():
     assert 0 < DEFAULT_QR_MAX_AGE <= 604800
     assert 0 < DEFAULT_QR_MAX_USES <= 100
+
+
+@pytest.mark.asyncio
+async def test_class_role_access_copies_explicit_stream_student_overwrites():
+    from cogs.qr_onboarding import _grant_class_role_access
+
+    class FakeChannel:
+        def __init__(self, source):
+            self.overwrites = {}
+            self._source = source
+            self.set_permissions = AsyncMock()
+
+        def overwrites_for(self, role):
+            if role is stream_role:
+                return self._source
+            return SimpleNamespace(is_empty=lambda: True)
+
+    stream_role = SimpleNamespace(name="Élèves - 2BACPC")
+    class_role = SimpleNamespace(name="Élèves - 2BACPC-2")
+    source = SimpleNamespace(is_empty=lambda: False)
+
+    channel = FakeChannel(source)
+    await _grant_class_role_access(
+        [channel],
+        class_role=class_role,
+        student_stream_role=stream_role,
+    )
+
+    channel.set_permissions.assert_awaited_once()
+    assert channel.set_permissions.await_args.kwargs["overwrite"] is source
