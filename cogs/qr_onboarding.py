@@ -294,6 +294,7 @@ class ClassQROnboarding(commands.Cog):
         level="Niveau scolaire",
         stream="Filière scolaire",
         section="Numéro de section (1 à 8)",
+        max_uses="Nombre de personnes autorisées à entrer (1 à 42)",
     )
     @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete)
     @app_commands.default_permissions(manage_roles=True)
@@ -304,6 +305,7 @@ class ClassQROnboarding(commands.Cog):
         level: str,
         stream: str,
         section: app_commands.Range[int, 1, 8],
+        max_uses: app_commands.Range[int, 1, 42],
     ) -> None:
         guild = interaction.guild
         if guild is None:
@@ -420,6 +422,7 @@ class ClassQROnboarding(commands.Cog):
                 self.bot,
                 source_channel,
                 (student_role, class_role),
+                max_uses=int(max_uses),
             )
             invite_code = invite_url.rsplit("/", 1)[-1]
             now = discord.utils.utcnow()
@@ -436,7 +439,7 @@ class ClassQROnboarding(commands.Cog):
                 interaction.user.id,
                 now.isoformat(),
                 expires_at.isoformat(),
-                DEFAULT_QR_MAX_USES,
+                int(max_uses),
             )
             qr = qr_file(
                 invite_url,
@@ -461,7 +464,7 @@ class ClassQROnboarding(commands.Cog):
             interaction.user.display_name,
             "createclassqr",
             class_key,
-            "expires=" + str(DEFAULT_QR_MAX_AGE) + "s;max_uses=" + str(DEFAULT_QR_MAX_USES),
+            "expires=" + str(DEFAULT_QR_MAX_AGE) + "s;max_uses=" + str(int(max_uses)),
         )
 
         await interaction.followup.send(
@@ -469,7 +472,7 @@ class ClassQROnboarding(commands.Cog):
             "**Classe :** " + class_key + "\n"
             "**Rôles attribués :** " + ROLE_STUDENT + " + " + class_role.name + "\n"
             "**Expiration :** 30 minutes\n"
-            "**Utilisations max :** " + str(DEFAULT_QR_MAX_USES) + "\n\n"
+            "**Utilisations max :** " + str(int(max_uses)) + "\n\n"
             "Chaque élève de cette classe peut scanner **le même QR**. "
             "Le QR est temporaire et doit rester destiné uniquement à cette classe.\n\n"
             "🔗 " + invite_url,

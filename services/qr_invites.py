@@ -10,9 +10,9 @@ import qrcode
 from discord.http import Route
 
 DEFAULT_QR_MAX_AGE = 30 * 60
-DEFAULT_QR_MAX_USES = 100
+DEFAULT_QR_MAX_USES = 42
 MAX_INVITE_AGE = 7 * 24 * 60 * 60
-MAX_INVITE_USES = 100
+MAX_INVITE_USES = 42
 
 
 async def create_role_invite(
@@ -30,8 +30,8 @@ async def create_role_invite(
         raise ValueError("At least one role is required for a role-backed invite.")
     if not 0 <= max_age <= MAX_INVITE_AGE:
         raise ValueError("Invite max_age must be between 0 and 7 days.")
-    if not 0 <= max_uses <= MAX_INVITE_USES:
-        raise ValueError("Invite max_uses must be between 0 and 100.")
+    if not 1 <= max_uses <= MAX_INVITE_USES:
+        raise ValueError("Invite max_uses must be between 1 and 42.")
 
     route = Route(
         "POST",

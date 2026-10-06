@@ -22,6 +22,10 @@ def test_class_identity_is_stream_plus_section():
     assert _class_role_name("2BACPC", 2) == "Élèves - 2BACPC-2"
 
 
+def test_qr_capacity_policy_is_capped_at_42():
+    assert DEFAULT_QR_MAX_USES == 42
+
+
 @pytest.mark.asyncio
 async def test_class_role_is_created_and_registered():
     role = SimpleNamespace(id=900, name="Élèves - 2BACPC-2", managed=False)
@@ -103,18 +107,18 @@ async def test_class_role_rejects_same_name_unmanaged_collision():
 
 
 @pytest.mark.asyncio
-async def test_role_invite_payload_contains_student_and_class_roles():
+async def test_role_invite_payload_accepts_admin_selected_capacity():
     request = AsyncMock(return_value={"code": "abc123"})
     bot = SimpleNamespace(http=SimpleNamespace(request=request))
     channel = SimpleNamespace(id=123)
     roles = [SimpleNamespace(id=10), SimpleNamespace(id=20)]
 
-    url = await create_role_invite(bot, channel, roles)
+    url = await create_role_invite(bot, channel, roles, max_uses=36)
 
     assert url == "https://discord.gg/abc123"
     payload = request.await_args.kwargs["json"]
     assert payload["max_age"] == DEFAULT_QR_MAX_AGE
-    assert payload["max_uses"] == DEFAULT_QR_MAX_USES
+    assert payload["max_uses"] == 36
     assert payload["unique"] is True
     assert payload["temporary"] is False
     assert payload["role_ids"] == ["10", "20"]
@@ -122,7 +126,19 @@ async def test_role_invite_payload_contains_student_and_class_roles():
 
 def test_qr_defaults_are_bounded():
     assert 0 < DEFAULT_QR_MAX_AGE <= 604800
-    assert 0 < DEFAULT_QR_MAX_USES <= 100
+    assert 0 < DEFAULT_QR_MAX_USES <= 42
+
+
+@pytest.mark.asyncio
+async def test_role_invite_rejects_capacity_above_42():
+    bot = SimpleNamespace(http=SimpleNamespace(request=AsyncMock()))
+    channel = SimpleNamespace(id=123)
+    roles = [SimpleNamespace(id=10)]
+
+    with pytest.raises(ValueError, match="between 1 and 42"):
+        await create_role_invite(bot, channel, roles, max_uses=43)
+
+    bot.http.request.assert_not_awaited()
 
 
 @pytest.mark.asyncio
