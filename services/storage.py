@@ -201,7 +201,7 @@ def initialize_database() -> None:
         CREATE TABLE IF NOT EXISTS streams (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, academic_year_id INTEGER NOT NULL, level_name TEXT NOT NULL, stream_name TEXT NOT NULL, role_name TEXT NOT NULL, UNIQUE(guild_id, academic_year_id, level_name, stream_name), FOREIGN KEY(academic_year_id) REFERENCES academic_years(id) ON DELETE CASCADE);
         CREATE TABLE IF NOT EXISTS students (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, discord_id INTEGER, display_name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, UNIQUE(guild_id, discord_id));
         CREATE TABLE IF NOT EXISTS guild_configs (guild_id INTEGER PRIMARY KEY, config_json TEXT, is_deleted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS class_qr_invites (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, invite_code TEXT NOT NULL UNIQUE, class_key TEXT NOT NULL, level_name TEXT NOT NULL, stream_name TEXT NOT NULL, stream_code TEXT NOT NULL, section INTEGER NOT NULL CHECK(section BETWEEN 1 AND 8), class_role_id INTEGER NOT NULL, created_by INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, max_uses INTEGER NOT NULL, revoked_at TEXT, FOREIGN KEY(guild_id) REFERENCES academic_years(guild_id) ON DELETE CASCADE);
+        CREATE TABLE IF NOT EXISTS class_qr_invites (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, invite_code TEXT NOT NULL UNIQUE, class_key TEXT NOT NULL, level_name TEXT NOT NULL, stream_name TEXT NOT NULL, stream_code TEXT NOT NULL, section INTEGER NOT NULL CHECK(section BETWEEN 1 AND 8), class_role_id INTEGER NOT NULL, created_by INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, max_uses INTEGER NOT NULL, revoked_at TEXT);
         """)
         _migrate_legacy_enrollments(conn)
         _migrate_enrollment_sections(conn)
@@ -631,6 +631,7 @@ def reset_guild_data(guild_id: int) -> None:
         try:
             conn.execute("DELETE FROM students WHERE guild_id=?", (guild_id,))
             conn.execute("DELETE FROM streams WHERE guild_id=?", (guild_id,))
+            conn.execute("DELETE FROM class_qr_invites WHERE guild_id=?", (guild_id,))
             conn.execute("DELETE FROM academic_years WHERE guild_id=?", (guild_id,))
             if _table_exists(conn, "audit_events"):
                 conn.execute("DELETE FROM audit_events WHERE guild_id=?", (guild_id,))
