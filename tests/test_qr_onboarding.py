@@ -297,7 +297,8 @@ async def test_member_join_persists_the_class_from_its_registered_role(monkeypat
         student_role,
         reason="School Manager class QR onboarding",
     )
-    assert captured["args"][-1] == 2
+    assert captured["args"][-1] == "2ème Année Bac Sciences Physiques"
+    assert captured["kwargs"]["section"] == 2
 
 
 @pytest.mark.asyncio
