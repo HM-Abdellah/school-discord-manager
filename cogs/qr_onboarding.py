@@ -326,6 +326,7 @@ class ClassQROnboarding(commands.Cog):
             return
 
         code = get_stream_abbreviation(level, stream)
+        class_key = _class_key(code, int(section))
         student_role = get_managed_role(guild, ROLE_STUDENT)
         student_stream_role = get_managed_role(
             guild,
@@ -374,7 +375,7 @@ class ClassQROnboarding(commands.Cog):
                     await class_role.delete(reason="School Manager QR setup rollback")
                 except discord.HTTPException:
                     pass
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Permission refusée. Vérifie Manage Roles et la hiérarchie du bot.",
                 ephemeral=True,
             )
@@ -385,7 +386,7 @@ class ClassQROnboarding(commands.Cog):
                     await class_role.delete(reason="School Manager QR setup rollback")
                 except discord.HTTPException:
                     pass
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Discord API : " + str(exc),
                 ephemeral=True,
             )
@@ -396,7 +397,7 @@ class ClassQROnboarding(commands.Cog):
                     await class_role.delete(reason="School Manager QR setup rollback")
                 except discord.HTTPException:
                     pass
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ " + str(exc),
                 ephemeral=True,
             )
