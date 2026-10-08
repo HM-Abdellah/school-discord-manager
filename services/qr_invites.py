@@ -86,5 +86,3 @@ async def delete_invite(bot: discord.Client, invite_code: str) -> None:
         route,
         reason="School Manager class QR revoked",
     )
-
-[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
