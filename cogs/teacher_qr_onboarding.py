@@ -12,7 +12,9 @@ from discord.ext import commands
 from config.curriculum import GENERAL_CHANNELS
 from services.audit import record_event
 from services.discord_registry import resolve_registered_text_channel
+from services.build_guard import get_build_lock
 from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_TEACHER_PENDING, get_managed_role, management_check
+from services.teacher_assignment import TeacherAssignmentError, execute_teacher_assignment
 from services.qr_invites import DEFAULT_QR_MAX_AGE, create_role_invite, delete_invite, qr_file
 from services.role_conflicts import teacher_target_conflict
 from services.storage import get_guild_config, get_teacher_qr_invites, get_teacher_registration, mark_teacher_qr_invite_revoked, record_teacher_qr_invite, save_guild_config
@@ -58,14 +60,208 @@ async def _revoke_teacher_qrs(bot: discord.Client, guild_id: int) -> int:
     return revoked
 
 
-async def _send_teacher_onboarding_prompt(user: discord.abc.User) -> None:
+class TeacherOnboardingModal(discord.ui.Modal, title="Inscription professeur"):
+    gender = discord.ui.TextInput(
+        label="Sexe",
+        placeholder="Prof ou Prof (F)",
+        required=True,
+        max_length=20,
+    )
+    level = discord.ui.TextInput(
+        label="Niveau scolaire",
+        placeholder="Ex. 2BAC",
+        required=True,
+        max_length=50,
+    )
+    stream = discord.ui.TextInput(
+        label="Filière",
+        placeholder="Ex. 2BACPC",
+        required=True,
+        max_length=100,
+    )
+    subjects = discord.ui.TextInput(
+        label="Matière(s)",
+        placeholder="Ex. Mathématiques, Physique-Chimie",
+        required=True,
+        max_length=500,
+    )
+
+    def __init__(self, bot: discord.Client, view: "TeacherOnboardingView") -> None:
+        super().__init__()
+        self.bot = bot
+        self.view_ref = view
+
+    @staticmethod
+    def _normalize_gender(value: str) -> str | None:
+        key = " ".join(value.strip().casefold().replace("(", " ").replace(")", " ").split())
+        if key in {"prof", "male", "homme", "masculin", "m"}:
+            return "male"
+        if key in {"prof f", "prof f.", "professeure", "professeur femme", "female", "femme", "feminin", "féminin", "f"}:
+            return "female"
+        return None
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+
+        if interaction.user.id != self.view_ref.user_id:
+            await interaction.followup.send("❌ Ce formulaire ne vous est pas destiné.")
+            return
+
+        guild = self.bot.get_guild(self.view_ref.guild_id)
+        if guild is None:
+            await interaction.followup.send("❌ Le serveur n'est plus accessible. Contactez l'administration.")
+            return
+
+        member = guild.get_member(self.view_ref.user_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(self.view_ref.user_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                await interaction.followup.send("❌ Impossible de retrouver votre compte dans le serveur.")
+                return
+
+        pending_role = get_managed_role(guild, ROLE_TEACHER_PENDING)
+        if pending_role is None or pending_role not in member.roles:
+            await interaction.followup.send("❌ Cette inscription QR n'est plus active.")
+            return
+
+        professor_roles = {
+            role
+            for role in (
+                get_managed_role(guild, ROLE_PROFESSOR),
+                get_managed_role(guild, ROLE_PROFESSOR_FEMALE),
+            )
+            if role is not None
+        }
+        if get_teacher_registration(guild.id, member.id) is not None or any(role in member.roles for role in professor_roles):
+            try:
+                await member.remove_roles(pending_role, reason="School Manager teacher QR already consumed")
+            except discord.HTTPException:
+                pass
+            await interaction.followup.send("ℹ️ Ce compte est déjà enregistré comme professeur. Le QR ne peut pas être réutilisé.")
+            return
+
+        gender_value = self._normalize_gender(str(self.gender.value))
+        if gender_value is None:
+            await interaction.followup.send("❌ Sexe invalide. Utilisez Prof ou Prof (F).")
+            return
+
+        async with get_build_lock(guild.id):
+            pending_role = get_managed_role(guild, ROLE_TEACHER_PENDING)
+            if pending_role is None or pending_role not in member.roles:
+                await interaction.followup.send("❌ Cette inscription QR n'est plus active.")
+                return
+            if get_teacher_registration(guild.id, member.id) is not None:
+                await interaction.followup.send("ℹ️ Votre inscription est déjà terminée.")
+                return
+
+            try:
+                result = await execute_teacher_assignment(
+                    guild=guild,
+                    teacher=member,
+                    gender_value=gender_value,
+                    level=str(self.level.value).strip(),
+                    stream=str(self.stream.value).strip(),
+                    subjects=str(self.subjects.value).strip(),
+                    actor_id=member.id,
+                    actor_display_name=member.display_name,
+                    self_registration=True,
+                )
+            except TeacherAssignmentError as exc:
+                await interaction.followup.send(str(exc))
+                return
+
+        try:
+            await self.view_ref.complete()
+        except discord.HTTPException:
+            pass
+
+        await interaction.followup.send(
+            f"✅ Inscription terminée. Vous êtes maintenant professeur et affecté à "
+            f"{result['stream_code']} pour : {result['subject_names']}.\n"
+            "Le rôle temporaire a été retiré et ce compte ne peut plus se réinscrire via QR."
+        )
+
+
+class TeacherOnboardingView(discord.ui.View):
+    def __init__(self, bot: discord.Client, guild_id: int, user_id: int) -> None:
+        super().__init__(timeout=1800)
+        self.bot = bot
+        self.guild_id = guild_id
+        self.user_id = user_id
+        self.message: discord.Message | None = None
+
+    @discord.ui.button(label="Compléter mon inscription", style=discord.ButtonStyle.primary, emoji="📝")
+    async def complete_registration(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ Ce bouton est réservé au professeur concerné.")
+            return
+
+        guild = self.bot.get_guild(self.guild_id)
+        if guild is None:
+            await interaction.response.send_message("❌ Le serveur n'est plus accessible.")
+            return
+
+        pending_role = get_managed_role(guild, ROLE_TEACHER_PENDING)
+        registration = get_teacher_registration(guild.id, self.user_id)
+        member = guild.get_member(self.user_id)
+        professor_roles = {
+            role
+            for role in (
+                get_managed_role(guild, ROLE_PROFESSOR),
+                get_managed_role(guild, ROLE_PROFESSOR_FEMALE),
+            )
+            if role is not None
+        }
+        if registration is not None or (member is not None and any(role in member.roles for role in professor_roles)):
+            await interaction.response.send_message("ℹ️ Cette inscription est déjà terminée. Le QR ne peut pas être réutilisé.")
+            return
+        if pending_role is None or member is None or pending_role not in member.roles:
+            await interaction.response.send_message("❌ Cette inscription QR n'est plus active.")
+            return
+
+        await interaction.response.send_modal(TeacherOnboardingModal(self.bot, self))
+
+
+    async def on_timeout(self) -> None:
+        if self.message is None:
+            return
+        for item in self.children:
+            item.disabled = True
+        try:
+            await self.message.edit(
+                content="⏰ Cette invitation d'inscription a expiré. Demandez à l'administration un nouveau QR.",
+                view=self,
+            )
+        except discord.HTTPException:
+            pass
+
+    async def complete(self) -> None:
+        if self.message is None:
+            return
+        for item in self.children:
+            item.disabled = True
+        try:
+            await self.message.edit(
+                content="✅ Inscription professeur terminée. Ce QR ne peut plus être utilisé pour ce compte.",
+                view=self,
+            )
+        except discord.HTTPException:
+            pass
+
+
+async def _send_teacher_onboarding_prompt(
+    bot: discord.Client,
+    user: discord.Member,
+) -> None:
+    view = TeacherOnboardingView(bot, user.guild.id, user.id)
     try:
-        await user.send(
+        view.message = await user.send(
             "## 👨‍🏫 Inscription professeur\n\n"
-            "Vous avez rejoint avec le QR d'inscription professeur.\n"
-            "Utilisez maintenant **/assignteacherfull** pour vous enregistrer vous-même.\n\n"
-            "Choisissez votre sexe, votre niveau, votre filière et vos matières. "
-            "Après validation, votre rôle Prof sera attribué immédiatement et l'inscription QR sera définitivement consommée pour ce compte."
+            "Bienvenue ! Cliquez sur le bouton ci-dessous pour compléter votre inscription.\n\n"
+            "Vous devrez renseigner votre sexe, niveau, filière et matière(s). "
+            "Après validation, le rôle professeur sera attribué immédiatement et le QR sera définitivement consommé pour ce compte.",
+            view=view,
         )
     except discord.HTTPException:
         pass
@@ -264,7 +460,7 @@ class TeacherQROnboarding(commands.Cog):
             except discord.HTTPException:
                 pass
             return
-        await _send_teacher_onboarding_prompt(member)
+        await _send_teacher_onboarding_prompt(self.bot, member)
 
 
 async def setup(bot: commands.Bot) -> None:
