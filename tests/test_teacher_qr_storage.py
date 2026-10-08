@@ -109,6 +109,59 @@ async def test_teacher_qr_join_removes_pending_role_for_already_registered_membe
 
 
 @pytest.mark.asyncio
+async def test_teacher_onboarding_view_contains_completion_button():
+    from cogs.teacher_qr_onboarding import TeacherOnboardingView
+
+    view = TeacherOnboardingView(SimpleNamespace(), 1, 101)
+    assert len(view.children) == 1
+    button = view.children[0]
+    assert button.label == "Compléter mon inscription"
+    assert button.emoji.name == "📝"
+    assert view.guild_id == 1
+    assert view.user_id == 101
+
+
+@pytest.mark.asyncio
+async def test_teacher_onboarding_button_opens_modal_for_eligible_teacher(monkeypatch):
+    from unittest.mock import AsyncMock
+    from cogs.teacher_qr_onboarding import TeacherOnboardingView
+    from services.permissions import ROLE_PROFESSOR, ROLE_TEACHER_PENDING
+
+    pending = object()
+    professor = object()
+    member = SimpleNamespace(id=101, roles=[pending])
+    guild = SimpleNamespace(id=1, get_member=lambda user_id: member if user_id == 101 else None)
+    bot = SimpleNamespace(get_guild=lambda guild_id: guild)
+
+    monkeypatch.setattr(
+        "cogs.teacher_qr_onboarding.get_managed_role",
+        lambda _guild, name: {ROLE_TEACHER_PENDING: pending, ROLE_PROFESSOR: professor}.get(name),
+    )
+    monkeypatch.setattr(
+        "cogs.teacher_qr_onboarding.get_teacher_registration",
+        lambda _guild_id, _discord_id: None,
+    )
+
+    response = SimpleNamespace(send_modal=AsyncMock())
+    interaction = SimpleNamespace(user=SimpleNamespace(id=101), response=response)
+    view = TeacherOnboardingView(bot, 1, 101)
+
+    await view.children[0].callback(interaction)
+
+    response.send_modal.assert_awaited_once()
+    assert response.send_modal.await_args.args[0].view_ref is view
+
+
+def test_teacher_onboarding_modal_normalizes_gender():
+    from cogs.teacher_qr_onboarding import TeacherOnboardingModal
+
+    assert TeacherOnboardingModal._normalize_gender("Prof") == "male"
+    assert TeacherOnboardingModal._normalize_gender("Prof (F)") == "female"
+    assert TeacherOnboardingModal._normalize_gender("femme") == "female"
+    assert TeacherOnboardingModal._normalize_gender("invalid") is None
+
+
+@pytest.mark.asyncio
 async def test_teacher_qr_join_prompts_only_unregistered_member(monkeypatch):
     from unittest.mock import AsyncMock
     from cogs.teacher_qr_onboarding import TeacherQROnboarding
@@ -131,8 +184,9 @@ async def test_teacher_qr_join_prompts_only_unregistered_member(monkeypatch):
     monkeypatch.setattr("cogs.teacher_qr_onboarding.teacher_target_conflict", lambda _member, _guild: None)
     monkeypatch.setattr("cogs.teacher_qr_onboarding._send_teacher_onboarding_prompt", prompt)
 
-    cog = TeacherQROnboarding(SimpleNamespace())
+    bot = SimpleNamespace()
+    cog = TeacherQROnboarding(bot)
     await cog.on_member_join(member)
 
     member.remove_roles.assert_not_awaited()
-    prompt.assert_awaited_once_with(member)
+    prompt.assert_awaited_once_with(bot, member)
