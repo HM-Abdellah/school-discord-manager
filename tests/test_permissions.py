@@ -155,7 +155,7 @@ async def test_configured_admin_role_id_is_accepted(monkeypatch):
 
     predicate = dummy.__discord_app_commands_checks__[0]
     assert await predicate(interaction) is True
-    assert not hasattr(dummy, "__discord_app_commands_default_permissions__")
+    assert dummy.__discord_app_commands_default_permissions__.manage_roles is True
 
 
 def test_same_name_role_with_different_id_is_not_managed(monkeypatch):
