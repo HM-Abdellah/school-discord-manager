@@ -28,6 +28,7 @@ EXPECTED_RUNTIME_OWNERS = {
     "assignteacherfull": "cogs.command_fixes",
     "assignsubjectteachers": "cogs.teachers",
     "reportabsence": "cogs.teachers",
+    "absenceteacher": "cogs.teachers",
     "createclassqr": "cogs.qr_onboarding",
     "revokeclassqr": "cogs.qr_onboarding",
     "listclassqr": "cogs.qr_onboarding",
@@ -193,6 +194,22 @@ def test_assignteacherfull_has_admin_default_permission_and_optional_self_target
     assert command.default_permissions.manage_roles is True
     teacher_parameter = next(parameter for parameter in command.parameters if parameter.name == "teacher")
     assert teacher_parameter.required is False
+
+
+def test_teacher_operational_commands_are_registered_and_role_restricted():
+    module = importlib.import_module("cogs.teachers")
+    bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
+    cog = module.TeacherCommands(bot)
+
+    absence = cog.absence_teacher
+    assert absence.default_permissions is not None
+    assert absence.default_permissions.manage_roles is True
+
+    exam = importlib.import_module("cogs.section_aware_exam")
+    exam_cog = exam.SectionAwareExamCommands(bot)
+    setexam = exam_cog.set_exam
+    assert setexam.default_permissions is not None
+    assert setexam.default_permissions.manage_roles is True
 
 
 def test_teacher_qr_commands_are_admin_visible_only():
