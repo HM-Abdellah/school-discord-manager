@@ -342,6 +342,7 @@ class TeacherOnboardingView(discord.ui.View):
         await self._edit_form(interaction)
 
     async def _confirm_registration(self, interaction: discord.Interaction) -> None:
+        stage = "validation"
         if self.submitting:
             await interaction.response.send_message("⏳ Une inscription est déjà en cours.")
             return
@@ -370,12 +371,14 @@ class TeacherOnboardingView(discord.ui.View):
             raise
 
         try:
+            stage = "member-validation"
             member = await self._ensure_eligible(interaction)
             if member is None:
                 self.submitting = False
                 self._refresh_control_state()
                 return
 
+            stage = "assignment"
             async with get_build_lock(self.guild_id):
                 pending_role = get_managed_role(member.guild, ROLE_TEACHER_PENDING)
                 if pending_role is None or pending_role not in member.roles:
@@ -419,10 +422,12 @@ class TeacherOnboardingView(discord.ui.View):
                     )
                     return
 
+            stage = "final-response"
             for item in self.children:
                 item.disabled = True
             self.submitting = True
-            await interaction.edit_original_response(
+            await self._update_interaction_message(
+                interaction,
                 content=(
                     f"✅ **Inscription terminée !**\n\n"
                     f"Vous êtes maintenant professeur et affecté à **{result['stream_code']}** "
@@ -439,6 +444,7 @@ class TeacherOnboardingView(discord.ui.View):
                     interaction,
                     content=(
                         "❌ **Erreur technique pendant l'inscription.**\n\n"
+                        f"Étape concernée : **{stage}**\n"
                         "L'inscription n'a pas été finalisée. Vous pouvez réessayer."
                     ),
                     view=self,
@@ -447,7 +453,7 @@ class TeacherOnboardingView(discord.ui.View):
                 pass
             print(
                 f"[TEACHER QR UI ERROR] guild={self.guild_id} user={self.user_id} "
-                f"{type(exc).__name__}: {exc}",
+                f"stage={stage} {type(exc).__name__}: {exc}",
                 flush=True,
             )
             traceback.print_exc()
@@ -466,6 +472,7 @@ class TeacherOnboardingView(discord.ui.View):
             f"item={type(item).__name__} {type(error).__name__}: {error}",
             flush=True,
         )
+        traceback.print_exception(error)
         try:
             if interaction.response.is_done():
                 await self._update_interaction_message(
