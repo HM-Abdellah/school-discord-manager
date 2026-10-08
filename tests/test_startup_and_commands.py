@@ -28,6 +28,13 @@ EXPECTED_RUNTIME_OWNERS = {
     "assignteacherfull": "cogs.command_fixes",
     "assignsubjectteachers": "cogs.teachers",
     "reportabsence": "cogs.teachers",
+    "absenceteacher": "cogs.teachers",
+    "createclassqr": "cogs.qr_onboarding",
+    "revokeclassqr": "cogs.qr_onboarding",
+    "listclassqr": "cogs.qr_onboarding",
+    "createteacherqr": "cogs.teacher_qr_onboarding",
+    "revoketeacherqr": "cogs.teacher_qr_onboarding",
+    "listteacherqr": "cogs.teacher_qr_onboarding",
 }
 
 
@@ -77,6 +84,8 @@ def test_critical_commands_have_one_source_definition_and_expected_owner():
         "cogs.section_aware_exam": "cogs/section_aware_exam.py",
         "cogs.section_aware_timetable": "cogs/section_aware_timetable.py",
         "cogs.year_rollback": "cogs/year_rollback.py",
+        "cogs.qr_onboarding": "cogs/qr_onboarding.py",
+        "cogs.teacher_qr_onboarding": "cogs/teacher_qr_onboarding.py",
     }
     definitions: dict[str, list[str]] = {command: [] for command in EXPECTED_RUNTIME_OWNERS}
     for module, path in modules.items():
@@ -165,3 +174,58 @@ def test_bot_startup_has_no_runtime_fix_dependency():
 def test_setup_build_callback_rechecks_current_management_authorization():
     source = Path("cogs/setup.py").read_text(encoding="utf-8")
     assert "if not management_authorized(interaction):" in source
+
+
+def test_class_qr_commands_are_admin_visible_only():
+    module = importlib.import_module("cogs.qr_onboarding")
+    bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
+    cog = module.ClassQROnboarding(bot)
+    command = cog.create_class_qr
+    assert command.default_permissions is not None
+    assert command.default_permissions.manage_roles is True
+
+
+def test_assignteacherfull_is_admin_only_and_requires_target():
+    module = importlib.import_module("cogs.command_fixes")
+    bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
+    cog = module.CommandFixes(bot)
+    command = cog.assign_teacher_full
+    assert command.default_permissions is not None
+    assert command.default_permissions.manage_roles is True
+    teacher_parameter = next(parameter for parameter in command.parameters if parameter.name == "teacher")
+    assert teacher_parameter.required is True
+
+
+def test_teacher_operational_commands_are_registered_and_role_restricted():
+    module = importlib.import_module("cogs.teachers")
+    bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
+    cog = module.TeacherCommands(bot)
+
+    absence = cog.absence_teacher
+    assert absence.default_permissions is not None
+    assert absence.default_permissions.manage_roles is True
+
+    exam = importlib.import_module("cogs.section_aware_exam")
+    exam_cog = exam.SectionAwareExamCommands(bot)
+    setexam = exam_cog.set_exam
+    assert setexam.default_permissions is not None
+    assert setexam.default_permissions.manage_roles is True
+
+
+def test_teacher_qr_commands_are_admin_visible_only():
+    module = importlib.import_module("cogs.teacher_qr_onboarding")
+    bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
+    cog = module.TeacherQROnboarding(bot)
+
+    for callback in (
+        cog.create_teacher_qr,
+        cog.revoke_teacher_qr,
+        cog.list_teacher_qr,
+    ):
+        assert callback.default_permissions is not None
+        assert callback.default_permissions.manage_roles is True
+
+    assert not hasattr(cog, "teacher_profile")
+    assert not hasattr(cog, "teacher_requests")
+    assert not hasattr(cog, "approve_teacher")
+    assert not hasattr(cog, "reject_teacher")

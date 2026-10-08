@@ -33,6 +33,7 @@ from services.permissions import (
     administrator_overwrite,
     hidden_overwrite,
     student_overwrite,
+    teacher_professor_check,
 )
 from services.server_builder import _subject_channel_name, _subject_role_name, _stream_role_name
 from services.storage import get_guild_config, save_guild_config
@@ -265,6 +266,77 @@ class TeacherCommands(commands.Cog):
         mentions = ", ".join(member.mention for member in selected_members)
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "assignsubjectteachers", ", ".join(member.display_name for member in selected_members), f"{code} / {subject_display}")
         await interaction.followup.send(f"✅ **{len(selected_members)} professeur(s)** affecté(s) à **{code} / {subject_display}**.\nSalon : {channel.mention}\nRôles ajoutés : `{stream_role_name}` + `{subject_role_name}`\nProfesseurs : {mentions}", ephemeral=True)
+
+    @app_commands.command(name="absenceteacher", description="Signaler votre propre absence comme professeur.")
+    @app_commands.describe(
+        duration="Durée de l'absence, par exemple : 3 jours",
+        classes="Classes concernées, par exemple : 1BACSE C1/C2",
+        details="Précisions ou consignes pour les élèves (optionnel)",
+    )
+    @app_commands.default_permissions(manage_roles=True)
+    @teacher_professor_check()
+    async def absence_teacher(
+        self,
+        interaction: discord.Interaction,
+        duration: str,
+        classes: str,
+        details: str | None = None,
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        channel = await _find_managed_channel(
+            guild, GENERAL_CHANNELS["absences"], category_name="🏢・INFORMATIONS & ADMINISTRATION"
+        )
+        if channel is None:
+            await interaction.followup.send(
+                "❌ Le salon d'absences n'existe pas. Utilisez /build après /setup.",
+                ephemeral=True,
+            )
+            return
+
+        embed = discord.Embed(
+            title="📢 Absence d'un professeur",
+            description=(
+                f"**Professeur :** {interaction.user.mention}\n"
+                f"**Durée :** {duration}\n"
+                f"**Classes concernées :** {classes}\n"
+                f"**Précisions :** {details or 'Aucune'}\n"
+                f"**Date du signalement :** {date.today().isoformat()}"
+            ),
+            colour=discord.Colour.orange(),
+        )
+        embed.timestamp = discord.utils.utcnow()
+        try:
+            await channel.send(embed=embed)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ Le bot ne peut pas publier dans le salon d'absences.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as exc:
+            await interaction.followup.send(
+                f"❌ Discord API : {exc}",
+                ephemeral=True,
+            )
+            return
+
+        record_event(
+            guild.id,
+            interaction.user.id,
+            interaction.user.display_name,
+            "absenceteacher",
+            interaction.user.display_name,
+            f"{duration} | {classes}",
+        )
+        await interaction.followup.send(
+            f"✅ Votre absence a été signalée dans {channel.mention}.",
+            ephemeral=True,
+        )
 
     @app_commands.command(name="reportabsence", description="Publier une annonce d'absence d'un professeur.")
     @app_commands.describe(teacher="Professeur absent", duration="Durée de l'absence, par exemple : 3 jours", classes="Classes concernées, par exemple : 1BACSE C1/C2")

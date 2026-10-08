@@ -8,20 +8,21 @@ import types
 import discord
 from discord import app_commands
 
-from config.curriculum import get_stream_abbreviation, get_stream_subjects, get_subject_internal_code
+from config.curriculum import get_stream_abbreviation, get_stream_subjects, get_subject_display_name, get_subject_internal_code
 from services.build_guard import get_build_lock
-from services.storage import get_guild_config
+from services.storage import get_guild_config, get_teacher_registration
 
 ROLE_ADMIN = "Administration"
 ROLE_PROFESSOR = "Prof"
 ROLE_PROFESSOR_FEMALE = "Prof (F)"
+ROLE_TEACHER_PENDING = "Professeur - En attente"
 ROLE_STUDENT = "Élève"
 STREAM_ROLE_PREFIX = "Filière - "
 STUDENT_STREAM_ROLE_PREFIX = "Élèves - "
 SUBJECT_ROLE_PREFIX = "Matière - "
 
-CHANNEL_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream"}
-ROLE_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream", "assignstudent", "assignteacher", "assignteacherfull", "assignsubjectteachers"}
+CHANNEL_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream", "createclassqr"}
+ROLE_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream", "assignstudent", "assignteacher", "assignteacherfull", "assignsubjectteachers", "createclassqr", "createteacherqr", "revoketeacherqr", "listteacherqr"}
 RESET_COMMANDS = {"resetserver"}
 READONLY_DURING_PENDING_REMOVAL = {"status", "years", "studenthistory", "adminpanel", "serverhealth"}
 PENDING_REMOVAL_KEY = "pending_removal"
@@ -70,6 +71,11 @@ def _managed_role_ids(guild: discord.Guild) -> set[int]:
     management_role_id = config.get("management_role_id")
     if isinstance(management_role_id, int) and management_role_id > 0:
         ids.add(management_role_id)
+    class_roles = config.get("class_roles", {})
+    if isinstance(class_roles, dict):
+        for entry in class_roles.values():
+            if isinstance(entry, dict) and isinstance(entry.get("role_id"), int) and entry["role_id"] > 0:
+                ids.add(entry["role_id"])
     expected = _legacy_role_names(config)
     ids.update(role.id for role in getattr(guild, "roles", []) if not role.managed and role.name in expected)
     return ids
@@ -186,6 +192,120 @@ def _apply_default_permission(function, *, manage_roles: bool = False, administr
     return function
 
 
+def teacher_assignment_check(*, lock: bool = True) -> app_commands.check:
+    """Authorize /assignteacherfull for administrators or one-time QR self-registration."""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        guild = interaction.guild
+        if guild is None:
+            return False
+        if management_authorized(interaction):
+            message = _preflight_message(interaction, needs_roles=True)
+            if message and not interaction.response.is_done():
+                await interaction.response.send_message(message, ephemeral=True)
+                return False
+            return True
+
+        member = interaction.user
+        pending_role = get_managed_role(guild, ROLE_TEACHER_PENDING)
+        if pending_role is None or pending_role not in getattr(member, "roles", []):
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Cette commande est réservée à l'inscription professeur par QR.",
+                    ephemeral=True,
+                )
+            return False
+
+        target = getattr(interaction.namespace, "teacher", None)
+        if target is not None and getattr(target, "id", None) != member.id:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Lors de votre propre inscription, vous ne pouvez cibler que votre compte.",
+                    ephemeral=True,
+                )
+            return False
+
+        professor_roles = {
+            role
+            for role in (
+                get_managed_role(guild, ROLE_PROFESSOR),
+                get_managed_role(guild, ROLE_PROFESSOR_FEMALE),
+            )
+            if role is not None
+        }
+        if any(role in getattr(member, "roles", []) for role in professor_roles):
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Ce compte est déjà enregistré comme professeur.",
+                    ephemeral=True,
+                )
+            return False
+
+        if get_teacher_registration(guild.id, member.id) is not None:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Ce compte est déjà enregistré comme professeur.",
+                    ephemeral=True,
+                )
+            return False
+
+        message = _preflight_message(interaction, needs_roles=True)
+        if message:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(message, ephemeral=True)
+            return False
+        return True
+
+    check_decorator = app_commands.check(predicate)
+
+    def decorator(function):
+        function = check_decorator(function)
+        return _wrap_with_mutation_lock(function) if lock else function
+
+    return decorator
+
+
+def teacher_professor_check(*, lock: bool = True) -> app_commands.check:
+    """Authorize teachers for operational self-service commands."""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        guild = interaction.guild
+        if guild is None:
+            return False
+        if management_authorized(interaction):
+            message = _preflight_message(interaction, needs_roles=True)
+            if message and not interaction.response.is_done():
+                await interaction.response.send_message(message, ephemeral=True)
+                return False
+            return True
+
+        member = interaction.user
+        professor_roles = {
+            role
+            for role in (
+                get_managed_role(guild, ROLE_PROFESSOR),
+                get_managed_role(guild, ROLE_PROFESSOR_FEMALE),
+            )
+            if role is not None
+        }
+        if not any(role in getattr(member, "roles", []) for role in professor_roles):
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Cette commande est réservée aux professeurs enregistrés.",
+                    ephemeral=True,
+                )
+            return False
+
+        return True
+
+    check_decorator = app_commands.check(predicate)
+
+    def decorator(function):
+        function = check_decorator(function)
+        function = _apply_default_permission(function, manage_roles=True)
+        return _wrap_with_mutation_lock(function) if lock else function
+
+    return decorator
+
+
 def management_check(*, lock: bool = True) -> app_commands.check:
     async def predicate(interaction: discord.Interaction) -> bool:
         guild = interaction.guild
@@ -217,8 +337,10 @@ def management_check(*, lock: bool = True) -> app_commands.check:
 
     def decorator(function):
         function = check_decorator(function)
-        # Authorization is intentionally enforced at runtime so the configured
-        # Administration role is not blocked by Discord's user-permission gate.
+        # Keep management commands hidden from ordinary members at the Discord UI
+        # level while retaining runtime authorization for the configured
+        # Administration role and server owner.
+        function = _apply_default_permission(function, manage_roles=True)
         return _wrap_with_mutation_lock(function) if lock else function
 
     return decorator
@@ -284,7 +406,7 @@ def hidden_overwrite() -> discord.PermissionOverwrite:
 
 
 def stream_area_overwrites(everyone, admin_role, professor_role, female_professor_role, student_role, teacher_stream_role, student_stream_role):
-    return {everyone: hidden_overwrite(), student_role: student_view_overwrite(), professor_role: professor_subject_view_overwrite(), female_professor_role: professor_subject_view_overwrite(), admin_role: administrator_overwrite(), teacher_stream_role: professor_subject_view_overwrite(), student_stream_role: student_overwrite(can_send=True)}
+    return {everyone: hidden_overwrite(), professor_role: professor_subject_view_overwrite(), female_professor_role: professor_subject_view_overwrite(), admin_role: administrator_overwrite(), teacher_stream_role: professor_subject_view_overwrite(), student_stream_role: student_overwrite(can_send=True)}
 
 
 def stream_announcement_overwrites(everyone, admin_role, professor_role, female_professor_role, student_role, teacher_stream_role, student_stream_role):
@@ -306,8 +428,6 @@ def teacher_area_overwrites(everyone, admin_role, professor_role, female_profess
 
 def subject_channel_overwrites(everyone, admin_role, professor_role, female_professor_role, teacher_stream_role, student_stream_role, subject_role=None, student_role=None):
     overwrites = {everyone: hidden_overwrite(), admin_role: administrator_overwrite(), professor_role: professor_subject_view_overwrite(), female_professor_role: professor_subject_view_overwrite(), teacher_stream_role: professor_subject_view_overwrite(), student_stream_role: student_overwrite(can_send=True)}
-    if student_role is not None:
-        overwrites[student_role] = student_view_overwrite()
     if subject_role is not None:
         overwrites[subject_role] = professor_subject_member_overwrite()
     return overwrites
@@ -315,5 +435,4 @@ def subject_channel_overwrites(everyone, admin_role, professor_role, female_prof
 
 def public_voice_overwrites(everyone, admin_role, professor_role, female_professor_role, student_role, teacher_stream_role, student_stream_role):
     voice = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, stream=True)
-    student_view = discord.PermissionOverwrite(view_channel=True, connect=True, speak=False)
-    return {everyone: hidden_overwrite(), student_role: student_view, professor_role: voice, female_professor_role: voice, admin_role: voice, teacher_stream_role: voice, student_stream_role: voice}
+    return {everyone: hidden_overwrite(), professor_role: voice, female_professor_role: voice, admin_role: voice, teacher_stream_role: voice, student_stream_role: voice}

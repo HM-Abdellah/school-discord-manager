@@ -61,6 +61,7 @@ def _create_enrollments_table(conn: sqlite3.Connection) -> None:
             start_date TEXT NOT NULL,
             end_date TEXT,
             status TEXT NOT NULL DEFAULT 'active',
+            section INTEGER CHECK(section IS NULL OR section BETWEEN 1 AND 8),
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
             FOREIGN KEY(stream_id) REFERENCES streams(id) ON DELETE CASCADE
         )
@@ -95,6 +96,12 @@ def _migrate_legacy_enrollments(conn: sqlite3.Connection) -> None:
             """)
 
 
+def _migrate_enrollment_sections(conn: sqlite3.Connection) -> None:
+    """Add the optional section field to databases created before class QR support."""
+    if _table_exists(conn, "enrollments") and "section" not in _table_columns(conn, "enrollments"):
+        conn.execute("ALTER TABLE enrollments ADD COLUMN section INTEGER")
+
+
 def _deduplicate_active_enrollments(conn: sqlite3.Connection) -> None:
     conn.execute("""
         UPDATE enrollments
@@ -115,6 +122,24 @@ def _deduplicate_active_academic_years(conn: sqlite3.Connection) -> None:
           )
     """)
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_one_active_academic_year_per_guild ON academic_years(guild_id) WHERE is_active=1")
+
+
+def _deduplicate_active_class_qr_invites(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        UPDATE class_qr_invites
+        SET revoked_at=COALESCE(revoked_at, datetime('now'))
+        WHERE revoked_at IS NULL
+          AND id NOT IN (
+              SELECT MAX(id)
+              FROM class_qr_invites
+              WHERE revoked_at IS NULL
+              GROUP BY guild_id, class_key
+          )
+    """)
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_one_active_class_qr_per_guild_class "
+        "ON class_qr_invites(guild_id, class_key) WHERE revoked_at IS NULL"
+    )
 
 
 def _read_json_cache() -> dict[str, Any]:
@@ -194,12 +219,18 @@ def initialize_database() -> None:
         CREATE TABLE IF NOT EXISTS streams (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, academic_year_id INTEGER NOT NULL, level_name TEXT NOT NULL, stream_name TEXT NOT NULL, role_name TEXT NOT NULL, UNIQUE(guild_id, academic_year_id, level_name, stream_name), FOREIGN KEY(academic_year_id) REFERENCES academic_years(id) ON DELETE CASCADE);
         CREATE TABLE IF NOT EXISTS students (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, discord_id INTEGER, display_name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, UNIQUE(guild_id, discord_id));
         CREATE TABLE IF NOT EXISTS guild_configs (guild_id INTEGER PRIMARY KEY, config_json TEXT, is_deleted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS class_qr_invites (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, invite_code TEXT NOT NULL UNIQUE, class_key TEXT NOT NULL, level_name TEXT NOT NULL, stream_name TEXT NOT NULL, stream_code TEXT NOT NULL, section INTEGER NOT NULL CHECK(section BETWEEN 1 AND 8), class_role_id INTEGER NOT NULL, created_by INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, max_uses INTEGER NOT NULL, revoked_at TEXT);
+        CREATE TABLE IF NOT EXISTS teacher_qr_invites (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, invite_code TEXT NOT NULL UNIQUE, pending_role_id INTEGER NOT NULL, created_by INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, max_uses INTEGER NOT NULL, revoked_at TEXT);
+        CREATE TABLE IF NOT EXISTS teacher_registrations (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, discord_id INTEGER NOT NULL, full_name TEXT NOT NULL, profile_type TEXT NOT NULL CHECK(profile_type IN ('male','female')), level_name TEXT NOT NULL, stream_name TEXT NOT NULL, subjects_text TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(guild_id, discord_id));
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_one_active_teacher_qr_per_guild ON teacher_qr_invites(guild_id) WHERE revoked_at IS NULL;
         """)
         _migrate_legacy_enrollments(conn)
+        _migrate_enrollment_sections(conn)
         _deduplicate_active_enrollments(conn)
         _deduplicate_active_academic_years(conn)
+        _deduplicate_active_class_qr_invites(conn)
         _import_json_cache_conn(conn)
-        conn.executescript("CREATE INDEX IF NOT EXISTS idx_students_guild_discord ON students(guild_id, discord_id); CREATE INDEX IF NOT EXISTS idx_streams_guild_year ON streams(guild_id, academic_year_id); CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id);")
+        conn.executescript("CREATE INDEX IF NOT EXISTS idx_students_guild_discord ON students(guild_id, discord_id); CREATE INDEX IF NOT EXISTS idx_streams_guild_year ON streams(guild_id, academic_year_id); CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id); CREATE INDEX IF NOT EXISTS idx_class_qr_invites_guild_class ON class_qr_invites(guild_id, class_key, revoked_at);")
 
 
 def _load_all_from_database() -> dict[str, Any]:
@@ -265,6 +296,22 @@ def save_guild_config(guild_id: int, config: dict[str, Any]) -> None:
 
     with _connect() as conn:
         try:
+            existing_config_row = conn.execute(
+                "SELECT config_json, is_deleted FROM guild_configs WHERE guild_id=? LIMIT 1",
+                (guild_id,),
+            ).fetchone()
+            if (
+                "class_roles" not in config_copy
+                and existing_config_row is not None
+                and not existing_config_row["is_deleted"]
+            ):
+                try:
+                    existing_config = json.loads(existing_config_row["config_json"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    existing_config = {}
+                if isinstance(existing_config, dict) and isinstance(existing_config.get("class_roles"), dict):
+                    config_copy["class_roles"] = deepcopy(existing_config["class_roles"])
+
             active = conn.execute(
                 "SELECT * FROM academic_years WHERE guild_id=? AND is_active=1 ORDER BY id DESC LIMIT 1",
                 (guild_id,),
@@ -419,25 +466,225 @@ def restore_student_state(
                         conn.execute(
                             """
                             INSERT INTO enrollments(
-                                id,student_id,stream_id,start_date,end_date,status
-                            ) VALUES(?,?,?,?,?,?)
+                                id,student_id,stream_id,start_date,end_date,status,section
+                            ) VALUES(?,?,?,?,?,?,?)
                             """,
-                            (enrollment_id, *values),
+                            (enrollment_id, values[0], values[1], values[2], values[3], values[4], enrollment.get("section")),
                         )
                     else:
                         conn.execute(
                             """
                             UPDATE enrollments
-                            SET student_id=?, stream_id=?, start_date=?, end_date=?, status=?
+                            SET student_id=?, stream_id=?, start_date=?, end_date=?, status=?, section=?
                             WHERE id=?
                             """,
-                            (*values, enrollment_id),
+                            (values[0], values[1], values[2], values[3], values[4], enrollment.get("section"), enrollment_id),
                         )
             conn.commit()
         except Exception:
             conn.rollback()
             raise
     _refresh_json_cache()
+
+
+def record_class_qr_invite(
+    guild_id: int,
+    invite_code: str,
+    class_key: str,
+    level_name: str,
+    stream_name: str,
+    stream_code: str,
+    section: int,
+    class_role_id: int,
+    created_by: int,
+    created_at: str,
+    expires_at: str,
+    max_uses: int,
+) -> int:
+    if not 1 <= int(section) <= 8:
+        raise ValueError("Section must be between 1 and 8.")
+    if not 1 <= int(max_uses) <= 42:
+        raise ValueError("max_uses must be between 1 and 42.")
+    with _connect() as conn:
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO class_qr_invites(
+                    guild_id,invite_code,class_key,level_name,stream_name,stream_code,
+                    section,class_role_id,created_by,created_at,expires_at,max_uses
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    guild_id,
+                    invite_code,
+                    class_key,
+                    level_name,
+                    stream_name,
+                    stream_code,
+                    int(section),
+                    class_role_id,
+                    created_by,
+                    created_at,
+                    expires_at,
+                    max_uses,
+                ),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
+        except sqlite3.IntegrityError as exc:
+            conn.rollback()
+            existing = conn.execute(
+                "SELECT 1 FROM class_qr_invites WHERE guild_id=? AND class_key=? AND revoked_at IS NULL LIMIT 1",
+                (guild_id, class_key),
+            ).fetchone()
+            if existing is not None:
+                raise RuntimeError("Un QR actif existe déjà pour cette classe.") from exc
+            raise
+
+
+def get_class_qr_invites(
+    guild_id: int,
+    class_key: str | None = None,
+    *,
+    include_revoked: bool = False,
+) -> list[sqlite3.Row]:
+    initialize_database()
+    clauses = ["guild_id=?"]
+    params: list[Any] = [guild_id]
+    if class_key is not None:
+        clauses.append("class_key=?")
+        params.append(class_key)
+    if not include_revoked:
+        clauses.append("revoked_at IS NULL")
+    query = (
+        "SELECT * FROM class_qr_invites WHERE "
+        + " AND ".join(clauses)
+        + " ORDER BY created_at DESC, id DESC"
+    )
+    with _connect() as conn:
+        return conn.execute(query, tuple(params)).fetchall()
+
+
+def mark_class_qr_invite_revoked(guild_id: int, invite_code: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE class_qr_invites SET revoked_at=? WHERE guild_id=? AND invite_code=? AND revoked_at IS NULL",
+            (datetime.now(timezone.utc).isoformat(), guild_id, invite_code),
+        )
+        conn.commit()
+
+
+def record_teacher_qr_invite(
+    guild_id: int,
+    invite_code: str,
+    pending_role_id: int,
+    created_by: int,
+    created_at: str,
+    expires_at: str,
+    max_uses: int,
+) -> int:
+    if not 1 <= int(max_uses) <= 42:
+        raise ValueError("max_uses must be between 1 and 42.")
+    with _connect() as conn:
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO teacher_qr_invites(
+                    guild_id,invite_code,pending_role_id,created_by,created_at,expires_at,max_uses
+                ) VALUES(?,?,?,?,?,?,?)
+                """,
+                (guild_id, invite_code, pending_role_id, created_by, created_at, expires_at, int(max_uses)),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
+        except sqlite3.IntegrityError as exc:
+            conn.rollback()
+            existing = conn.execute(
+                "SELECT 1 FROM teacher_qr_invites WHERE guild_id=? AND revoked_at IS NULL LIMIT 1",
+                (guild_id,),
+            ).fetchone()
+            if existing is not None:
+                raise RuntimeError("Un QR professeur actif existe déjà.") from exc
+            raise
+
+
+def record_teacher_registration(
+    guild_id: int,
+    discord_id: int,
+    full_name: str,
+    profile_type: str,
+    level_name: str,
+    stream_name: str,
+    subjects_text: str,
+) -> int:
+    full_name = " ".join(str(full_name).split())
+    level_name = str(level_name).strip()
+    stream_name = str(stream_name).strip()
+    subjects_text = str(subjects_text).strip()
+    if len(full_name) < 2:
+        raise ValueError("Le nom complet est trop court.")
+    if profile_type not in {"male", "female"}:
+        raise ValueError("Type de profil professeur invalide.")
+    if not level_name or not stream_name or not subjects_text:
+        raise ValueError("Le niveau, la filière et les matières sont obligatoires.")
+    now = datetime.now(timezone.utc).isoformat()
+    with _connect() as conn:
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO teacher_registrations(
+                    guild_id,discord_id,full_name,profile_type,level_name,stream_name,subjects_text,created_at
+                ) VALUES(?,?,?,?,?,?,?,?)
+                """,
+                (guild_id, discord_id, full_name, profile_type, level_name, stream_name, subjects_text, now),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
+        except sqlite3.IntegrityError as exc:
+            conn.rollback()
+            raise RuntimeError("Ce compte Discord est déjà enregistré comme professeur.") from exc
+
+
+def get_teacher_registration(guild_id: int, discord_id: int) -> sqlite3.Row | None:
+    initialize_database()
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT * FROM teacher_registrations WHERE guild_id=? AND discord_id=? LIMIT 1",
+            (guild_id, discord_id),
+        ).fetchone()
+
+
+def delete_teacher_registration(guild_id: int, discord_id: int) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "DELETE FROM teacher_registrations WHERE guild_id=? AND discord_id=?",
+            (guild_id, discord_id),
+        )
+        conn.commit()
+
+
+def get_teacher_qr_invites(
+    guild_id: int,
+    *,
+    include_revoked: bool = False,
+) -> list[sqlite3.Row]:
+    initialize_database()
+    query = "SELECT * FROM teacher_qr_invites WHERE guild_id=?"
+    params: list[Any] = [guild_id]
+    if not include_revoked:
+        query += " AND revoked_at IS NULL"
+    query += " ORDER BY created_at DESC, id DESC"
+    with _connect() as conn:
+        return conn.execute(query, tuple(params)).fetchall()
+
+
+def mark_teacher_qr_invite_revoked(guild_id: int, invite_code: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE teacher_qr_invites SET revoked_at=? WHERE guild_id=? AND invite_code=? AND revoked_at IS NULL",
+            (datetime.now(timezone.utc).isoformat(), guild_id, invite_code),
+        )
+        conn.commit()
 
 
 def archive_guild_database(guild_id: int, academic_year_name: str) -> Path:
@@ -531,6 +778,9 @@ def reset_guild_data(guild_id: int) -> None:
         try:
             conn.execute("DELETE FROM students WHERE guild_id=?", (guild_id,))
             conn.execute("DELETE FROM streams WHERE guild_id=?", (guild_id,))
+            conn.execute("DELETE FROM class_qr_invites WHERE guild_id=?", (guild_id,))
+            conn.execute("DELETE FROM teacher_qr_invites WHERE guild_id=?", (guild_id,))
+            conn.execute("DELETE FROM teacher_registrations WHERE guild_id=?", (guild_id,))
             conn.execute("DELETE FROM academic_years WHERE guild_id=?", (guild_id,))
             if _table_exists(conn, "audit_events"):
                 conn.execute("DELETE FROM audit_events WHERE guild_id=?", (guild_id,))
@@ -721,25 +971,76 @@ def enroll_student(guild_id: int, student_id: int, academic_year_id: int, level_
         conn.execute("UPDATE students SET status='active' WHERE id=? AND guild_id=?", (student_id, guild_id))
 
 
-def enroll_student_record(guild_id: int, discord_id: int, display_name: str, academic_year_id: int, level_name: str, stream_name: str) -> int:
+def enroll_student_record(
+    guild_id: int,
+    discord_id: int,
+    display_name: str,
+    academic_year_id: int,
+    level_name: str,
+    stream_name: str,
+    section: int | None = None,
+) -> int:
     initialize_database()
+    if section is not None:
+        section = int(section)
+        if not 1 <= section <= 8:
+            raise ValueError("Section must be between 1 and 8.")
+
     with _connect() as conn:
-        stream = conn.execute("SELECT * FROM streams WHERE guild_id=? AND academic_year_id=? AND level_name=? AND stream_name=? LIMIT 1", (guild_id, academic_year_id, level_name, stream_name)).fetchone()
+        stream = conn.execute(
+            "SELECT * FROM streams WHERE guild_id=? AND academic_year_id=? AND level_name=? AND stream_name=? LIMIT 1",
+            (guild_id, academic_year_id, level_name, stream_name),
+        ).fetchone()
         if stream is None:
             raise ValueError("Selected stream is not configured for the active academic year.")
-        row = conn.execute("SELECT id FROM students WHERE guild_id=? AND discord_id=?", (guild_id, discord_id)).fetchone()
+
+        row = conn.execute(
+            "SELECT id FROM students WHERE guild_id=? AND discord_id=?",
+            (guild_id, discord_id),
+        ).fetchone()
         today = date.today().isoformat()
+
         if row:
             student_id = int(row["id"])
-            conn.execute("UPDATE students SET display_name=?, status='active' WHERE id=?", (display_name, student_id))
+            conn.execute(
+                "UPDATE students SET display_name=?, status='active' WHERE id=?",
+                (display_name, student_id),
+            )
         else:
-            cur = conn.execute("INSERT INTO students(guild_id,discord_id,display_name,created_at,status) VALUES(?,?,?,?, 'active')", (guild_id, discord_id, display_name, today))
+            cur = conn.execute(
+                "INSERT INTO students(guild_id,discord_id,display_name,created_at,status) VALUES(?,?,?,?, 'active')",
+                (guild_id, discord_id, display_name, today),
+            )
             student_id = int(cur.lastrowid)
-        current = conn.execute("SELECT stream_id FROM enrollments WHERE student_id=? AND status='active' ORDER BY id DESC LIMIT 1", (student_id,)).fetchone()
-        if current and int(current["stream_id"]) == int(stream["id"]):
+
+        current = conn.execute(
+            "SELECT stream_id, section FROM enrollments WHERE student_id=? AND status='active' ORDER BY id DESC LIMIT 1",
+            (student_id,),
+        ).fetchone()
+
+        requested_section = section
+        if (
+            requested_section is None
+            and current is not None
+            and int(current["stream_id"]) == int(stream["id"])
+        ):
+            requested_section = current["section"]
+
+        if (
+            current
+            and int(current["stream_id"]) == int(stream["id"])
+            and current["section"] == requested_section
+        ):
             return student_id
-        conn.execute("UPDATE enrollments SET end_date=?, status='transferred' WHERE student_id=? AND status='active'", (today, student_id))
-        conn.execute("INSERT INTO enrollments(student_id,stream_id,start_date,status) VALUES(?,?,?,'active')", (student_id, int(stream["id"]), today))
+
+        conn.execute(
+            "UPDATE enrollments SET end_date=?, status='transferred' WHERE student_id=? AND status='active'",
+            (today, student_id),
+        )
+        conn.execute(
+            "INSERT INTO enrollments(student_id,stream_id,section,start_date,status) VALUES(?,?,?,?, 'active')",
+            (student_id, int(stream["id"]), requested_section, today),
+        )
         return student_id
 
 
@@ -760,7 +1061,7 @@ def get_student_history(guild_id: int, discord_id: int) -> list[sqlite3.Row]:
     initialize_database()
     with _connect() as conn:
         return conn.execute("""
-            SELECT ay.name AS academic_year, s.level_name, s.stream_name, e.start_date, e.end_date, e.status
+            SELECT ay.name AS academic_year, s.level_name, s.stream_name, e.section, e.start_date, e.end_date, e.status
             FROM students st JOIN enrollments e ON e.student_id=st.id JOIN streams s ON s.id=e.stream_id JOIN academic_years ay ON ay.id=s.academic_year_id
             WHERE st.guild_id=? AND st.discord_id=? ORDER BY e.start_date DESC, e.id DESC
         """, (guild_id, discord_id)).fetchall()

@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from cogs.command_fixes import _global_subject_role_name
+from services.teacher_assignment import _global_subject_role_name
 from cogs.students import _student_assignment_roles
 from cogs.teachers import MENTION_RE
 from services import storage
@@ -67,7 +67,7 @@ def test_teacher_mentions_are_deduplicated_by_member_id():
 
 @pytest.mark.asyncio
 async def test_legacy_subject_role_migration_can_scan_config_without_runtime_name_error(monkeypatch):
-    from cogs.command_fixes import _migrate_legacy_subject_roles
+    from services.teacher_assignment import _migrate_legacy_subject_roles
 
     config = {
         "levels": [
@@ -85,7 +85,7 @@ async def test_legacy_subject_role_migration_can_scan_config_without_runtime_nam
     guild = SimpleNamespace(id=123, roles=[], channels=[])
     member = SimpleNamespace(roles=[])
 
-    monkeypatch.setattr("cogs.command_fixes.get_guild_config", lambda _guild_id: config)
+    monkeypatch.setattr("services.teacher_assignment.get_guild_config", lambda _guild_id: config)
 
     migrated, created_roles, tracked_roles, permission_backups = await _migrate_legacy_subject_roles(
         guild, member, config
@@ -99,7 +99,7 @@ async def test_legacy_subject_role_migration_can_scan_config_without_runtime_nam
 
 @pytest.mark.asyncio
 async def test_global_subject_role_refuses_unmanaged_same_name_collision(monkeypatch):
-    from cogs.command_fixes import _get_or_create_global_subject_role
+    from services.teacher_assignment import _get_or_create_global_subject_role
 
     existing = SimpleNamespace(name=_global_subject_role_name("Mathématiques"), id=777, managed=False)
     guild = SimpleNamespace(
@@ -109,7 +109,7 @@ async def test_global_subject_role_refuses_unmanaged_same_name_collision(monkeyp
     )
 
     monkeypatch.setattr(
-        "cogs.command_fixes.get_managed_role",
+        "services.teacher_assignment.get_managed_role",
         lambda _guild, _name: None,
     )
 
@@ -252,7 +252,7 @@ def test_teacher_conflict_ignores_unmanaged_same_name_student_stream_role(monkey
 
 @pytest.mark.asyncio
 async def test_legacy_subject_role_migration_touches_only_managed_channels(monkeypatch):
-    from cogs.command_fixes import _migrate_legacy_subject_roles
+    from services.teacher_assignment import _migrate_legacy_subject_roles
 
     class FakeRole:
         def __init__(self, role_id, name):
@@ -300,8 +300,8 @@ async def test_legacy_subject_role_migration_touches_only_managed_channels(monke
     async def fake_get_or_create(_guild, _config, _subject):
         return new_role
 
-    monkeypatch.setattr("cogs.command_fixes._get_or_create_global_subject_role", fake_get_or_create)
-    monkeypatch.setattr("cogs.command_fixes.get_guild_config", lambda _guild_id: config)
+    monkeypatch.setattr("services.teacher_assignment._get_or_create_global_subject_role", fake_get_or_create)
+    monkeypatch.setattr("services.teacher_assignment.get_guild_config", lambda _guild_id: config)
 
     await _migrate_legacy_subject_roles(guild, member, config)
 

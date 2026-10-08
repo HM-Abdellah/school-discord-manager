@@ -39,6 +39,8 @@ class SchoolBot(commands.Bot):
         "cogs.section_aware_exam",
         "cogs.section_aware_timetable",
         "cogs.section_threads",
+        "cogs.qr_onboarding",
+        "cogs.teacher_qr_onboarding",
     )
 
     def __init__(self) -> None:
@@ -74,7 +76,7 @@ class SchoolBot(commands.Bot):
         print(f"Bot      : {self.user}")
         print(f"Bot ID   : {self.user.id}")
         print(f"Servers  : {len(self.guilds)}")
-        print("Commands : /setup /build /addstream /removestream /status /newyear /rollbackyear /years /assignstudent /assignteacher /assignsubjectteachers /assignteacherfull /set_timetable /setexam /adminpanel /serverhealth /reportabsence /create-section-threads /resetserver(owner)")
+        print("Commands : /setup /build /addstream /removestream /status /newyear /rollbackyear /years /assignstudent /assignteacher /assignsubjectteachers /assignteacherfull /set_timetable /setexam /absenceteacher /adminpanel /serverhealth /reportabsence /create-section-threads /createclassqr /createteacherqr /revoketeacherqr /listteacherqr /resetserver(owner)")
         print("=" * 72)
 
 
