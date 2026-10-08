@@ -1,5 +1,3 @@
-[Reading 583 lines from start (total: 583 lines, 0 remaining)]
-
 """Teacher QR onboarding for one-time self-registration."""
 
 from __future__ import annotations
