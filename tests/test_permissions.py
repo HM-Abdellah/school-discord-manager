@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, _hierarchy_error, get_managed_role, management_check, owner_only_check
+from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_TEACHER_PENDING, _hierarchy_error, get_managed_role, management_check, owner_only_check, teacher_assignment_check
 
 
 class FakeRole:
@@ -25,6 +25,97 @@ def role(name: str, position: int, role_id: int):
 
 async def noop(*args, **kwargs):
     return None
+
+
+
+def _teacher_assignment_fixture():
+    everyone = role("@everyone", 0, 1)
+    pending = role(ROLE_TEACHER_PENDING, 5, 43)
+    professor = role(ROLE_PROFESSOR, 4, 44)
+    bot_role = role("Bot", 10, 99)
+    guild = SimpleNamespace(
+        owner_id=999,
+        id=123,
+        roles=[everyone, pending, professor, bot_role],
+        default_role=everyone,
+        me=SimpleNamespace(top_role=bot_role, guild_permissions=SimpleNamespace(manage_channels=True, manage_roles=True)),
+        get_role=lambda rid: {43: pending, 44: professor}.get(rid),
+        guild_permissions=SimpleNamespace(manage_channels=True, manage_roles=True),
+    )
+    response = SimpleNamespace(is_done=lambda: False, send_message=noop)
+    return guild, response, pending, professor
+
+
+@pytest.mark.asyncio
+async def test_teacher_assignment_check_allows_pending_self_registration(monkeypatch):
+    guild, response, pending, _professor = _teacher_assignment_fixture()
+    user = SimpleNamespace(id=101, roles=[pending])
+    interaction = SimpleNamespace(
+        guild=guild,
+        user=user,
+        response=response,
+        namespace=SimpleNamespace(teacher=None),
+    )
+    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {
+        "management_role_id": 42,
+        "managed": {"roles": {ROLE_TEACHER_PENDING: 43, ROLE_PROFESSOR: 44}},
+    })
+    monkeypatch.setattr("services.permissions.get_teacher_registration", lambda _guild_id, _discord_id: None)
+
+    @teacher_assignment_check(lock=False)
+    async def dummy(_interaction):
+        return True
+
+    predicate = dummy.__discord_app_commands_checks__[0]
+    assert await predicate(interaction) is True
+
+
+@pytest.mark.asyncio
+async def test_teacher_assignment_check_rejects_self_targeting_another_member(monkeypatch):
+    guild, response, pending, _professor = _teacher_assignment_fixture()
+    user = SimpleNamespace(id=101, roles=[pending])
+    interaction = SimpleNamespace(
+        guild=guild,
+        user=user,
+        response=response,
+        namespace=SimpleNamespace(teacher=SimpleNamespace(id=202)),
+    )
+    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {
+        "management_role_id": 42,
+        "managed": {"roles": {ROLE_TEACHER_PENDING: 43, ROLE_PROFESSOR: 44}},
+    })
+    monkeypatch.setattr("services.permissions.get_teacher_registration", lambda _guild_id, _discord_id: None)
+
+    @teacher_assignment_check(lock=False)
+    async def dummy(_interaction):
+        return True
+
+    predicate = dummy.__discord_app_commands_checks__[0]
+    assert await predicate(interaction) is False
+
+
+@pytest.mark.asyncio
+async def test_teacher_assignment_check_rejects_already_registered_teacher(monkeypatch):
+    guild, response, pending, _professor = _teacher_assignment_fixture()
+    user = SimpleNamespace(id=101, roles=[pending])
+    interaction = SimpleNamespace(
+        guild=guild,
+        user=user,
+        response=response,
+        namespace=SimpleNamespace(teacher=None),
+    )
+    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {
+        "management_role_id": 42,
+        "managed": {"roles": {ROLE_TEACHER_PENDING: 43, ROLE_PROFESSOR: 44}},
+    })
+    monkeypatch.setattr("services.permissions.get_teacher_registration", lambda _guild_id, _discord_id: object())
+
+    @teacher_assignment_check(lock=False)
+    async def dummy(_interaction):
+        return True
+
+    predicate = dummy.__discord_app_commands_checks__[0]
+    assert await predicate(interaction) is False
 
 
 @pytest.mark.asyncio
