@@ -320,5 +320,3 @@ def subject_channel_overwrites(everyone, admin_role, professor_role, female_prof
 def public_voice_overwrites(everyone, admin_role, professor_role, female_professor_role, student_role, teacher_stream_role, student_stream_role):
     voice = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, stream=True)
     return {everyone: hidden_overwrite(), professor_role: voice, female_professor_role: voice, admin_role: voice, teacher_stream_role: voice, student_stream_role: voice}
-
-[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
