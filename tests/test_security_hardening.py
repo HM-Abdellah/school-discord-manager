@@ -129,10 +129,10 @@ def test_teacher_assignment_blocks_student_admin_and_bot(monkeypatch):
 
 def test_teacher_commands_enforce_shared_teacher_target_conflict_gate():
     source = open("cogs/teachers.py", encoding="utf-8").read()
-    full_source = open("cogs/command_fixes.py", encoding="utf-8").read()
+    assignment_source = open("services/teacher_assignment.py", encoding="utf-8").read()
     assert "teacher_target_conflict(teacher, guild)" in source
     assert "teacher_target_conflict(member, guild)" in source
-    assert "teacher_target_conflict(teacher, guild)" in full_source
+    assert "teacher_target_conflict(teacher, guild)" in assignment_source
 
 
 def test_student_assignment_enforces_shared_student_staff_conflict_gate():
@@ -184,6 +184,5 @@ def test_latency_sensitive_commands_acknowledge_before_slow_work():
 
     assert report.index("await interaction.response.defer(ephemeral=True)") < report.index("_find_managed_channel(")
     assert report.index("await interaction.followup.send") > report.index("await interaction.response.defer(ephemeral=True)")
-    assert full.index("await interaction.response.defer(ephemeral=True)") < full.index("teacher_target_conflict(")
-    assert "await interaction.followup.send(conflict" in full
-
+    assert full.index("await interaction.response.defer(ephemeral=True)") < full.index("execute_teacher_assignment(")
+    assert "except TeacherAssignmentError as exc" in full
