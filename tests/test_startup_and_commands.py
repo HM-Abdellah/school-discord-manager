@@ -185,7 +185,7 @@ def test_class_qr_commands_are_admin_visible_only():
     assert command.default_permissions.manage_roles is True
 
 
-def test_assignteacherfull_has_admin_default_permission_and_optional_self_target():
+def test_assignteacherfull_is_admin_only_and_requires_target():
     module = importlib.import_module("cogs.command_fixes")
     bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
     cog = module.CommandFixes(bot)
@@ -193,7 +193,7 @@ def test_assignteacherfull_has_admin_default_permission_and_optional_self_target
     assert command.default_permissions is not None
     assert command.default_permissions.manage_roles is True
     teacher_parameter = next(parameter for parameter in command.parameters if parameter.name == "teacher")
-    assert teacher_parameter.required is False
+    assert teacher_parameter.required is True
 
 
 def test_teacher_operational_commands_are_registered_and_role_restricted():
