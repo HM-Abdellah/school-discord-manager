@@ -395,7 +395,9 @@ class TeacherOnboardingView(discord.ui.View):
                     )
                     return
 
-            await self.complete()
+            for item in self.children:
+                item.disabled = True
+            self.submitting = True
             await interaction.edit_original_response(
                 content=(
                     f"✅ **Inscription terminée !**\n\n"
