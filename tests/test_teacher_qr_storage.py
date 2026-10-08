@@ -216,5 +216,3 @@ async def test_teacher_qr_join_prompts_only_unregistered_member(monkeypatch):
 
     member.remove_roles.assert_not_awaited()
     prompt.assert_awaited_once_with(bot, member)
-
-[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
