@@ -1,5 +1,10 @@
+[Reading 216 lines from start (total: 216 lines, 0 remaining)]
+
 import sqlite3
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import discord
 
 import pytest
 
@@ -109,22 +114,26 @@ async def test_teacher_qr_join_removes_pending_role_for_already_registered_membe
 
 
 @pytest.mark.asyncio
-async def test_teacher_onboarding_view_contains_completion_button():
+async def test_teacher_onboarding_view_uses_fixed_choices():
     from cogs.teacher_qr_onboarding import TeacherOnboardingView
+    from config.curriculum import get_levels
 
     view = TeacherOnboardingView(SimpleNamespace(), 1, 101)
-    assert len(view.children) == 1
-    button = view.children[0]
-    assert button.label == "Compléter mon inscription"
-    assert button.emoji.name == "📝"
+
+    assert len(view.children) == 5
+    assert [option.value for option in view.gender_select.options] == ["male", "female"]
+    assert [option.value for option in view.level_select.options] == get_levels()
+    assert view.stream_select.disabled is True
+    assert view.subject_select.disabled is True
+    assert view.confirm_button.disabled is True
     assert view.guild_id == 1
     assert view.user_id == 101
 
 
 @pytest.mark.asyncio
-async def test_teacher_onboarding_button_opens_modal_for_eligible_teacher(monkeypatch):
-    from unittest.mock import AsyncMock
+async def test_teacher_onboarding_level_selection_populates_stream_choices(monkeypatch):
     from cogs.teacher_qr_onboarding import TeacherOnboardingView
+    from config.curriculum import get_levels, get_streams
     from services.permissions import ROLE_PROFESSOR, ROLE_TEACHER_PENDING
 
     pending = object()
@@ -142,23 +151,40 @@ async def test_teacher_onboarding_button_opens_modal_for_eligible_teacher(monkey
         lambda _guild_id, _discord_id: None,
     )
 
-    response = SimpleNamespace(send_modal=AsyncMock())
+    response = SimpleNamespace(edit_message=AsyncMock())
     interaction = SimpleNamespace(user=SimpleNamespace(id=101), response=response)
     view = TeacherOnboardingView(bot, 1, 101)
+    selected_level = get_levels()[-1]
+    view.level_select._values = [selected_level]
 
-    await view.children[0].callback(interaction)
+    await view.level_select.callback(interaction)
 
-    response.send_modal.assert_awaited_once()
-    assert response.send_modal.await_args.args[0].view_ref is view
+    assert view.selected_level == selected_level
+    assert [option.value for option in view.stream_select.options] == get_streams(selected_level)
+    assert view.stream_select.disabled is False
+    assert view.subject_select.disabled is True
+    response.edit_message.assert_awaited_once()
 
 
-def test_teacher_onboarding_modal_normalizes_gender():
-    from cogs.teacher_qr_onboarding import TeacherOnboardingModal
+def test_teacher_onboarding_subject_values_are_canonical():
+    from cogs.teacher_qr_onboarding import TeacherOnboardingView
+    from config.curriculum import get_stream_subjects, get_subject_display_name
 
-    assert TeacherOnboardingModal._normalize_gender("Prof") == "male"
-    assert TeacherOnboardingModal._normalize_gender("Prof (F)") == "female"
-    assert TeacherOnboardingModal._normalize_gender("femme") == "female"
-    assert TeacherOnboardingModal._normalize_gender("invalid") is None
+    view = TeacherOnboardingView(SimpleNamespace(), 1, 101)
+    level = "2ème Année Bac"
+    stream = "2ème Année Bac Sciences Physiques"
+    view.selected_level = level
+    view.selected_stream = stream
+    subjects = get_stream_subjects(level, stream)
+    view.subject_select.options = [
+        discord.SelectOption(
+            label=get_subject_display_name(subject),
+            value=subject,
+        )
+        for subject in subjects
+    ]
+
+    assert [option.value for option in view.subject_select.options] == subjects
 
 
 @pytest.mark.asyncio
@@ -190,3 +216,5 @@ async def test_teacher_qr_join_prompts_only_unregistered_member(monkeypatch):
 
     member.remove_roles.assert_not_awaited()
     prompt.assert_awaited_once_with(bot, member)
+
+[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
