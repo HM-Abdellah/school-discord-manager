@@ -295,8 +295,10 @@ def management_check(*, lock: bool = True) -> app_commands.check:
 
     def decorator(function):
         function = check_decorator(function)
-        # Authorization is intentionally enforced at runtime so the configured
-        # Administration role is not blocked by Discord's user-permission gate.
+        # Keep management commands hidden from ordinary members at the Discord UI
+        # level while retaining runtime authorization for the configured
+        # Administration role and server owner.
+        function = _apply_default_permission(function, manage_roles=True)
         return _wrap_with_mutation_lock(function) if lock else function
 
     return decorator
