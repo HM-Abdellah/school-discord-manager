@@ -40,6 +40,7 @@ class SchoolBot(commands.Bot):
         "cogs.section_aware_timetable",
         "cogs.section_threads",
         "cogs.qr_onboarding",
+        "cogs.teacher_qr_onboarding",
     )
 
     def __init__(self) -> None:
@@ -75,7 +76,7 @@ class SchoolBot(commands.Bot):
         print(f"Bot      : {self.user}")
         print(f"Bot ID   : {self.user.id}")
         print(f"Servers  : {len(self.guilds)}")
-        print("Commands : /setup /build /addstream /removestream /status /newyear /rollbackyear /years /assignstudent /assignteacher /assignsubjectteachers /assignteacherfull /set_timetable /setexam /adminpanel /serverhealth /reportabsence /create-section-threads /createclassqr /resetserver(owner)")
+        print("Commands : /setup /build /addstream /removestream /status /newyear /rollbackyear /years /assignstudent /assignteacher /assignsubjectteachers /assignteacherfull /set_timetable /setexam /adminpanel /serverhealth /reportabsence /create-section-threads /createclassqr /createteacherqr /teacherprofile /teacherrequests /approveteacher /rejectteacher /resetserver(owner)")
         print("=" * 72)
 
 
@@ -88,3 +89,5 @@ if __name__ == "__main__":
     except discord.LoginFailure:
         print("❌ Invalid Discord bot token.")
         print("Check the DISCORD_TOKEN value in .env.")
+
+[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
