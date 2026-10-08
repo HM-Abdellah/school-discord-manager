@@ -1,3 +1,5 @@
+[Reading 583 lines from start (total: 583 lines, 0 remaining)]
+
 """Teacher QR onboarding for one-time self-registration."""
 
 from __future__ import annotations
@@ -9,7 +11,14 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config.curriculum import GENERAL_CHANNELS
+from config.curriculum import (
+    GENERAL_CHANNELS,
+    get_levels,
+    get_stream_abbreviation,
+    get_stream_subjects,
+    get_streams,
+    get_subject_display_name,
+)
 from services.audit import record_event
 from services.discord_registry import resolve_registered_text_channel
 from services.build_guard import get_build_lock
@@ -60,71 +69,103 @@ async def _revoke_teacher_qrs(bot: discord.Client, guild_id: int) -> int:
     return revoked
 
 
-class TeacherOnboardingModal(discord.ui.Modal, title="Inscription professeur"):
-    gender = discord.ui.TextInput(
-        label="Sexe",
-        placeholder="Prof ou Prof (F)",
-        required=True,
-        max_length=20,
-    )
-    level = discord.ui.TextInput(
-        label="Niveau scolaire",
-        placeholder="Ex. 2BAC",
-        required=True,
-        max_length=50,
-    )
-    stream = discord.ui.TextInput(
-        label="Filière",
-        placeholder="Ex. 2BACPC",
-        required=True,
-        max_length=100,
-    )
-    subjects = discord.ui.TextInput(
-        label="Matière(s)",
-        placeholder="Ex. Mathématiques, Physique-Chimie",
-        required=True,
-        max_length=500,
-    )
+class TeacherOnboardingView(discord.ui.View):
+    """Guided teacher self-registration using Discord select menus."""
 
-    def __init__(self, bot: discord.Client, view: "TeacherOnboardingView") -> None:
-        super().__init__()
+    def __init__(self, bot: discord.Client, guild_id: int, user_id: int) -> None:
+        super().__init__(timeout=1800)
         self.bot = bot
-        self.view_ref = view
+        self.guild_id = guild_id
+        self.user_id = user_id
+        self.message: discord.Message | None = None
 
-    @staticmethod
-    def _normalize_gender(value: str) -> str | None:
-        key = " ".join(value.strip().casefold().replace("(", " ").replace(")", " ").split())
-        if key in {"prof", "male", "homme", "masculin", "m"}:
-            return "male"
-        if key in {"prof f", "prof f.", "professeure", "professeur femme", "female", "femme", "feminin", "féminin", "f"}:
-            return "female"
-        return None
+        self.selected_gender: str | None = None
+        self.selected_level: str | None = None
+        self.selected_stream: str | None = None
+        self.selected_subjects: list[str] = []
 
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer()
+        self.gender_select = discord.ui.Select(
+            placeholder="1️⃣ Choisissez votre type de professeur",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(label="Prof", value="male", description="Rôle professeur"),
+                discord.SelectOption(label="Prof (F)", value="female", description="Rôle professeur féminin"),
+            ],
+        )
+        self.gender_select.callback = self._gender_selected
+        self.add_item(self.gender_select)
 
-        if interaction.user.id != self.view_ref.user_id:
-            await interaction.followup.send("❌ Ce formulaire ne vous est pas destiné.")
-            return
+        self.level_select = discord.ui.Select(
+            placeholder="2️⃣ Choisissez votre niveau scolaire",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(label=level, value=level)
+                for level in get_levels()
+            ],
+        )
+        self.level_select.callback = self._level_selected
+        self.add_item(self.level_select)
 
-        guild = self.bot.get_guild(self.view_ref.guild_id)
+        self.stream_select = discord.ui.Select(
+            placeholder="3️⃣ Choisissez d'abord votre niveau",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label="Choisissez un niveau d'abord",
+                    value="__disabled__",
+                )
+            ],
+            disabled=True,
+        )
+        self.stream_select.callback = self._stream_selected
+        self.add_item(self.stream_select)
+
+        self.subject_select = discord.ui.Select(
+            placeholder="4️⃣ Choisissez une ou plusieurs matières",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label="Choisissez une filière d'abord",
+                    value="__disabled__",
+                )
+            ],
+            disabled=True,
+        )
+        self.subject_select.callback = self._subjects_selected
+        self.add_item(self.subject_select)
+
+        self.confirm_button = discord.ui.Button(
+            label="Valider mon inscription",
+            style=discord.ButtonStyle.success,
+            emoji="✅",
+            disabled=True,
+        )
+        self.confirm_button.callback = self._confirm_registration
+        self.add_item(self.confirm_button)
+
+    async def _ensure_eligible(self, interaction: discord.Interaction) -> discord.Member | None:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ Ce formulaire est réservé au professeur concerné.")
+            return None
+
+        guild = self.bot.get_guild(self.guild_id)
         if guild is None:
-            await interaction.followup.send("❌ Le serveur n'est plus accessible. Contactez l'administration.")
-            return
+            await interaction.response.send_message("❌ Le serveur n'est plus accessible. Contactez l'administration.")
+            return None
 
-        member = guild.get_member(self.view_ref.user_id)
+        member = guild.get_member(self.user_id)
         if member is None:
             try:
-                member = await guild.fetch_member(self.view_ref.user_id)
+                member = await guild.fetch_member(self.user_id)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                await interaction.followup.send("❌ Impossible de retrouver votre compte dans le serveur.")
-                return
+                await interaction.response.send_message("❌ Impossible de retrouver votre compte dans le serveur.")
+                return None
 
         pending_role = get_managed_role(guild, ROLE_TEACHER_PENDING)
-        if pending_role is None or pending_role not in member.roles:
-            await interaction.followup.send("❌ Cette inscription QR n'est plus active.")
-            return
-
         professor_roles = {
             role
             for role in (
@@ -133,36 +174,158 @@ class TeacherOnboardingModal(discord.ui.Modal, title="Inscription professeur"):
             )
             if role is not None
         }
-        if get_teacher_registration(guild.id, member.id) is not None or any(role in member.roles for role in professor_roles):
-            try:
-                await member.remove_roles(pending_role, reason="School Manager teacher QR already consumed")
-            except discord.HTTPException:
-                pass
-            await interaction.followup.send("ℹ️ Ce compte est déjà enregistré comme professeur. Le QR ne peut pas être réutilisé.")
+        if pending_role is None or pending_role not in member.roles:
+            await interaction.response.send_message("❌ Cette inscription QR n'est plus active.")
+            return None
+
+        if get_teacher_registration(guild.id, member.id) is not None or any(
+            role in member.roles for role in professor_roles
+        ):
+            await interaction.response.send_message(
+                "ℹ️ Cette inscription est déjà terminée. Le QR ne peut pas être réutilisé."
+            )
+            return None
+
+        return member
+
+    async def _edit_form(self, interaction: discord.Interaction) -> None:
+        if self.message is None:
+            self.message = getattr(interaction, "message", None)
+        await interaction.response.edit_message(content=self._summary_text(), view=self)
+
+    def _summary_text(self) -> str:
+        gender = {"male": "Prof", "female": "Prof (F)"}.get(self.selected_gender, "—")
+        level = self.selected_level or "—"
+        stream = self.selected_stream or "—"
+        subjects = ", ".join(get_subject_display_name(s) for s in self.selected_subjects) or "—"
+        ready = (
+            "✅ Vous pouvez valider votre inscription."
+            if self.selected_gender and self.selected_level and self.selected_stream and self.selected_subjects
+            else "➡️ Complétez les choix ci-dessus."
+        )
+        return (
+            "## 👨‍🏫 Inscription professeur\n\n"
+            "Sélectionnez uniquement les valeurs proposées par le système. "
+            "Cela évite toute erreur de nom ou d'affectation.\n\n"
+            f"**Type :** {gender}\n"
+            f"**Niveau :** {level}\n"
+            f"**Filière :** {stream}\n"
+            f"**Matière(s) :** {subjects}\n\n"
+            f"{ready}"
+        )
+
+    async def _gender_selected(self, interaction: discord.Interaction) -> None:
+        if await self._ensure_eligible(interaction) is None:
+            return
+        self.selected_gender = self.gender_select.values[0]
+        await self._edit_form(interaction)
+
+    async def _level_selected(self, interaction: discord.Interaction) -> None:
+        if await self._ensure_eligible(interaction) is None:
+            return
+        self.selected_level = self.level_select.values[0]
+        self.selected_stream = None
+        self.selected_subjects = []
+
+        streams = get_streams(self.selected_level)
+        self.stream_select.options = [
+            discord.SelectOption(
+                label=stream,
+                value=stream,
+                description=get_stream_abbreviation(self.selected_level, stream),
+            )
+            for stream in streams
+        ]
+        self.stream_select.disabled = False
+        self.subject_select.disabled = True
+        self.subject_select.options = [
+            discord.SelectOption(
+                label="Choisissez une filière d'abord",
+                value="__disabled__",
+            )
+        ]
+        self.confirm_button.disabled = True
+        await self._edit_form(interaction)
+
+    async def _stream_selected(self, interaction: discord.Interaction) -> None:
+        if await self._ensure_eligible(interaction) is None:
+            return
+        if self.selected_level is None:
+            await interaction.response.send_message("❌ Choisissez d'abord un niveau.")
             return
 
-        gender_value = self._normalize_gender(str(self.gender.value))
-        if gender_value is None:
-            await interaction.followup.send("❌ Sexe invalide. Utilisez Prof ou Prof (F).")
+        stream = self.stream_select.values[0]
+        if stream not in get_streams(self.selected_level):
+            await interaction.response.send_message("❌ Filière invalide pour ce niveau.")
             return
 
-        async with get_build_lock(guild.id):
-            pending_role = get_managed_role(guild, ROLE_TEACHER_PENDING)
+        self.selected_stream = stream
+        self.selected_subjects = []
+        subjects = get_stream_subjects(self.selected_level, stream)
+        self.subject_select.options = [
+            discord.SelectOption(
+                label=get_subject_display_name(subject)[:100],
+                value=subject,
+                description=subject[:100] if get_subject_display_name(subject) != subject else None,
+            )
+            for subject in subjects
+        ]
+        self.subject_select.min_values = 1
+        self.subject_select.max_values = len(subjects)
+        self.subject_select.disabled = False
+        self.confirm_button.disabled = True
+        await self._edit_form(interaction)
+
+    async def _subjects_selected(self, interaction: discord.Interaction) -> None:
+        if await self._ensure_eligible(interaction) is None:
+            return
+        if self.selected_level is None or self.selected_stream is None:
+            await interaction.response.send_message("❌ Choisissez d'abord le niveau et la filière.")
+            return
+
+        allowed = set(get_stream_subjects(self.selected_level, self.selected_stream))
+        selected = [value for value in self.subject_select.values if value in allowed]
+        if not selected:
+            await interaction.response.send_message("❌ Choisissez au moins une matière valide.")
+            return
+
+        self.selected_subjects = selected
+        self.confirm_button.disabled = False
+        await self._edit_form(interaction)
+
+    async def _confirm_registration(self, interaction: discord.Interaction) -> None:
+        member = await self._ensure_eligible(interaction)
+        if member is None:
+            return
+
+        if not (
+            self.selected_gender
+            and self.selected_level
+            and self.selected_stream
+            and self.selected_subjects
+        ):
+            await interaction.response.send_message("❌ Complétez tous les choix avant de valider.")
+            return
+
+        await interaction.response.defer()
+
+        async with get_build_lock(self.guild_id):
+            pending_role = get_managed_role(member.guild, ROLE_TEACHER_PENDING)
             if pending_role is None or pending_role not in member.roles:
                 await interaction.followup.send("❌ Cette inscription QR n'est plus active.")
                 return
-            if get_teacher_registration(guild.id, member.id) is not None:
+            if get_teacher_registration(member.guild.id, member.id) is not None:
                 await interaction.followup.send("ℹ️ Votre inscription est déjà terminée.")
                 return
 
             try:
                 result = await execute_teacher_assignment(
-                    guild=guild,
+                    guild=member.guild,
                     teacher=member,
-                    gender_value=gender_value,
-                    level=str(self.level.value).strip(),
-                    stream=str(self.stream.value).strip(),
-                    subjects=str(self.subjects.value).strip(),
+                    gender_value=self.selected_gender,
+                    level=self.selected_level,
+                    stream=self.selected_stream,
+                    subjects=", ".join(self.selected_subjects),
                     actor_id=member.id,
                     actor_display_name=member.display_name,
                     self_registration=True,
@@ -171,57 +334,12 @@ class TeacherOnboardingModal(discord.ui.Modal, title="Inscription professeur"):
                 await interaction.followup.send(str(exc))
                 return
 
-        try:
-            await self.view_ref.complete()
-        except discord.HTTPException:
-            pass
-
+        await self.complete()
         await interaction.followup.send(
             f"✅ Inscription terminée. Vous êtes maintenant professeur et affecté à "
             f"{result['stream_code']} pour : {result['subject_names']}.\n"
             "Le rôle temporaire a été retiré et ce compte ne peut plus se réinscrire via QR."
         )
-
-
-class TeacherOnboardingView(discord.ui.View):
-    def __init__(self, bot: discord.Client, guild_id: int, user_id: int) -> None:
-        super().__init__(timeout=1800)
-        self.bot = bot
-        self.guild_id = guild_id
-        self.user_id = user_id
-        self.message: discord.Message | None = None
-
-    @discord.ui.button(label="Compléter mon inscription", style=discord.ButtonStyle.primary, emoji="📝")
-    async def complete_registration(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ Ce bouton est réservé au professeur concerné.")
-            return
-
-        guild = self.bot.get_guild(self.guild_id)
-        if guild is None:
-            await interaction.response.send_message("❌ Le serveur n'est plus accessible.")
-            return
-
-        pending_role = get_managed_role(guild, ROLE_TEACHER_PENDING)
-        registration = get_teacher_registration(guild.id, self.user_id)
-        member = guild.get_member(self.user_id)
-        professor_roles = {
-            role
-            for role in (
-                get_managed_role(guild, ROLE_PROFESSOR),
-                get_managed_role(guild, ROLE_PROFESSOR_FEMALE),
-            )
-            if role is not None
-        }
-        if registration is not None or (member is not None and any(role in member.roles for role in professor_roles)):
-            await interaction.response.send_message("ℹ️ Cette inscription est déjà terminée. Le QR ne peut pas être réutilisé.")
-            return
-        if pending_role is None or member is None or pending_role not in member.roles:
-            await interaction.response.send_message("❌ Cette inscription QR n'est plus active.")
-            return
-
-        await interaction.response.send_modal(TeacherOnboardingModal(self.bot, self))
-
 
     async def on_timeout(self) -> None:
         if self.message is None:
@@ -237,10 +355,10 @@ class TeacherOnboardingView(discord.ui.View):
             pass
 
     async def complete(self) -> None:
-        if self.message is None:
-            return
         for item in self.children:
             item.disabled = True
+        if self.message is None:
+            return
         try:
             await self.message.edit(
                 content="✅ Inscription professeur terminée. Ce QR ne peut plus être utilisé pour ce compte.",
@@ -258,9 +376,9 @@ async def _send_teacher_onboarding_prompt(
     try:
         view.message = await user.send(
             "## 👨‍🏫 Inscription professeur\n\n"
-            "Bienvenue ! Cliquez sur le bouton ci-dessous pour compléter votre inscription.\n\n"
-            "Vous devrez renseigner votre sexe, niveau, filière et matière(s). "
-            "Après validation, le rôle professeur sera attribué immédiatement et le QR sera définitivement consommé pour ce compte.",
+            "Bienvenue ! Utilisez les menus ci-dessous pour compléter votre inscription.\n\n"
+            "Tous les choix proviennent directement du programme scolaire configuré. "
+            "Après validation, le rôle professeur sera attribué immédiatement et le rôle temporaire sera retiré.",
             view=view,
         )
     except discord.HTTPException:
@@ -369,7 +487,7 @@ class TeacherQROnboarding(commands.Cog):
             "Rôle temporaire : Professeur - En attente\n"
             "Expiration : 30 minutes\n"
             f"Utilisations max : {int(max_uses)}\n\n"
-            "Le QR donne un accès temporaire pour permettre au professeur de lancer /assignteacherfull. "
+            "Le QR donne un accès temporaire pour compléter l'inscription avec les menus ci-dessous. "
             "Après une inscription réussie, le rôle temporaire est retiré et ce compte ne peut plus se réinscrire via QR.\n\n"
             + invite_url,
             file=qr,
@@ -465,3 +583,5 @@ class TeacherQROnboarding(commands.Cog):
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(TeacherQROnboarding(bot))
+
+[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
