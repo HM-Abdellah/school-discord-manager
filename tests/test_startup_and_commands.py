@@ -34,10 +34,6 @@ EXPECTED_RUNTIME_OWNERS = {
     "createteacherqr": "cogs.teacher_qr_onboarding",
     "revoketeacherqr": "cogs.teacher_qr_onboarding",
     "listteacherqr": "cogs.teacher_qr_onboarding",
-    "teacherprofile": "cogs.teacher_qr_onboarding",
-    "teacherrequests": "cogs.teacher_qr_onboarding",
-    "approveteacher": "cogs.teacher_qr_onboarding",
-    "rejectteacher": "cogs.teacher_qr_onboarding",
 }
 
 
@@ -188,7 +184,18 @@ def test_class_qr_commands_are_admin_visible_only():
     assert command.default_permissions.manage_roles is True
 
 
-def test_teacher_qr_commands_are_admin_visible_only_and_profile_is_self_service():
+def test_assignteacherfull_has_admin_default_permission_and_optional_self_target():
+    module = importlib.import_module("cogs.command_fixes")
+    bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
+    cog = module.CommandFixes(bot)
+    command = cog.assign_teacher_full
+    assert command.default_permissions is not None
+    assert command.default_permissions.manage_roles is True
+    teacher_parameter = next(parameter for parameter in command.parameters if parameter.name == "teacher")
+    assert teacher_parameter.required is False
+
+
+def test_teacher_qr_commands_are_admin_visible_only():
     module = importlib.import_module("cogs.teacher_qr_onboarding")
     bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
     cog = module.TeacherQROnboarding(bot)
@@ -197,11 +204,11 @@ def test_teacher_qr_commands_are_admin_visible_only_and_profile_is_self_service(
         cog.create_teacher_qr,
         cog.revoke_teacher_qr,
         cog.list_teacher_qr,
-        cog.teacher_requests,
-        cog.approve_teacher,
-        cog.reject_teacher,
     ):
         assert callback.default_permissions is not None
         assert callback.default_permissions.manage_roles is True
 
-    assert cog.teacher_profile.default_permissions is None
+    assert not hasattr(cog, "teacher_profile")
+    assert not hasattr(cog, "teacher_requests")
+    assert not hasattr(cog, "approve_teacher")
+    assert not hasattr(cog, "reject_teacher")
