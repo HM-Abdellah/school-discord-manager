@@ -178,6 +178,80 @@ async def test_class_role_access_copies_explicit_stream_student_overwrites():
     assert channel.set_permissions.await_args.kwargs["overwrite"] is source
 
 
+def test_managed_stream_channels_follow_deployed_stream_config_subjects(monkeypatch):
+    from cogs.qr_onboarding import _managed_stream_channels
+    from services.server_builder import _stream_category_name
+
+    code = "2BACPC"
+    level = "2ème Année Bac"
+    stream = "2ème Année Bac Sciences Physiques"
+    category_name = _stream_category_name(level, stream, code)
+    subject_name = "📚-2BACPC・math"
+
+    class Channel:
+        def __init__(self, channel_id, name, category_id):
+            self.id = channel_id
+            self.name = name
+            self.category_id = category_id
+
+    channels = {
+        100: Channel(100, category_name, None),
+        101: Channel(101, "📌-2BACPC・informations", 100),
+        102: Channel(102, "🗓️-2BACPC・emploi-du-temps", 100),
+        103: Channel(103, "📝-2BACPC・examens", 100),
+        104: Channel(104, subject_name, 100),
+    }
+
+    class Guild:
+        def get_channel(self, channel_id):
+            return channels.get(channel_id)
+
+    config = {
+        "levels": [
+            {
+                "name": level,
+                "streams": [
+                    {
+                        "name": stream,
+                        "abbreviation": code,
+                        "subjects": ["Mathématiques"],
+                    }
+                ],
+            }
+        ],
+        "managed": {
+            "categories": {category_name: 100},
+            "channels": {
+                item.name: item.id
+                for item in channels.values()
+                if item.id != 100
+            },
+        },
+    }
+
+    monkeypatch.setattr(
+        "cogs.qr_onboarding.get_stream_subjects",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("QR must use the deployed stream config when subjects are present.")
+        ),
+    )
+
+    result = _managed_stream_channels(
+        Guild(),
+        config,
+        level=level,
+        stream=stream,
+        code=code,
+    )
+
+    assert {channel.name for channel in result} == {
+        "📌-2BACPC・informations",
+        "🗓️-2BACPC・emploi-du-temps",
+        "📝-2BACPC・examens",
+        subject_name,
+    }
+
+
 def test_class_qr_registry_records_and_filters_active_invites(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
     monkeypatch.setattr(storage, "CONFIG_FILE", tmp_path / "guild_config.json")
