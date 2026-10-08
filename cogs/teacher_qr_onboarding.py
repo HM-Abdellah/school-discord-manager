@@ -583,5 +583,3 @@ class TeacherQROnboarding(commands.Cog):
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(TeacherQROnboarding(bot))
-
-[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
