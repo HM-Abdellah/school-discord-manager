@@ -135,7 +135,7 @@ async def test_management_check_requires_configured_role_id(monkeypatch):
 
     predicate = dummy.__discord_app_commands_checks__[0]
     assert await predicate(interaction) is False
-    assert not hasattr(dummy, "__discord_app_commands_default_permissions__")
+    assert dummy.__discord_app_commands_default_permissions__.manage_roles is True
 
 
 @pytest.mark.asyncio
