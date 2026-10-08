@@ -160,7 +160,20 @@ def _managed_stream_channels(
     if not isinstance(category_id, int) or category_id <= 0:
         raise RuntimeError("La catégorie gérée " + category_name + " est introuvable dans le registre.")
 
-    subjects = get_stream_subjects(level, stream)
+    configured_subjects: list[str] | None = None
+    for configured_level in config.get("levels", []) or []:
+        if not isinstance(configured_level, dict) or configured_level.get("name") != level:
+            continue
+        for configured_stream in configured_level.get("streams", []) or []:
+            if not isinstance(configured_stream, dict) or configured_stream.get("name") != stream:
+                continue
+            raw_subjects = configured_stream.get("subjects")
+            if isinstance(raw_subjects, list):
+                configured_subjects = [subject for subject in raw_subjects if isinstance(subject, str)]
+            break
+        break
+
+    subjects = configured_subjects or get_stream_subjects(level, stream)
     expected_names = {
         "📌-" + code + "・informations",
         "🗓️-" + code + "・emploi-du-temps",
