@@ -185,6 +185,188 @@ def test_teacher_onboarding_subject_values_are_canonical():
     assert [option.value for option in view.subject_select.options] == subjects
 
 
+class _AsyncLock:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+
+class _FakeInteractionResponse:
+    def __init__(self):
+        self.edit_message = AsyncMock()
+        self.done = True
+
+    def is_done(self):
+        return self.done
+
+
+@pytest.mark.asyncio
+async def test_teacher_onboarding_confirm_success(monkeypatch):
+    from cogs.teacher_qr_onboarding import TeacherOnboardingView
+    from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_TEACHER_PENDING
+
+    pending = object()
+    professor = object()
+    professor_female = object()
+    member = SimpleNamespace(
+        id=101,
+        display_name="Teacher",
+        roles=[pending],
+        add_roles=AsyncMock(),
+        remove_roles=AsyncMock(),
+        guild=None,
+    )
+    guild = SimpleNamespace(id=1, get_member=lambda _user_id: member)
+    member.guild = guild
+    bot = SimpleNamespace(get_guild=lambda _guild_id: guild)
+    role_map = {
+        ROLE_TEACHER_PENDING: pending,
+        ROLE_PROFESSOR: professor,
+        ROLE_PROFESSOR_FEMALE: professor_female,
+    }
+
+    async def fake_assignment(**_kwargs):
+        return {"stream_code": "2BACPC", "subject_names": "Math"}
+
+    response = _FakeInteractionResponse()
+    edit_original_response = AsyncMock()
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=101),
+        response=response,
+        edit_original_response=edit_original_response,
+    )
+
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_managed_role", lambda _guild, name: role_map.get(name))
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda _guild_id, _discord_id: None)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
+
+    view = TeacherOnboardingView(bot, 1, 101)
+    view.selected_gender = "male"
+    view.selected_level = "2ème Année Bac"
+    view.selected_stream = "2ème Année Bac Sciences Physiques"
+    view.selected_subjects = ["Mathématiques"]
+
+    await view.confirm_button.callback(interaction)
+
+    response.edit_message.assert_awaited_once()
+    edit_original_response.assert_awaited_once()
+    assert "Inscription terminée" in edit_original_response.await_args.kwargs["content"]
+    assert all(item.disabled for item in view.children)
+
+
+@pytest.mark.asyncio
+async def test_teacher_onboarding_confirm_business_error_is_visible(monkeypatch):
+    from cogs.teacher_qr_onboarding import TeacherOnboardingView
+    from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_TEACHER_PENDING
+    from services.teacher_assignment import TeacherAssignmentError
+
+    pending = object()
+    professor = object()
+    professor_female = object()
+    member = SimpleNamespace(
+        id=101,
+        display_name="Teacher",
+        roles=[pending],
+        add_roles=AsyncMock(),
+        remove_roles=AsyncMock(),
+        guild=None,
+    )
+    guild = SimpleNamespace(id=1, get_member=lambda _user_id: member)
+    member.guild = guild
+    bot = SimpleNamespace(get_guild=lambda _guild_id: guild)
+    role_map = {
+        ROLE_TEACHER_PENDING: pending,
+        ROLE_PROFESSOR: professor,
+        ROLE_PROFESSOR_FEMALE: professor_female,
+    }
+
+    async def fake_assignment(**_kwargs):
+        raise TeacherAssignmentError("❌ Filière ou matière invalide.")
+
+    response = _FakeInteractionResponse()
+    edit_original_response = AsyncMock()
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=101),
+        response=response,
+        edit_original_response=edit_original_response,
+    )
+
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_managed_role", lambda _guild, name: role_map.get(name))
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda _guild_id, _discord_id: None)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
+
+    view = TeacherOnboardingView(bot, 1, 101)
+    view.selected_gender = "male"
+    view.selected_level = "2ème Année Bac"
+    view.selected_stream = "2ème Année Bac Sciences Physiques"
+    view.selected_subjects = ["Mathématiques"]
+
+    await view.confirm_button.callback(interaction)
+
+    message = edit_original_response.await_args.kwargs["content"]
+    assert "Filière ou matière invalide" in message
+    assert view.submitting is False
+    assert view.confirm_button.disabled is False
+
+
+@pytest.mark.asyncio
+async def test_teacher_onboarding_confirm_unexpected_error_is_visible(monkeypatch, capsys):
+    from cogs.teacher_qr_onboarding import TeacherOnboardingView
+    from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_TEACHER_PENDING
+
+    pending = object()
+    professor = object()
+    professor_female = object()
+    member = SimpleNamespace(
+        id=101,
+        display_name="Teacher",
+        roles=[pending],
+        add_roles=AsyncMock(),
+        remove_roles=AsyncMock(),
+        guild=None,
+    )
+    guild = SimpleNamespace(id=1, get_member=lambda _user_id: member)
+    member.guild = guild
+    bot = SimpleNamespace(get_guild=lambda _guild_id: guild)
+    role_map = {
+        ROLE_TEACHER_PENDING: pending,
+        ROLE_PROFESSOR: professor,
+        ROLE_PROFESSOR_FEMALE: professor_female,
+    }
+
+    async def fake_assignment(**_kwargs):
+        raise RuntimeError("unexpected test failure")
+
+    response = _FakeInteractionResponse()
+    edit_original_response = AsyncMock()
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=101),
+        response=response,
+        edit_original_response=edit_original_response,
+    )
+
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_managed_role", lambda _guild, name: role_map.get(name))
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda _guild_id, _discord_id: None)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
+
+    view = TeacherOnboardingView(bot, 1, 101)
+    view.selected_gender = "male"
+    view.selected_level = "2ème Année Bac"
+    view.selected_stream = "2ème Année Bac Sciences Physiques"
+    view.selected_subjects = ["Mathématiques"]
+
+    await view.confirm_button.callback(interaction)
+
+    assert "Erreur technique" in edit_original_response.await_args.kwargs["content"]
+    assert "RuntimeError" in capsys.readouterr().out
+    assert view.submitting is False
+
+
 @pytest.mark.asyncio
 async def test_teacher_qr_join_prompts_only_unregistered_member(monkeypatch):
     from unittest.mock import AsyncMock
