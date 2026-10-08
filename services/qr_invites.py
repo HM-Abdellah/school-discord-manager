@@ -22,6 +22,7 @@ async def create_role_invite(
     *,
     max_age: int = DEFAULT_QR_MAX_AGE,
     max_uses: int = DEFAULT_QR_MAX_USES,
+    reason: str = "School Manager QR onboarding",
 ) -> str:
     """Create a unique Discord invite that auto-assigns the supplied roles."""
 
@@ -48,7 +49,7 @@ async def create_role_invite(
     data = await bot.http.request(
         route,
         json=payload,
-        reason="School Manager class QR onboarding",
+        reason=reason,
     )
     if not isinstance(data, dict) or not data.get("code"):
         raise RuntimeError("Discord returned an invalid invite payload.")
@@ -85,3 +86,5 @@ async def delete_invite(bot: discord.Client, invite_code: str) -> None:
         route,
         reason="School Manager class QR revoked",
     )
+
+[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
