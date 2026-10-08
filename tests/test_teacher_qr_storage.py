@@ -14,6 +14,36 @@ def _configure_storage(tmp_path, monkeypatch):
 
 
 
+def test_teacher_registration_is_one_time(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
+    storage.initialize_database()
+
+    registration_id = storage.record_teacher_registration(
+        1,
+        101,
+        "Prof A",
+        "male",
+        "2BAC",
+        "2BACPC",
+        "Mathématiques, Physique-Chimie",
+    )
+    assert registration_id > 0
+    row = storage.get_teacher_registration(1, 101)
+    assert row is not None
+    assert row["stream_name"] == "2BACPC"
+
+    with pytest.raises(RuntimeError, match="déjà enregistré"):
+        storage.record_teacher_registration(
+            1,
+            101,
+            "Prof A Again",
+            "male",
+            "2BAC",
+            "2BACPC",
+            "Mathématiques",
+        )
+
+
 def test_only_one_active_teacher_qr_exists_per_guild(tmp_path, monkeypatch):
     _configure_storage(tmp_path, monkeypatch)
     storage.initialize_database()
