@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import sqlite3
 
 import discord
 
@@ -273,6 +274,37 @@ async def execute_teacher_assignment(
                 await teacher.remove_roles(pending_role, reason="School Manager teacher self-registration completed")
 
         save_guild_config(guild.id, working_config)
+    except sqlite3.Error as exc:
+        try:
+            await restore_role_presence(
+                teacher,
+                tracked_roles,
+                initial_role_ids,
+                reason="School Manager full teacher assignment rollback",
+            )
+        except discord.HTTPException:
+            pass
+        if registration_created and self_registration:
+            try:
+                delete_teacher_registration(guild.id, teacher.id)
+            except OSError:
+                pass
+        for channel, role, overwrite in reversed(migration_permission_backups):
+            try:
+                await channel.set_permissions(
+                    role,
+                    overwrite=overwrite,
+                    reason="School Manager full teacher assignment rollback",
+                )
+            except discord.HTTPException:
+                pass
+        for created_role in reversed(created_subject_roles):
+            try:
+                await created_role.delete(reason="School Manager full teacher assignment rollback")
+            except discord.HTTPException:
+                pass
+        raise TeacherAssignmentError(f"❌ Erreur de stockage SQLite : {exc}") from exc
+
     except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError, ValueError) as exc:
         try:
             await restore_role_presence(
