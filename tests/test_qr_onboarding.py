@@ -196,9 +196,9 @@ def test_managed_stream_channels_follow_deployed_stream_config_subjects(monkeypa
 
     channels = {
         100: Channel(100, category_name, None),
-        101: Channel(101, "📌-2BACPC・informations", 100),
-        102: Channel(102, "🗓️-2BACPC・emploi-du-temps", 100),
-        103: Channel(103, "📝-2BACPC・examens", 100),
+        101: Channel(101, "📌-2bacpc・informations", 100),
+        102: Channel(102, "🗓️-2bacpc・emploi-du-temps", 100),
+        103: Channel(103, "📝-2bacpc・examens", 100),
         104: Channel(104, subject_name, 100),
     }
 
@@ -245,9 +245,9 @@ def test_managed_stream_channels_follow_deployed_stream_config_subjects(monkeypa
     )
 
     assert {channel.name for channel in result} == {
-        "📌-2BACPC・informations",
-        "🗓️-2BACPC・emploi-du-temps",
-        "📝-2BACPC・examens",
+        "📌-2bacpc・informations",
+        "🗓️-2bacpc・emploi-du-temps",
+        "📝-2bacpc・examens",
         subject_name,
     }
 
