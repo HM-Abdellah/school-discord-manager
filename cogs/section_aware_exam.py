@@ -22,7 +22,7 @@ from config.curriculum import (
 from services.audit import record_event
 from services.command_autocomplete import level_autocomplete, stream_autocomplete
 from services.discord_registry import persist_registry_repair, resolve_managed_text_channel
-from services.permissions import management_check
+from services.permissions import STREAM_ROLE_PREFIX, SUBJECT_ROLE_PREFIX, get_managed_role, management_authorized, teacher_professor_check
 from services.server_builder import _stream_category_name
 from services.storage import get_guild_config, save_guild_config
 
@@ -94,7 +94,8 @@ class SectionAwareExamCommands(commands.Cog):
             for m in (0, 30)
         ][:25],
     )
-    @management_check()
+    @app_commands.default_permissions(manage_roles=True)
+    @teacher_professor_check()
     async def set_exam(
         self,
         interaction: discord.Interaction,
@@ -143,6 +144,17 @@ class SectionAwareExamCommands(commands.Cog):
             return
 
         code = get_stream_abbreviation(level, stream)
+        if not management_authorized(interaction):
+            stream_role = get_managed_role(guild, f"{STREAM_ROLE_PREFIX}{code}")
+            subject_role = get_managed_role(guild, f"{SUBJECT_ROLE_PREFIX}{get_subject_display_name(match_subject)}")
+            teacher_roles = set(getattr(interaction.user, "roles", []))
+            if stream_role is None or subject_role is None or stream_role not in teacher_roles or subject_role not in teacher_roles:
+                await interaction.followup.send(
+                    "❌ Vous ne pouvez créer un examen que pour votre filière et une matière qui vous sont affectées.",
+                    ephemeral=True,
+                )
+                return
+
         category_name = _stream_category_name(level, stream, code)
         channel_name = f"📝-{code}・examens"
         config = get_guild_config(guild.id) or {}
