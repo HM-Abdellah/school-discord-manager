@@ -379,7 +379,8 @@ class TeacherOnboardingView(discord.ui.View):
             async with get_build_lock(self.guild_id):
                 pending_role = get_managed_role(member.guild, ROLE_TEACHER_PENDING)
                 if pending_role is None or pending_role not in member.roles:
-                    await interaction.edit_original_response(
+                    await self._update_interaction_message(
+                        interaction,
                         content="❌ Cette inscription QR n'est plus active.",
                         view=self,
                     )
@@ -387,7 +388,8 @@ class TeacherOnboardingView(discord.ui.View):
                     self._refresh_control_state()
                     return
                 if get_teacher_registration(member.guild.id, member.id) is not None:
-                    await interaction.edit_original_response(
+                    await self._update_interaction_message(
+                        interaction,
                         content="ℹ️ Votre inscription est déjà terminée. Le QR ne peut plus être réutilisé.",
                         view=self,
                     )
@@ -410,7 +412,8 @@ class TeacherOnboardingView(discord.ui.View):
                 except TeacherAssignmentError as exc:
                     self.submitting = False
                     self._refresh_control_state()
-                    await interaction.edit_original_response(
+                    await self._update_interaction_message(
+                        interaction,
                         content=f"{exc}\n\nVous pouvez corriger vos choix puis réessayer.",
                         view=self,
                     )
@@ -432,11 +435,11 @@ class TeacherOnboardingView(discord.ui.View):
             self.submitting = False
             self._refresh_control_state()
             try:
-                await interaction.edit_original_response(
+                await self._update_interaction_message(
+                    interaction,
                     content=(
                         "❌ **Erreur technique pendant l'inscription.**\n\n"
-                        "L'inscription n'a pas été finalisée. Vous pouvez réessayer. "
-                        "Le détail a été enregistré dans les logs du bot."
+                        "L'inscription n'a pas été finalisée. Vous pouvez réessayer."
                     ),
                     view=self,
                 )
@@ -465,11 +468,11 @@ class TeacherOnboardingView(discord.ui.View):
         )
         try:
             if interaction.response.is_done():
-                await interaction.edit_original_response(
+                await self._update_interaction_message(
+                    interaction,
                     content=(
                         "❌ **Erreur technique.**\n\n"
-                        "L'inscription n'a pas pu être finalisée. "
-                        "Vérifiez les logs du bot."
+                        "L'inscription n'a pas pu être finalisée. Vérifiez les logs du bot."
                     ),
                     view=self,
                 )
