@@ -31,6 +31,13 @@ EXPECTED_RUNTIME_OWNERS = {
     "createclassqr": "cogs.qr_onboarding",
     "revokeclassqr": "cogs.qr_onboarding",
     "listclassqr": "cogs.qr_onboarding",
+    "createteacherqr": "cogs.teacher_qr_onboarding",
+    "revoketeacherqr": "cogs.teacher_qr_onboarding",
+    "listteacherqr": "cogs.teacher_qr_onboarding",
+    "teacherprofile": "cogs.teacher_qr_onboarding",
+    "teacherrequests": "cogs.teacher_qr_onboarding",
+    "approveteacher": "cogs.teacher_qr_onboarding",
+    "rejectteacher": "cogs.teacher_qr_onboarding",
 }
 
 
@@ -81,6 +88,7 @@ def test_critical_commands_have_one_source_definition_and_expected_owner():
         "cogs.section_aware_timetable": "cogs/section_aware_timetable.py",
         "cogs.year_rollback": "cogs/year_rollback.py",
         "cogs.qr_onboarding": "cogs/qr_onboarding.py",
+        "cogs.teacher_qr_onboarding": "cogs/teacher_qr_onboarding.py",
     }
     definitions: dict[str, list[str]] = {command: [] for command in EXPECTED_RUNTIME_OWNERS}
     for module, path in modules.items():
@@ -178,3 +186,24 @@ def test_class_qr_commands_are_admin_visible_only():
     command = cog.create_class_qr
     assert command.default_permissions is not None
     assert command.default_permissions.manage_roles is True
+
+
+def test_teacher_qr_commands_are_admin_visible_only_and_profile_is_self_service():
+    module = importlib.import_module("cogs.teacher_qr_onboarding")
+    bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
+    cog = module.TeacherQROnboarding(bot)
+
+    for callback in (
+        cog.create_teacher_qr,
+        cog.revoke_teacher_qr,
+        cog.list_teacher_qr,
+        cog.teacher_requests,
+        cog.approve_teacher,
+        cog.reject_teacher,
+    ):
+        assert callback.default_permissions is not None
+        assert callback.default_permissions.manage_roles is True
+
+    assert cog.teacher_profile.default_permissions is None
+
+[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
