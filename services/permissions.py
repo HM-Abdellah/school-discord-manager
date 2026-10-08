@@ -10,7 +10,7 @@ from discord import app_commands
 
 from config.curriculum import get_stream_abbreviation, get_stream_subjects, get_subject_internal_code
 from services.build_guard import get_build_lock
-from services.storage import get_guild_config
+from services.storage import get_guild_config, get_teacher_registration
 
 ROLE_ADMIN = "Administration"
 ROLE_PROFESSOR = "Prof"
@@ -22,7 +22,7 @@ STUDENT_STREAM_ROLE_PREFIX = "Élèves - "
 SUBJECT_ROLE_PREFIX = "Matière - "
 
 CHANNEL_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream", "createclassqr"}
-ROLE_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream", "assignstudent", "assignteacher", "assignteacherfull", "assignsubjectteachers", "createclassqr", "createteacherqr", "revoketeacherqr", "listteacherqr", "teacherrequests", "approveteacher", "rejectteacher"}
+ROLE_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream", "assignstudent", "assignteacher", "assignteacherfull", "assignsubjectteachers", "createclassqr", "createteacherqr", "revoketeacherqr", "listteacherqr"}
 RESET_COMMANDS = {"resetserver"}
 READONLY_DURING_PENDING_REMOVAL = {"status", "years", "studenthistory", "adminpanel", "serverhealth"}
 PENDING_REMOVAL_KEY = "pending_removal"
@@ -190,6 +190,78 @@ def _apply_default_permission(function, *, manage_roles: bool = False, administr
     if manage_roles:
         return app_commands.default_permissions(manage_roles=True)(function)
     return function
+
+
+def teacher_assignment_check(*, lock: bool = True) -> app_commands.check:
+    """Authorize /assignteacherfull for administrators or one-time QR self-registration."""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        guild = interaction.guild
+        if guild is None:
+            return False
+        if management_authorized(interaction):
+            message = _preflight_message(interaction, needs_roles=True)
+            if message and not interaction.response.is_done():
+                await interaction.response.send_message(message, ephemeral=True)
+                return False
+            return True
+
+        member = interaction.user
+        pending_role = get_managed_role(guild, ROLE_TEACHER_PENDING)
+        if pending_role is None or pending_role not in getattr(member, "roles", []):
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Cette commande est réservée à l'inscription professeur par QR.",
+                    ephemeral=True,
+                )
+            return False
+
+        target = getattr(interaction.namespace, "teacher", None)
+        if target is not None and getattr(target, "id", None) != member.id:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Lors de votre propre inscription, vous ne pouvez cibler que votre compte.",
+                    ephemeral=True,
+                )
+            return False
+
+        professor_roles = {
+            role
+            for role in (
+                get_managed_role(guild, ROLE_PROFESSOR),
+                get_managed_role(guild, ROLE_PROFESSOR_FEMALE),
+            )
+            if role is not None
+        }
+        if any(role in getattr(member, "roles", []) for role in professor_roles):
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Ce compte est déjà enregistré comme professeur.",
+                    ephemeral=True,
+                )
+            return False
+
+        if get_teacher_registration(guild.id, member.id) is not None:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Ce compte est déjà enregistré comme professeur.",
+                    ephemeral=True,
+                )
+            return False
+
+        message = _preflight_message(interaction, needs_roles=True)
+        if message:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(message, ephemeral=True)
+            return False
+        return True
+
+    check_decorator = app_commands.check(predicate)
+
+    def decorator(function):
+        function = check_decorator(function)
+        return _wrap_with_mutation_lock(function) if lock else function
+
+    return decorator
 
 
 def management_check(*, lock: bool = True) -> app_commands.check:
