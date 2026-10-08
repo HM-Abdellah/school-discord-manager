@@ -98,5 +98,3 @@ def test_reset_guild_data_clears_teacher_onboarding_state(tmp_path, monkeypatch)
         assert conn.execute(
             "SELECT COUNT(*) FROM teacher_onboarding_requests WHERE guild_id=1"
         ).fetchone()[0] == 0
-
-[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
