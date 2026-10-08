@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import timedelta
+import traceback
 
 import discord
 from discord import app_commands
@@ -148,9 +149,29 @@ class TeacherOnboardingView(discord.ui.View):
 
     async def _respond(self, interaction: discord.Interaction, content: str) -> None:
         if interaction.response.is_done():
-            await interaction.edit_original_response(content=content, view=self)
+            message = getattr(interaction, "message", None)
+            if message is not None:
+                await message.edit(content=content, view=self)
+            else:
+                await self._update_interaction_message(interaction, content=content, view=self)
         else:
             await interaction.response.send_message(content)
+
+    async def _update_interaction_message(
+        self,
+        interaction: discord.Interaction,
+        *,
+        content: str,
+        view: discord.ui.View | None = None,
+    ) -> None:
+        message = getattr(interaction, "message", None)
+        if message is not None:
+            await message.edit(content=content, view=self if view is None else view)
+        else:
+            await interaction.edit_original_response(
+                content=content,
+                view=self if view is None else view,
+            )
 
     async def _ensure_eligible(self, interaction: discord.Interaction) -> discord.Member | None:
         if interaction.user.id != self.user_id:
@@ -426,6 +447,7 @@ class TeacherOnboardingView(discord.ui.View):
                 f"{type(exc).__name__}: {exc}",
                 flush=True,
             )
+            traceback.print_exc()
             return
 
     async def on_error(
