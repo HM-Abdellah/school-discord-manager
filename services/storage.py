@@ -220,6 +220,11 @@ def initialize_database() -> None:
         CREATE TABLE IF NOT EXISTS students (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, discord_id INTEGER, display_name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, UNIQUE(guild_id, discord_id));
         CREATE TABLE IF NOT EXISTS guild_configs (guild_id INTEGER PRIMARY KEY, config_json TEXT, is_deleted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS class_qr_invites (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, invite_code TEXT NOT NULL UNIQUE, class_key TEXT NOT NULL, level_name TEXT NOT NULL, stream_name TEXT NOT NULL, stream_code TEXT NOT NULL, section INTEGER NOT NULL CHECK(section BETWEEN 1 AND 8), class_role_id INTEGER NOT NULL, created_by INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, max_uses INTEGER NOT NULL, revoked_at TEXT);
+        CREATE TABLE IF NOT EXISTS teacher_qr_invites (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, invite_code TEXT NOT NULL UNIQUE, pending_role_id INTEGER NOT NULL, created_by INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, max_uses INTEGER NOT NULL, revoked_at TEXT);
+        CREATE TABLE IF NOT EXISTS teacher_onboarding_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, discord_id INTEGER NOT NULL, full_name TEXT NOT NULL, profile_type TEXT NOT NULL CHECK(profile_type IN ('male','female')), subjects_text TEXT NOT NULL, streams_text TEXT NOT NULL, notes_text TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')), created_at TEXT NOT NULL, reviewed_by INTEGER, reviewed_at TEXT, rejection_reason TEXT);
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_one_pending_teacher_request ON teacher_onboarding_requests(guild_id, discord_id) WHERE status='pending';
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_one_active_teacher_qr_per_guild ON teacher_qr_invites(guild_id) WHERE revoked_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_teacher_requests_guild_status ON teacher_onboarding_requests(guild_id, status, created_at);
         """)
         _migrate_legacy_enrollments(conn)
         _migrate_enrollment_sections(conn)
@@ -571,6 +576,192 @@ def mark_class_qr_invite_revoked(guild_id: int, invite_code: str) -> None:
         conn.commit()
 
 
+def record_teacher_qr_invite(
+    guild_id: int,
+    invite_code: str,
+    pending_role_id: int,
+    created_by: int,
+    created_at: str,
+    expires_at: str,
+    max_uses: int,
+) -> int:
+    if not 1 <= int(max_uses) <= 42:
+        raise ValueError("max_uses must be between 1 and 42.")
+    with _connect() as conn:
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO teacher_qr_invites(
+                    guild_id,invite_code,pending_role_id,created_by,created_at,expires_at,max_uses
+                ) VALUES(?,?,?,?,?,?,?)
+                """,
+                (guild_id, invite_code, pending_role_id, created_by, created_at, expires_at, int(max_uses)),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
+        except sqlite3.IntegrityError as exc:
+            conn.rollback()
+            existing = conn.execute(
+                "SELECT 1 FROM teacher_qr_invites WHERE guild_id=? AND revoked_at IS NULL LIMIT 1",
+                (guild_id,),
+            ).fetchone()
+            if existing is not None:
+                raise RuntimeError("Un QR professeur actif existe déjà.") from exc
+            raise
+
+
+def get_teacher_qr_invites(
+    guild_id: int,
+    *,
+    include_revoked: bool = False,
+) -> list[sqlite3.Row]:
+    initialize_database()
+    query = "SELECT * FROM teacher_qr_invites WHERE guild_id=?"
+    params: list[Any] = [guild_id]
+    if not include_revoked:
+        query += " AND revoked_at IS NULL"
+    query += " ORDER BY created_at DESC, id DESC"
+    with _connect() as conn:
+        return conn.execute(query, tuple(params)).fetchall()
+
+
+def mark_teacher_qr_invite_revoked(guild_id: int, invite_code: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE teacher_qr_invites SET revoked_at=? WHERE guild_id=? AND invite_code=? AND revoked_at IS NULL",
+            (datetime.now(timezone.utc).isoformat(), guild_id, invite_code),
+        )
+        conn.commit()
+
+
+def submit_teacher_onboarding_request(
+    guild_id: int,
+    discord_id: int,
+    full_name: str,
+    profile_type: str,
+    subjects_text: str,
+    streams_text: str,
+    notes_text: str = "",
+) -> int:
+    full_name = " ".join(str(full_name).split())
+    subjects_text = str(subjects_text).strip()
+    streams_text = str(streams_text).strip()
+    notes_text = str(notes_text).strip()
+    if len(full_name) < 2:
+        raise ValueError("Le nom complet est trop court.")
+    if profile_type not in {"male", "female"}:
+        raise ValueError("Type de profil professeur invalide.")
+    if not subjects_text or not streams_text:
+        raise ValueError("Les matières et filières sont obligatoires.")
+    now = datetime.now(timezone.utc).isoformat()
+    with _connect() as conn:
+        try:
+            existing = conn.execute(
+                "SELECT id FROM teacher_onboarding_requests WHERE guild_id=? AND discord_id=? AND status='pending' LIMIT 1",
+                (guild_id, discord_id),
+            ).fetchone()
+            if existing is not None:
+                conn.execute(
+                    """
+                    UPDATE teacher_onboarding_requests
+                    SET full_name=?, profile_type=?, subjects_text=?, streams_text=?, notes_text=?, created_at=?
+                    WHERE id=?
+                    """,
+                    (full_name, profile_type, subjects_text, streams_text, notes_text, now, int(existing["id"])),
+                )
+                conn.commit()
+                return int(existing["id"])
+            cursor = conn.execute(
+                """
+                INSERT INTO teacher_onboarding_requests(
+                    guild_id,discord_id,full_name,profile_type,subjects_text,streams_text,notes_text,status,created_at
+                ) VALUES(?,?,?,?,?,?,?,?,?)
+                """,
+                (guild_id, discord_id, full_name, profile_type, subjects_text, streams_text, notes_text, "pending", now),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
+        except sqlite3.IntegrityError as exc:
+            conn.rollback()
+            raise RuntimeError("Une demande professeur est déjà en attente pour ce compte.") from exc
+
+
+def get_teacher_onboarding_request(
+    guild_id: int,
+    discord_id: int,
+    *,
+    status: str | None = None,
+) -> sqlite3.Row | None:
+    initialize_database()
+    query = "SELECT * FROM teacher_onboarding_requests WHERE guild_id=? AND discord_id=?"
+    params: list[Any] = [guild_id, discord_id]
+    if status is not None:
+        query += " AND status=?"
+        params.append(status)
+    query += " ORDER BY id DESC LIMIT 1"
+    with _connect() as conn:
+        return conn.execute(query, tuple(params)).fetchone()
+
+
+def get_teacher_onboarding_requests(
+    guild_id: int,
+    *,
+    status: str | None = None,
+    limit: int = 15,
+) -> list[sqlite3.Row]:
+    initialize_database()
+    query = "SELECT * FROM teacher_onboarding_requests WHERE guild_id=?"
+    params: list[Any] = [guild_id]
+    if status is not None:
+        query += " AND status=?"
+        params.append(status)
+    query += " ORDER BY created_at ASC, id ASC LIMIT ?"
+    params.append(max(1, min(int(limit), 100)))
+    with _connect() as conn:
+        return conn.execute(query, tuple(params)).fetchall()
+
+
+def approve_teacher_onboarding_request(
+    guild_id: int,
+    discord_id: int,
+    reviewed_by: int,
+) -> None:
+    reviewed_at = datetime.now(timezone.utc).isoformat()
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE teacher_onboarding_requests
+            SET status='approved', reviewed_by=?, reviewed_at=?, rejection_reason=NULL
+            WHERE guild_id=? AND discord_id=? AND status='pending'
+            """,
+            (reviewed_by, reviewed_at, guild_id, discord_id),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("La demande professeur n'est plus en attente.")
+        conn.commit()
+
+
+def reject_teacher_onboarding_request(
+    guild_id: int,
+    discord_id: int,
+    reviewed_by: int,
+    reason: str,
+) -> None:
+    reviewed_at = datetime.now(timezone.utc).isoformat()
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE teacher_onboarding_requests
+            SET status='rejected', reviewed_by=?, reviewed_at=?, rejection_reason=?
+            WHERE guild_id=? AND discord_id=? AND status='pending'
+            """,
+            (reviewed_by, reviewed_at, reason.strip()[:1000], guild_id, discord_id),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("La demande professeur n'est plus en attente.")
+        conn.commit()
+
+
 def archive_guild_database(guild_id: int, academic_year_name: str) -> Path:
     """Create an atomic, standalone snapshot of the current SQLite state before reset.
 
@@ -663,6 +854,8 @@ def reset_guild_data(guild_id: int) -> None:
             conn.execute("DELETE FROM students WHERE guild_id=?", (guild_id,))
             conn.execute("DELETE FROM streams WHERE guild_id=?", (guild_id,))
             conn.execute("DELETE FROM class_qr_invites WHERE guild_id=?", (guild_id,))
+            conn.execute("DELETE FROM teacher_qr_invites WHERE guild_id=?", (guild_id,))
+            conn.execute("DELETE FROM teacher_onboarding_requests WHERE guild_id=?", (guild_id,))
             conn.execute("DELETE FROM academic_years WHERE guild_id=?", (guild_id,))
             if _table_exists(conn, "audit_events"):
                 conn.execute("DELETE FROM audit_events WHERE guild_id=?", (guild_id,))
@@ -948,3 +1141,5 @@ def get_student_history(guild_id: int, discord_id: int) -> list[sqlite3.Row]:
             WHERE st.guild_id=? AND st.discord_id=? ORDER BY e.start_date DESC, e.id DESC
         """, (guild_id, discord_id)).fetchall()
 
+
+[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
