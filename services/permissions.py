@@ -15,13 +15,14 @@ from services.storage import get_guild_config
 ROLE_ADMIN = "Administration"
 ROLE_PROFESSOR = "Prof"
 ROLE_PROFESSOR_FEMALE = "Prof (F)"
+ROLE_TEACHER_PENDING = "Professeur - En attente"
 ROLE_STUDENT = "Élève"
 STREAM_ROLE_PREFIX = "Filière - "
 STUDENT_STREAM_ROLE_PREFIX = "Élèves - "
 SUBJECT_ROLE_PREFIX = "Matière - "
 
 CHANNEL_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream", "createclassqr"}
-ROLE_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream", "assignstudent", "assignteacher", "assignteacherfull", "assignsubjectteachers", "createclassqr"}
+ROLE_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream", "assignstudent", "assignteacher", "assignteacherfull", "assignsubjectteachers", "createclassqr", "createteacherqr", "revoketeacherqr", "listteacherqr", "teacherrequests", "approveteacher", "rejectteacher"}
 RESET_COMMANDS = {"resetserver"}
 READONLY_DURING_PENDING_REMOVAL = {"status", "years", "studenthistory", "adminpanel", "serverhealth"}
 PENDING_REMOVAL_KEY = "pending_removal"
@@ -319,3 +320,5 @@ def subject_channel_overwrites(everyone, admin_role, professor_role, female_prof
 def public_voice_overwrites(everyone, admin_role, professor_role, female_professor_role, student_role, teacher_stream_role, student_stream_role):
     voice = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, stream=True)
     return {everyone: hidden_overwrite(), professor_role: voice, female_professor_role: voice, admin_role: voice, teacher_stream_role: voice, student_stream_role: voice}
+
+[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
