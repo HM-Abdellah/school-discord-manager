@@ -89,5 +89,3 @@ if __name__ == "__main__":
     except discord.LoginFailure:
         print("❌ Invalid Discord bot token.")
         print("Check the DISCORD_TOKEN value in .env.")
-
-[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
