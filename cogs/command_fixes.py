@@ -17,18 +17,20 @@ from services.permissions import (
     ROLE_ADMIN,
     ROLE_PROFESSOR,
     ROLE_PROFESSOR_FEMALE,
+    ROLE_TEACHER_PENDING,
     SUBJECT_ROLE_PREFIX,
     STREAM_ROLE_PREFIX,
     administrator_overwrite,
     get_managed_role,
     hidden_overwrite,
-    management_check,
+    management_authorized,
+    teacher_assignment_check,
     professor_subject_member_overwrite,
     professor_subject_view_overwrite,
     student_overwrite,
 )
 from services.server_builder import _subject_channel_name, _subject_role_name, _stream_role_name
-from services.storage import get_guild_config, save_guild_config
+from services.storage import delete_teacher_registration, get_guild_config, record_teacher_registration, save_guild_config
 
 OWNED_COMMANDS = {"assignteacherfull"}
 
@@ -243,18 +245,41 @@ class CommandFixes(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    @app_commands.command(name="assignteacherfull", description="Affecter un professeur à une filière et à une ou plusieurs matières.")
-    @app_commands.describe(teacher="Professeur", gender="Type de rôle professeur", level="Niveau scolaire", stream="Filière scolaire", subjects="Matière(s), sélectionne une suggestion ou sépare par des virgules")
+    @app_commands.command(name="assignteacherfull", description="Enregistrer un professeur et l'affecter à une filière et à une ou plusieurs matières.")
+    @app_commands.describe(
+        gender="Type de rôle professeur",
+        level="Niveau scolaire",
+        stream="Filière scolaire",
+        subjects="Matière(s), sélectionne une suggestion ou sépare par des virgules",
+        teacher="Cible pour l'administration ; laissez vide pour vous enregistrer vous-même",
+    )
     @app_commands.choices(gender=[app_commands.Choice(name="Prof", value="male"), app_commands.Choice(name="Prof (F)", value="female")])
     @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete, subjects=teacher_subject_autocomplete)
-    @management_check()
-    async def assign_teacher_full(self, interaction: discord.Interaction, teacher: discord.Member, gender: app_commands.Choice[str], level: str, stream: str, subjects: str) -> None:
+    @app_commands.default_permissions(manage_roles=True)
+    @teacher_assignment_check()
+    async def assign_teacher_full(
+        self,
+        interaction: discord.Interaction,
+        gender: app_commands.Choice[str],
+        level: str,
+        stream: str,
+        subjects: str,
+        teacher: discord.Member | None = None,
+    ) -> None:
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
-        # Acknowledge before synchronous state checks so Discord cannot expire
-        # the interaction while SQLite/config inspection is in progress.
+
+        is_self_registration = not management_authorized(interaction)
+        teacher = teacher or interaction.user
+        if is_self_registration and teacher.id != interaction.user.id:
+            await interaction.response.send_message(
+                "❌ Lors de votre inscription QR, la cible doit être votre propre compte.",
+                ephemeral=True,
+            )
+            return
+
         await interaction.response.defer(ephemeral=True)
 
         conflict = teacher_target_conflict(teacher, guild)
@@ -265,26 +290,38 @@ class CommandFixes(commands.Cog):
             await interaction.followup.send("❌ Niveau ou filière invalide.", ephemeral=True)
             return
         requested = {item.strip().casefold() for item in subjects.split(",") if item.strip()}
-        selected = [subject for subject in get_stream_subjects(level, stream) if subject.casefold() in requested or get_subject_display_name(subject).casefold() in requested]
+        selected = [
+            subject
+            for subject in get_stream_subjects(level, stream)
+            if subject.casefold() in requested or get_subject_display_name(subject).casefold() in requested
+        ]
         if not selected:
             await interaction.followup.send("❌ Aucune matière reconnue pour cette filière. Utilise les suggestions.", ephemeral=True)
             return
+
         stream_code = get_stream_abbreviation(level, stream)
         stream_role = get_managed_role(guild, f"{STREAM_ROLE_PREFIX}{stream_code}")
         desired_role = get_managed_role(guild, ROLE_PROFESSOR_FEMALE if gender.value == "female" else ROLE_PROFESSOR)
         other_role = get_managed_role(guild, ROLE_PROFESSOR if gender.value == "female" else ROLE_PROFESSOR_FEMALE)
+        pending_role = get_managed_role(guild, ROLE_TEACHER_PENDING) if is_self_registration else None
         if stream_role is None or desired_role is None:
             await interaction.followup.send("❌ Les rôles scolaires requis pour cette filière n'existent pas. Vérifie `/build`.", ephemeral=True)
             return
+        if is_self_registration and pending_role is None:
+            await interaction.followup.send("❌ Le rôle d'inscription professeur est introuvable. Génère un nouveau QR professeur.", ephemeral=True)
+            return
+
         config = get_guild_config(guild.id) or {}
         working_config = deepcopy(config)
-        tracked_roles = [role for role in (desired_role, other_role, stream_role) if role is not None]
+        tracked_roles = [role for role in (desired_role, other_role, stream_role, pending_role) if role is not None]
         initial_role_ids = {role.id for role in teacher.roles}
         created_subject_roles: list[discord.Role] = []
         subject_roles: list[discord.Role] = []
         migration_permission_backups: list[
             tuple[discord.abc.GuildChannel, discord.Role, discord.PermissionOverwrite | None]
         ] = []
+        registration_created = False
+        migrated: list[str] = []
         try:
             migrated, migration_created_roles, migration_tracked_roles, migration_permission_backups = await _migrate_legacy_subject_roles(
                 guild, teacher, working_config
@@ -306,21 +343,43 @@ class CommandFixes(commands.Cog):
             for role in subject_roles:
                 if role not in tracked_roles:
                     tracked_roles.append(role)
+
             if desired_role not in teacher.roles:
-                await teacher.add_roles(desired_role, reason="School Manager full teacher assignment")
+                await teacher.add_roles(desired_role, reason="School Manager teacher self-registration")
             await teacher.add_roles(stream_role, *subject_roles, reason="School Manager full teacher assignment")
             if other_role is not None and other_role in teacher.roles:
                 await teacher.remove_roles(other_role, reason="Teacher role normalization")
+
+            if is_self_registration:
+                record_teacher_registration(
+                    guild.id,
+                    teacher.id,
+                    teacher.display_name,
+                    gender.value,
+                    level,
+                    stream,
+                    ", ".join(get_subject_display_name(subject) for subject in selected),
+                )
+                registration_created = True
+                if pending_role is not None and pending_role in teacher.roles:
+                    await teacher.remove_roles(pending_role, reason="School Manager teacher self-registration completed")
+
             save_guild_config(guild.id, working_config)
-            config = working_config
-        except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError) as exc:
+        except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError, ValueError) as exc:
             try:
                 await restore_role_presence(
-                    teacher, tracked_roles, initial_role_ids,
-                    reason="School Manager full teacher assignment rollback"
+                    teacher,
+                    tracked_roles,
+                    initial_role_ids,
+                    reason="School Manager full teacher assignment rollback",
                 )
             except discord.HTTPException:
                 pass
+            if registration_created and is_self_registration:
+                try:
+                    delete_teacher_registration(guild.id, teacher.id)
+                except OSError:
+                    pass
             for channel, role, overwrite in reversed(migration_permission_backups):
                 try:
                     await channel.set_permissions(
@@ -341,20 +400,32 @@ class CommandFixes(commands.Cog):
                 message = f"❌ Discord API : `{exc}`"
             elif isinstance(exc, OSError):
                 message = f"❌ Stockage local : `{exc}`"
+            elif isinstance(exc, ValueError):
+                message = f"❌ Données invalides : `{exc}`"
             else:
                 message = f"❌ Opération refusée : `{exc}`"
             await interaction.followup.send(message, ephemeral=True)
             return
+
         subject_names = ", ".join(get_subject_display_name(subject) for subject in selected)
         migration_text = ""
         if migrated:
             migration_text = "\n♻️ Anciens rôles matière migrés : " + ", ".join(get_subject_display_name(subject) for subject in migrated)
-        record_event(guild.id, interaction.user.id, interaction.user.display_name, "assignteacherfull", teacher.display_name, f"{stream_code}: {subject_names}")
+        completion_text = "\n🔒 Ton inscription QR est terminée : le rôle temporaire a été retiré et ce compte ne pourra plus se réinscrire via QR." if is_self_registration else ""
+        record_event(
+            guild.id,
+            interaction.user.id,
+            interaction.user.display_name,
+            "assignteacherfull",
+            teacher.display_name,
+            f"{stream_code}: {subject_names}" + (";self-registration" if is_self_registration else ""),
+        )
         await interaction.followup.send(
-            f"✅ {teacher.mention} est affecté à **{stream_code}** pour : {subject_names}.\n"
+            f"✅ {teacher.mention} est maintenant professeur et affecté à **{stream_code}** pour : {subject_names}.\n"
             f"Rôles : `Filière - {stream_code}` + "
             + ", ".join(f"`{_global_subject_role_name(subject)}`" for subject in selected)
-            + migration_text,
+            + migration_text
+            + completion_text,
             ephemeral=True,
         )
 
