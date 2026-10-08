@@ -1,5 +1,3 @@
-[Reading 216 lines from start (total: 216 lines, 0 remaining)]
-
 import sqlite3
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
