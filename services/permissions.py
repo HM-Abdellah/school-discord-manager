@@ -8,7 +8,7 @@ import types
 import discord
 from discord import app_commands
 
-from config.curriculum import get_stream_abbreviation, get_stream_subjects, get_subject_internal_code
+from config.curriculum import get_stream_abbreviation, get_stream_subjects, get_subject_display_name, get_subject_internal_code
 from services.build_guard import get_build_lock
 from services.storage import get_guild_config, get_teacher_registration
 
@@ -259,6 +259,48 @@ def teacher_assignment_check(*, lock: bool = True) -> app_commands.check:
 
     def decorator(function):
         function = check_decorator(function)
+        return _wrap_with_mutation_lock(function) if lock else function
+
+    return decorator
+
+
+def teacher_professor_check(*, lock: bool = True) -> app_commands.check:
+    """Authorize teachers for operational self-service commands."""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        guild = interaction.guild
+        if guild is None:
+            return False
+        if management_authorized(interaction):
+            message = _preflight_message(interaction, needs_roles=True)
+            if message and not interaction.response.is_done():
+                await interaction.response.send_message(message, ephemeral=True)
+                return False
+            return True
+
+        member = interaction.user
+        professor_roles = {
+            role
+            for role in (
+                get_managed_role(guild, ROLE_PROFESSOR),
+                get_managed_role(guild, ROLE_PROFESSOR_FEMALE),
+            )
+            if role is not None
+        }
+        if not any(role in getattr(member, "roles", []) for role in professor_roles):
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Cette commande est réservée aux professeurs enregistrés.",
+                    ephemeral=True,
+                )
+            return False
+
+        return True
+
+    check_decorator = app_commands.check(predicate)
+
+    def decorator(function):
+        function = check_decorator(function)
+        function = _apply_default_permission(function, manage_roles=True)
         return _wrap_with_mutation_lock(function) if lock else function
 
     return decorator
