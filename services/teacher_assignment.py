@@ -6,7 +6,14 @@ import sqlite3
 
 import discord
 
-from config.curriculum import get_stream_abbreviation, get_stream_subjects, get_streams, get_subject_display_name, get_subject_internal_code
+from config.curriculum import (
+    get_levels,
+    get_stream_abbreviation,
+    get_stream_subjects,
+    get_streams,
+    get_subject_display_name,
+    get_subject_internal_code,
+)
 from services.audit import record_event
 from services.permissions import (
     ROLE_PROFESSOR,
