@@ -138,6 +138,35 @@ async def _get_or_create_class_role(
     return role, True
 
 
+def _managed_registry_id(
+    mapping: dict[str, Any],
+    expected_name: str,
+) -> int | None:
+    exact = mapping.get(expected_name)
+    if isinstance(exact, int) and exact > 0:
+        return exact
+
+    wanted = expected_name.casefold()
+    matches = [
+        value
+        for name, value in mapping.items()
+        if isinstance(value, int)
+        and value > 0
+        and str(name).casefold() == wanted
+    ]
+    if len(matches) > 1:
+        raise RuntimeError(
+            "Le registre contient plusieurs ressources gérées ambiguës pour "
+            + expected_name
+            + "."
+        )
+    return matches[0] if matches else None
+
+
+def _same_managed_name(actual: object, expected: str) -> bool:
+    return isinstance(actual, str) and actual.casefold() == expected.casefold()
+
+
 def _managed_stream_channels(
     guild: discord.Guild,
     config: dict[str, Any],
@@ -156,8 +185,8 @@ def _managed_stream_channels(
         raise RuntimeError("La configuration des ressources Discord gérées est invalide.")
 
     category_name = _stream_category_name(level, stream, code)
-    category_id = categories.get(category_name)
-    if not isinstance(category_id, int) or category_id <= 0:
+    category_id = _managed_registry_id(categories, category_name)
+    if category_id is None:
         raise RuntimeError("La catégorie gérée " + category_name + " est introuvable dans le registre.")
 
     configured_subjects: list[str] | None = None
@@ -181,7 +210,7 @@ def _managed_stream_channels(
         *{_subject_channel_name(code, subject) for subject in subjects},
     }
 
-    voice_category_id = categories.get(CATEGORY_VOICE)
+    voice_category_id = _managed_registry_id(categories, CATEGORY_VOICE)
     voice_name = "🔊-" + _safe_name(code, 30) + "-à-distance"
     if isinstance(voice_category_id, int) and voice_category_id > 0:
         expected_names.add(voice_name)
@@ -190,8 +219,8 @@ def _managed_stream_channels(
     seen_ids: set[int] = set()
 
     for name in expected_names:
-        resource_id = channels.get(name)
-        if not isinstance(resource_id, int) or resource_id <= 0:
+        resource_id = _managed_registry_id(channels, name)
+        if resource_id is None:
             raise RuntimeError("Le salon géré " + name + " est absent du registre.")
 
         channel = guild.get_channel(resource_id)
@@ -204,7 +233,7 @@ def _managed_stream_channels(
             else category_id
         )
         if (
-            getattr(channel, "name", None) != name
+            not _same_managed_name(getattr(channel, "name", None), name)
             or getattr(channel, "category_id", None) != expected_category_id
         ):
             raise RuntimeError("L'identité du salon géré " + name + " ne correspond pas au registre.")
@@ -424,7 +453,7 @@ class ClassQROnboarding(commands.Cog):
                 (
                     channel
                     for channel in channels
-                    if channel.name == "📌-" + code + "・informations"
+                    if _same_managed_name(channel.name, "📌-" + code + "・informations")
                 ),
                 None,
             )
