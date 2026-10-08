@@ -205,5 +205,3 @@ def test_teacher_qr_commands_are_admin_visible_only_and_profile_is_self_service(
         assert callback.default_permissions.manage_roles is True
 
     assert cog.teacher_profile.default_permissions is None
-
-[executed on device: codespaces-0f0d49 (3cce85fb-9081-410e-b250-871f1197a6dd)]
