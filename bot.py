@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+from services.analytics import initialize_analytics, record_command_usage
 from services.storage_recovery import recover_json_cache
 
 load_dotenv()
@@ -32,6 +34,7 @@ class SchoolBot(commands.Bot):
         "cogs.students",
         "cogs.teachers",
         "cogs.admin",
+        "cogs.analytics",
         "cogs.command_fixes",
         "cogs.year_rollback",
         "cogs.security_hardening_v3",
@@ -48,9 +51,32 @@ class SchoolBot(commands.Bot):
         intents.members = True
         intents.message_content = False
         super().__init__(command_prefix="!", intents=intents, help_command=None)
+        self.tree.on_error = self._handle_app_command_error
+
+    def _record_command_usage(self, interaction: discord.Interaction, command, outcome: str) -> None:
+        guild_id = interaction.guild_id
+        command_name = getattr(command, "qualified_name", None) or getattr(command, "name", None)
+        if guild_id is None or not isinstance(command_name, str):
+            return
+        record_command_usage(guild_id, command_name, outcome)
+
+    async def on_app_command_completion(self, interaction: discord.Interaction, command) -> None:
+        """Count completed slash-command callbacks without storing user identities."""
+        self._record_command_usage(interaction, command, "completed")
+
+    async def _handle_app_command_error(self, interaction: discord.Interaction, error: discord.app_commands.AppCommandError) -> None:
+        """Track raised application-command errors and preserve discord.py handling."""
+        self._record_command_usage(interaction, interaction.command, "raised_error")
+        await discord.app_commands.CommandTree.on_error(self.tree, interaction, error)
 
     async def setup_hook(self) -> None:
         recover_json_cache()
+        try:
+            initialize_analytics()
+        except (OSError, sqlite3.Error):
+            logging.getLogger(__name__).exception(
+                "Usage analytics could not initialize; continuing without command-use reports."
+            )
         for extension in self.EXTENSIONS:
             if extension == "cogs.removestream_fix":
                 self.tree.remove_command("removestream")
@@ -76,7 +102,7 @@ class SchoolBot(commands.Bot):
         print(f"Bot      : {self.user}")
         print(f"Bot ID   : {self.user.id}")
         print(f"Servers  : {len(self.guilds)}")
-        print("Commands : /setup /build /addstream /removestream /status /newyear /rollbackyear /years /assignstudent /assignteacher /assignsubjectteachers /assignteacherfull /set_timetable /setexam /absenceteacher /adminpanel /serverhealth /reportabsence /create-section-threads /createclassqr /createteacherqr /revoketeacherqr /listteacherqr /resetserver(owner)")
+        print("Commands : /setup /build /addstream /removestream /status /newyear /rollbackyear /years /assignstudent /assignteacher /assignsubjectteachers /assignteacherfull /set_timetable /setexam /absenceteacher /adminpanel /serverhealth /reportabsence /create-section-threads /createclassqr /createclasstransferqr /cancelclasstransferqr /usagereport /createteacherqr /revoketeacherqr /listteacherqr /resetserver(owner)")
         print("=" * 72)
 
 

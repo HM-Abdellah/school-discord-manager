@@ -30,6 +30,8 @@ EXPECTED_RUNTIME_OWNERS = {
     "reportabsence": "cogs.teachers",
     "absenceteacher": "cogs.teachers",
     "createclassqr": "cogs.qr_onboarding",
+    "createclasstransferqr": "cogs.qr_onboarding",
+    "cancelclasstransferqr": "cogs.qr_onboarding",
     "revokeclassqr": "cogs.qr_onboarding",
     "listclassqr": "cogs.qr_onboarding",
     "createteacherqr": "cogs.teacher_qr_onboarding",
@@ -180,9 +182,17 @@ def test_class_qr_commands_are_admin_visible_only():
     module = importlib.import_module("cogs.qr_onboarding")
     bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
     cog = module.ClassQROnboarding(bot)
-    command = cog.create_class_qr
-    assert command.default_permissions is not None
-    assert command.default_permissions.manage_roles is True
+
+    for command in (
+        cog.create_class_qr,
+        cog.create_class_transfer_qr,
+        cog.cancel_class_transfer_qr,
+    ):
+        assert command.default_permissions is not None
+        assert command.default_permissions.manage_roles is True
+
+    assert cog.create_class_transfer_qr.name == "createclasstransferqr"
+    assert cog.cancel_class_transfer_qr.name == "cancelclasstransferqr"
 
 
 def test_assignteacherfull_is_admin_only_and_requires_target():

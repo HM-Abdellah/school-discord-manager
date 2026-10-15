@@ -89,13 +89,25 @@ Previous academic years remain available for history and controlled rollback.
 
 Sections are metadata inside shared stream channels. Valid section values are `1..8`; section values do not create additional Discord channels.
 
-### Administration and destructive maintenance
+### Student class-transfer QR
+
+```text
+/createclasstransferqr
+/cancelclasstransferqr
+```
+
+Administrators use `/createclasstransferqr` to prepare a one-student, one-use transfer request. The bot sends a private Discord message to the selected student and returns a QR image that opens that exact DM message. The student must be signed in to Discord and press the confirmation button; scanning the QR alone never changes roles. The request expires after 30 minutes, is restricted to the selected Discord user, and is persisted so its button can be restored after a bot restart. `/cancelclasstransferqr` invalidates a pending request. On confirmation, the bot replaces managed student stream/class roles and records the new section while retaining enrollment history. Keep the QR private and test the flow in a dedicated test server before production use.
+
+### Administration, usage reports, and destructive maintenance
 
 ```text
 /adminpanel
 /serverhealth
+/usagereport days:30
 /resetserver RESET SCHOOL MANAGER
 ```
+
+`/usagereport` is restricted to the configured server administrator or owner. It exports daily aggregate command-use counts and selected action names from existing audited workflows as a CSV attachment, and stores a local copy under `data/reports/`. The optional `days` value supports `1..400` days. The analytics tables store only server ID, command/action name, outcome, and UTC timestamp; they do not store user IDs, names, command arguments, message contents, or targets. Existing security/audit logs remain separate. Records older than 400 days are pruned as new analytics events are recorded. The report distinguishes completed command callbacks from uncaught application-command errors and from actions recorded by audited workflows; a callback completing is **not** proof that its business operation succeeded, and these metrics do not automatically measure time saved.
 
 `/resetserver` is scoped to persisted School Manager resource IDs. Unmanaged Discord resources are outside its deletion scope.
 
@@ -107,6 +119,7 @@ bot.py
 
 cogs/
   setup.py                    interactive setup wizard
+  analytics.py                administrator-only usage report export
   server_v3.py                build/add/remove/status/year commands
   students.py                 student assignment and history
   teachers.py                  teacher/subject/absence commands
@@ -129,6 +142,10 @@ services/
   storage.py                  SQLite authority and JSON cache
   storage_recovery.py         startup cache recovery
   audit.py                    persistent audit events
+  analytics.py                privacy-minimizing usage metrics and CSV exports
+
+docs/
+  impact-measurement.md       baseline/post-rollout measurement guide for the school pilot
 
 e2e/
   runner.py                   live Discord observer
@@ -179,7 +196,7 @@ git clone https://github.com/HM-Abdellah/school-discord-manager.git
 cd school-discord-manager
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-runtime.txt
 python bot.py
 ```
 
@@ -296,6 +313,10 @@ The project is ready for final delivery only after:
 
 The repository currently contains the implementation and CI gate for these checks; the live Discord execution remains an operational acceptance step rather than a GitHub Actions test.
 
-## 📄 License
+## 📄 License and attribution
 
-No license file is currently declared in the repository.
+Required Notice: Copyright (c) 2026 HM-Abdellah — School Discord Manager (https://github.com/HM-Abdellah/school-discord-manager)
+
+The original project source is offered under the [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0); see `LICENSE` for the full terms. Educational institutions may use the software for permitted purposes under that license. Commercial use is restricted unless separately authorized by the copyright holder. This is a source-available, noncommercial license, not an OSI-approved Open Source license. Third-party dependencies remain under their own licenses.
+
+The copyright notice identifies the original project; it does not claim ownership of third-party dependencies or of school data. Usage metrics remain on the school host; the bot does not send them to the developer. An administrator can export an aggregate CSV with `/usagereport`.

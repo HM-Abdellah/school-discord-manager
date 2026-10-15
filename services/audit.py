@@ -5,13 +5,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import sqlite3
 
-from services.storage import _connect, initialize_database
+from services.analytics import initialize_analytics, record_audited_action
+from services.storage import _connect
 
 MAX_EVENTS_PER_GUILD = 500
 
 
 def initialize_audit_log() -> None:
-    initialize_database()
+    initialize_analytics()
     with _connect() as conn:
         conn.execute(
             """
@@ -45,10 +46,11 @@ def record_event(
     """
     try:
         initialize_audit_log()
+        event_time = datetime.now(timezone.utc)
         with _connect() as conn:
             conn.execute(
                 "INSERT INTO audit_events(guild_id,actor_id,actor_name,action,target,details,created_at) VALUES(?,?,?,?,?,?,?)",
-                (guild_id, actor_id, actor_name, action, target, details, datetime.now(timezone.utc).isoformat()),
+                (guild_id, actor_id, actor_name, action, target, details, event_time.isoformat()),
             )
             conn.execute(
                 """
@@ -60,6 +62,8 @@ def record_event(
                 """,
                 (guild_id, guild_id, MAX_EVENTS_PER_GUILD),
             )
+        # Store only the action name and date in analytics; the detailed audit row stays separate.
+        record_audited_action(guild_id, action, occurred_at=event_time)
     except (OSError, sqlite3.Error) as exc:
         print(f"[AUDIT] Event recording failed; primary command state remains authoritative: {exc}", flush=True)
 
