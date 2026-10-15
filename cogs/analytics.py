@@ -1,4 +1,4 @@
-""""Administrator-only export for privacy-minimizing usage metrics."""
+"""Administrator-only export for privacy-minimizing usage metrics."""
 
 from __future__ import annotations
 
@@ -68,12 +68,12 @@ class UsageAnalytics(commands.Cog):
             "métier de chaque opération. Le rapport ne contient pas d'identifiants ni de noms d'utilisateurs."
         )
         content = (
-            f"**Rapport d'utilisation — {days} jour(s)**\\n"
-            f"Période UTC : `{summary['start_at']:%Y-%m-%d}` → `{summary['end_at']:%Y-%m-%d}`\\n"
-            f"Invocations terminées sans exception non gérée : **{summary['completed']}**\\n"
-            f"Invocations ayant levé une erreur d'application : **{summary['raised_errors']}**\\n"
-            f"Total des commandes : **{summary['total']}**\\n"
-            f"Actions auditées enregistrées : **{summary['audited_actions']}**\\n\\n"
+            f"**Rapport d'utilisation — {days} jour(s)**\n"
+            f"Période UTC : `{summary['start_at']:%Y-%m-%d}` → `{summary['end_at']:%Y-%m-%d}`\n"
+            f"Invocations terminées sans exception non gérée : **{summary['completed']}**\n"
+            f"Invocations ayant levé une erreur d'application : **{summary['raised_errors']}**\n"
+            f"Total des commandes : **{summary['total']}**\n"
+            f"Actions auditées enregistrées : **{summary['audited_actions']}**\n\n"
             f"_{note}_"
         )
         await interaction.followup.send(
