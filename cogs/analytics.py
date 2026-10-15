@@ -1,4 +1,4 @@
-"""Administrator-only export for privacy-minimizing usage metrics."""
+""""Administrator-only export for privacy-minimizing usage metrics."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from services.analytics import export_usage_report
-from services.permissions import management_check
+from services.permissions import _pending_removal_message, management_authorized
 
 
 class UsageAnalytics(commands.Cog):
@@ -23,7 +23,7 @@ class UsageAnalytics(commands.Cog):
         description="Exporter les statistiques d'utilisation agrégées du bot.",
     )
     @app_commands.describe(days="Nombre de jours à inclure (1 à 400).")
-    @management_check(lock=False)
+    @app_commands.default_permissions(manage_roles=True)
     async def usage_report(
         self,
         interaction: discord.Interaction,
@@ -31,10 +31,28 @@ class UsageAnalytics(commands.Cog):
     ) -> None:
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("❌ Cette commande doit être utilisée dans le serveur scolaire.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Cette commande doit être utilisée dans le serveur scolaire.",
+                ephemeral=True,
+            )
             return
 
+        # Acknowledge Discord before any synchronous permission/config/database reads.
+        # Slash-command interactions must be acknowledged within Discord's short deadline.
         await interaction.response.defer(ephemeral=True, thinking=True)
+
+        if not management_authorized(interaction):
+            await interaction.followup.send(
+                "❌ Outil réservé au propriétaire du serveur ou au rôle Administration configuré.",
+                ephemeral=True,
+            )
+            return
+
+        pending_message = _pending_removal_message(guild, "usagereport")
+        if pending_message:
+            await interaction.followup.send(pending_message, ephemeral=True)
+            return
+
         try:
             report_path, summary = export_usage_report(guild.id, int(days))
         except (OSError, sqlite3.Error, ValueError):
@@ -50,12 +68,12 @@ class UsageAnalytics(commands.Cog):
             "métier de chaque opération. Le rapport ne contient pas d'identifiants ni de noms d'utilisateurs."
         )
         content = (
-            f"**Rapport d'utilisation — {days} jour(s)**\n"
-            f"Période UTC : `{summary['start_at']:%Y-%m-%d}` → `{summary['end_at']:%Y-%m-%d}`\n"
-            f"Invocations terminées sans exception non gérée : **{summary['completed']}**\n"
-            f"Invocations ayant levé une erreur d'application : **{summary['raised_errors']}**\n"
-            f"Total des commandes : **{summary['total']}**\n"
-            f"Actions auditées enregistrées : **{summary['audited_actions']}**\n\n"
+            f"**Rapport d'utilisation — {days} jour(s)**\\n"
+            f"Période UTC : `{summary['start_at']:%Y-%m-%d}` → `{summary['end_at']:%Y-%m-%d}`\\n"
+            f"Invocations terminées sans exception non gérée : **{summary['completed']}**\\n"
+            f"Invocations ayant levé une erreur d'application : **{summary['raised_errors']}**\\n"
+            f"Total des commandes : **{summary['total']}**\\n"
+            f"Actions auditées enregistrées : **{summary['audited_actions']}**\\n\\n"
             f"_{note}_"
         )
         await interaction.followup.send(
