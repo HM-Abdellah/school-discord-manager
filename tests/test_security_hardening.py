@@ -4,7 +4,7 @@ import pytest
 
 from cogs.removestream_fix import _recorded_id, _stream_channel_names, _stream_role_names
 from cogs.server_v3 import _valid_academic_year
-from services.role_conflicts import student_staff_conflict, teacher_target_conflict
+from services.role_conflicts import student_staff_conflict, student_transfer_conflict, teacher_target_conflict
 
 
 def test_stream_destructive_scope_builds_only_canonical_managed_names(monkeypatch):
@@ -138,6 +138,27 @@ def test_teacher_commands_enforce_shared_teacher_target_conflict_gate():
 def test_student_assignment_enforces_shared_student_staff_conflict_gate():
     source = open("cogs/students.py", encoding="utf-8").read()
     assert "student_staff_conflict(student, guild)" in source
+
+
+def test_class_transfer_requires_target_to_keep_student_role(monkeypatch):
+    student = _role("Élève", 12)
+    monkeypatch.setattr(
+        "services.role_conflicts.get_managed_role",
+        lambda _guild, name: student if name == "Élève" else None,
+    )
+    guild = SimpleNamespace(roles=[student])
+    member = SimpleNamespace(bot=False, roles=[])
+
+    assert student_transfer_conflict(member, guild) is not None
+
+    member.roles = [student]
+    assert student_transfer_conflict(member, guild) is None
+
+
+def test_class_transfer_confirmation_uses_current_student_role_guard():
+    source = open("cogs/qr_onboarding.py", encoding="utf-8").read()
+    confirmation = source[source.index("class ClassTransferConfirmationView"):]
+    assert "student_transfer_conflict(member, guild)" in confirmation
 
 
 class FakeComparableRole:
