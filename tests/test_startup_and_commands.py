@@ -35,6 +35,7 @@ EXPECTED_RUNTIME_OWNERS = {
     "revokeclassqr": "cogs.qr_onboarding",
     "listclassqr": "cogs.qr_onboarding",
     "createteacherqr": "cogs.teacher_qr_onboarding",
+    "createadminqr": "cogs.teacher_qr_onboarding",
     "revoketeacherqr": "cogs.teacher_qr_onboarding",
     "listteacherqr": "cogs.teacher_qr_onboarding",
 }
