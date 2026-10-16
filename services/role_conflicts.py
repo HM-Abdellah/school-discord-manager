@@ -36,6 +36,20 @@ def student_staff_conflict(member: discord.Member, guild: discord.Guild) -> str 
     return None
 
 
+def student_transfer_conflict(member: discord.Member, guild: discord.Guild) -> str | None:
+    """Reject a pending class transfer if the target is no longer an enrolled student."""
+    conflict = student_staff_conflict(member, guild)
+    if conflict:
+        return conflict
+
+    student_role = get_managed_role(guild, ROLE_STUDENT)
+    if student_role is None:
+        return "❌ Le rôle géré **Élève** est introuvable. Contactez l'administration."
+    if student_role not in member.roles:
+        return "❌ Ce compte ne possède plus le rôle **Élève**. Le transfert QR a été refusé; contactez l'administration."
+    return None
+
+
 def teacher_target_conflict(member: discord.Member, guild: discord.Guild) -> str | None:
     """Return a user-facing conflict when student/admin/bot state blocks teacher assignment."""
     if member.bot:

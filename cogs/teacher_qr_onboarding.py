@@ -21,7 +21,7 @@ from config.curriculum import (
 from services.audit import record_event
 from services.discord_registry import resolve_registered_text_channel
 from services.build_guard import get_build_lock
-from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_TEACHER_PENDING, get_managed_role, management_check
+from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_TEACHER_PENDING, get_managed_role, management_check, owner_only_check
 from services.teacher_assignment import TeacherAssignmentError, execute_teacher_assignment
 from services.qr_invites import DEFAULT_QR_MAX_AGE, create_role_invite, delete_invite, qr_file
 from services.role_conflicts import teacher_target_conflict
@@ -537,6 +537,94 @@ async def _send_teacher_onboarding_prompt(
 class TeacherQROnboarding(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+
+    @app_commands.command(
+        name="createadminqr",
+        description="Créer un QR d'invitation à usage unique pour le directeur.",
+    )
+    @owner_only_check(lock=False)
+    async def create_admin_qr(self, interaction: discord.Interaction) -> None:
+        """Create a short-lived one-use invite that grants the configured Administration role."""
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
+
+        bot_member = guild.me
+        if bot_member is None or not bot_member.guild_permissions.create_instant_invite:
+            await interaction.response.send_message(
+                "❌ Le bot doit avoir la permission **Create Instant Invite**.",
+                ephemeral=True,
+            )
+            return
+        if not bot_member.guild_permissions.manage_roles:
+            await interaction.response.send_message(
+                "❌ Le bot doit avoir la permission **Manage Roles** pour l'invitation avec rôle.",
+                ephemeral=True,
+            )
+            return
+
+        admin_role = get_managed_role(guild, ROLE_ADMIN)
+        if admin_role is None or admin_role.managed or admin_role.is_default():
+            await interaction.response.send_message(
+                "❌ Le rôle Administration géré par School Manager est introuvable. Lance /setup puis /build avant de créer ce QR.",
+                ephemeral=True,
+            )
+            return
+        if admin_role >= bot_member.top_role:
+            await interaction.response.send_message(
+                "❌ Le rôle du bot doit être placé au-dessus du rôle Administration dans la hiérarchie Discord.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        config = get_guild_config(guild.id) or {}
+        try:
+            channel = await resolve_registered_text_channel(
+                guild,
+                config,
+                channel_name=GENERAL_CHANNELS["actualites"],
+                category_name="🏢・INFORMATIONS & ADMINISTRATION",
+            )
+            if channel is None:
+                raise RuntimeError("Le salon d'actualités institutionnelles est introuvable dans le registre.")
+
+            # One use limits exposure; two hours allows time to travel to the school and present it.
+            max_age = 2 * 60 * 60
+            invite_url = await create_role_invite(
+                self.bot,
+                channel,
+                (admin_role,),
+                max_age=max_age,
+                max_uses=1,
+                reason="School Manager one-time Administration invite for school director",
+            )
+            qr = qr_file(invite_url, "school-manager-administration.png")
+        except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError, ValueError) as exc:
+            await interaction.followup.send(
+                "❌ QR Administration non créé : " + type(exc).__name__ + ": " + str(exc),
+                ephemeral=True,
+            )
+            return
+
+        record_event(
+            guild.id,
+            interaction.user.id,
+            interaction.user.display_name,
+            "createadminqr",
+            "administration-onboarding",
+            "expires=7200s;max_uses=1",
+        )
+        await interaction.followup.send(
+            "## ✅ QR Administration prêt\n\n"
+            "Le lien attribue automatiquement le rôle `Administration` quand une personne rejoint le serveur.\n"
+            "**Expiration : 2 heures · Utilisation : une seule fois.**\n\n"
+            "⚠️ Le QR est un lien secret : montre-le uniquement au directeur. La première personne qui l'utilise recevra le rôle Administration.\n\n"
+            f"Lien de secours : {invite_url}",
+            file=qr,
+            ephemeral=True,
+        )
 
     @app_commands.command(name="createteacherqr", description="Créer un QR temporaire d'inscription professeur.")
     @app_commands.describe(max_uses="Nombre de professeurs autorisés à utiliser le QR (1 à 42)")

@@ -224,6 +224,34 @@ def initialize_database() -> None:
         CREATE TABLE IF NOT EXISTS teacher_registrations (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, discord_id INTEGER NOT NULL, full_name TEXT NOT NULL, profile_type TEXT NOT NULL CHECK(profile_type IN ('male','female')), level_name TEXT NOT NULL, stream_name TEXT NOT NULL, subjects_text TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(guild_id, discord_id));
         CREATE UNIQUE INDEX IF NOT EXISTS uq_one_active_teacher_qr_per_guild ON teacher_qr_invites(guild_id) WHERE revoked_at IS NULL;
         """)
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS class_transfer_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            student_discord_id INTEGER NOT NULL,
+            created_by INTEGER NOT NULL,
+            academic_year_id INTEGER NOT NULL,
+            level_name TEXT NOT NULL,
+            stream_name TEXT NOT NULL,
+            stream_code TEXT NOT NULL,
+            section INTEGER NOT NULL CHECK(section BETWEEN 1 AND 8),
+            class_key TEXT NOT NULL,
+            class_role_id INTEGER NOT NULL,
+            student_stream_role_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK(status IN ('pending','completed','cancelled','expired')),
+            dm_channel_id INTEGER,
+            dm_message_id INTEGER,
+            completed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_class_transfer_pending
+            ON class_transfer_requests(guild_id, status, expires_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_one_pending_transfer_per_student
+            ON class_transfer_requests(guild_id, student_discord_id)
+            WHERE status='pending';
+        """)
         _migrate_legacy_enrollments(conn)
         _migrate_enrollment_sections(conn)
         _deduplicate_active_enrollments(conn)
@@ -572,6 +600,250 @@ def mark_class_qr_invite_revoked(guild_id: int, invite_code: str) -> None:
             (datetime.now(timezone.utc).isoformat(), guild_id, invite_code),
         )
         conn.commit()
+
+
+def create_class_transfer_request(
+    guild_id: int,
+    student_discord_id: int,
+    created_by: int,
+    academic_year_id: int,
+    level_name: str,
+    stream_name: str,
+    stream_code: str,
+    section: int,
+    class_key: str,
+    class_role_id: int,
+    student_stream_role_id: int,
+    created_at: str,
+    expires_at: str,
+) -> int:
+    """Persist a one-student class-transfer request before sending its DM."""
+    section = int(section)
+    if not 1 <= section <= 8:
+        raise ValueError("Section must be between 1 and 8.")
+    if int(student_discord_id) <= 0 or int(class_role_id) <= 0 or int(student_stream_role_id) <= 0:
+        raise ValueError("Invalid Discord identity or target role.")
+    initialize_database()
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO class_transfer_requests(
+                guild_id, student_discord_id, created_by, academic_year_id,
+                level_name, stream_name, stream_code, section, class_key,
+                class_role_id, student_stream_role_id, created_at, expires_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                int(guild_id), int(student_discord_id), int(created_by),
+                int(academic_year_id), level_name, stream_name, stream_code,
+                section, class_key, int(class_role_id), int(student_stream_role_id),
+                created_at, expires_at,
+            ),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+
+
+def get_class_transfer_request(request_id: int) -> sqlite3.Row | None:
+    initialize_database()
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT * FROM class_transfer_requests WHERE id=? LIMIT 1",
+            (int(request_id),),
+        ).fetchone()
+
+
+def set_class_transfer_message(request_id: int, channel_id: int, message_id: int) -> None:
+    initialize_database()
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE class_transfer_requests
+            SET dm_channel_id=?, dm_message_id=?
+            WHERE id=? AND status='pending'
+            """,
+            (int(channel_id), int(message_id), int(request_id)),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("Class-transfer request is no longer pending.")
+        conn.commit()
+
+
+def cancel_class_transfer_request(request_id: int, *, expired: bool = False) -> bool:
+    """Cancel a pending transfer, optionally marking it expired."""
+    initialize_database()
+    target_status = "expired" if expired else "cancelled"
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE class_transfer_requests SET status=?
+            WHERE id=? AND status='pending'
+            """,
+            (target_status, int(request_id)),
+        )
+        conn.commit()
+        return cursor.rowcount == 1
+
+
+def expire_class_transfer_requests(now: str) -> None:
+    """Expire time-limited requests without touching requests being created concurrently."""
+    initialize_database()
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE class_transfer_requests SET status='expired'
+            WHERE status='pending' AND expires_at<=?
+            """,
+            (now,),
+        )
+        conn.commit()
+
+
+def cleanup_class_transfer_requests(now: str) -> None:
+    """Expire old requests and close orphaned requests after an interrupted startup."""
+    expire_class_transfer_requests(now)
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE class_transfer_requests SET status='cancelled'
+            WHERE status='pending' AND (dm_channel_id IS NULL OR dm_message_id IS NULL)
+            """
+        )
+        conn.commit()
+
+
+def list_pending_class_transfer_requests(now: str) -> list[sqlite3.Row]:
+    initialize_database()
+    with _connect() as conn:
+        return conn.execute(
+            """
+            SELECT * FROM class_transfer_requests
+            WHERE status='pending' AND expires_at>?
+              AND dm_channel_id IS NOT NULL AND dm_message_id IS NOT NULL
+            ORDER BY id
+            """,
+            (now,),
+        ).fetchall()
+
+
+def complete_class_transfer_request(
+    request_id: int,
+    guild_id: int,
+    student_discord_id: int,
+    display_name: str,
+    completed_at: str,
+) -> int:
+    """Atomically record the new enrollment and consume the transfer request."""
+    initialize_database()
+    expired = False
+    student_id = 0
+    with _connect() as conn:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            request = conn.execute(
+                "SELECT * FROM class_transfer_requests WHERE id=?",
+                (int(request_id),),
+            ).fetchone()
+            if request is None:
+                raise ValueError("Class-transfer request does not exist.")
+            if int(request["guild_id"]) != int(guild_id) or int(request["student_discord_id"]) != int(student_discord_id):
+                raise PermissionError("Class-transfer request identity mismatch.")
+            if request["status"] != "pending":
+                raise ValueError("This class-transfer request is no longer pending.")
+            if str(request["expires_at"]) <= completed_at:
+                conn.execute(
+                    "UPDATE class_transfer_requests SET status='expired' WHERE id=? AND status='pending'",
+                    (int(request_id),),
+                )
+                conn.commit()
+                expired = True
+            else:
+                stream = conn.execute(
+                    """
+                    SELECT id FROM streams
+                    WHERE guild_id=? AND academic_year_id=? AND level_name=? AND stream_name=?
+                    LIMIT 1
+                    """,
+                    (
+                        int(guild_id), int(request["academic_year_id"]),
+                        str(request["level_name"]), str(request["stream_name"]),
+                    ),
+                ).fetchone()
+                if stream is None:
+                    raise ValueError("Target stream is not configured for the requested academic year.")
+
+                student = conn.execute(
+                    "SELECT id FROM students WHERE guild_id=? AND discord_id=? LIMIT 1",
+                    (int(guild_id), int(student_discord_id)),
+                ).fetchone()
+                today = date.today().isoformat()
+                if student is None:
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO students(guild_id,discord_id,display_name,created_at,status)
+                        VALUES(?,?,?,?, 'active')
+                        """,
+                        (int(guild_id), int(student_discord_id), display_name, today),
+                    )
+                    student_id = int(cursor.lastrowid)
+                else:
+                    student_id = int(student["id"])
+                    conn.execute(
+                        "UPDATE students SET display_name=?, status='active' WHERE id=? AND guild_id=?",
+                        (display_name, student_id, int(guild_id)),
+                    )
+
+                current = conn.execute(
+                    """
+                    SELECT stream_id, section FROM enrollments
+                    WHERE student_id=? AND status='active'
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (student_id,),
+                ).fetchone()
+                target_stream_id = int(stream["id"])
+                target_section = int(request["section"])
+                if not (
+                    current is not None
+                    and int(current["stream_id"]) == target_stream_id
+                    and current["section"] is not None
+                    and int(current["section"]) == target_section
+                ):
+                    conn.execute(
+                        """
+                        UPDATE enrollments SET end_date=?, status='transferred'
+                        WHERE student_id=? AND status='active'
+                        """,
+                        (today, student_id),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO enrollments(student_id,stream_id,section,start_date,status)
+                        VALUES(?,?,?,?, 'active')
+                        """,
+                        (student_id, target_stream_id, target_section, today),
+                    )
+
+                cursor = conn.execute(
+                    """
+                    UPDATE class_transfer_requests
+                    SET status='completed', completed_at=?
+                    WHERE id=? AND status='pending'
+                    """,
+                    (completed_at, int(request_id)),
+                )
+                if cursor.rowcount != 1:
+                    raise ValueError("Class-transfer request was already consumed.")
+                conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+
+    if expired:
+        raise ValueError("This class-transfer request has expired.")
+    _refresh_json_cache()
+    return student_id
 
 
 def record_teacher_qr_invite(
