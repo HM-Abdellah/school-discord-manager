@@ -157,7 +157,7 @@ The runtime has one application-command owner per critical command. Shared logic
 
 ## 🧪 Tests and CI
 
-GitHub Actions runs the Python test suite on Python 3.12 and 3.13. The CI job also builds the Docker image and runs a smoke test against the resulting runtime image.
+GitHub Actions tests the suite on Python 3.12, exact Python 3.13.2, the latest available Python 3.13 patch release, and Python 3.14. Docker image build, runtime smoke testing, and Docker Compose validation run once per workflow. The Docker image follows the maintained `python:3.13-slim` line.
 
 The test suite covers command registration, permissions, role conflicts, managed-resource ownership, transactional build rollback, persistence recovery, enrollment idempotency, destructive boundaries, section handling, failure recovery, and concurrency semantics.
 
@@ -293,7 +293,7 @@ The authoritative runtime state is the SQLite database in `data/school.db`. In D
 
 A release is considered operationally accepted only when all of the following are true:
 
-- GitHub CI is green on Python 3.12 and 3.13, including Docker build and runtime smoke tests.
+- GitHub CI must be green on Python 3.12, 3.13.2, the current 3.13 patch release, and 3.14, including Docker build and runtime smoke tests.
 - The Phase 3 live E2E matrices have been executed against a dedicated Discord test guild using the documented two-account model.
 - The final operational regression pass has been completed after E2E, including restart/recovery and the destructive-resource boundaries.
 - The production `.env` contains the real secret only on the deployment host and is not committed to Git.

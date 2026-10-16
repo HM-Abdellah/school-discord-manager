@@ -10,7 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.12", "3.13"]
+        # Cover the existing Python 3.12 baseline, the exact 3.13.2 target,
+        # the newest patch in the 3.13 line, and the newer 3.14 minor line.
+        python-version: ["3.12", "3.13.2", "3.13", "3.14"]
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -28,14 +30,17 @@ jobs:
         run: python -m pytest -q
 
       - name: Build Docker image
+        if: matrix.python-version == '3.14'
         run: docker build --tag school-discord-manager:test .
 
       - name: Smoke-test Docker runtime
+        if: matrix.python-version == '3.14'
         run: |
           test "$(docker inspect school-discord-manager:test --format '{{.Config.User}}')" = "app"
           docker run --rm --entrypoint python school-discord-manager:test -c "import discord, dotenv; print(discord.__version__)"
 
       - name: Validate Docker Compose
+        if: matrix.python-version == '3.14'
         run: |
           cp .env.example .env
           docker compose config

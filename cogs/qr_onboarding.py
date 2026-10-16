@@ -24,7 +24,7 @@ from services.permissions import (
     get_managed_role,
     management_check,
 )
-from services.role_conflicts import student_staff_conflict
+from services.role_conflicts import student_staff_conflict, student_transfer_conflict
 from services.qr_invites import (
     DEFAULT_QR_MAX_AGE,
     DEFAULT_QR_MAX_USES,
@@ -1118,14 +1118,16 @@ class ClassTransferConfirmationView(discord.ui.View):
                 return
 
             try:
-                member = guild.get_member(interaction.user.id) or await guild.fetch_member(interaction.user.id)
+                # Role assignments may change while a QR is pending. Use fresh Discord state,
+                # not a potentially stale guild cache, for the transfer eligibility check.
+                member = await guild.fetch_member(interaction.user.id)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 cancel_class_transfer_request(self.request_id)
                 await self._followup(interaction, "❌ ما لقيناش حسابك فالسيرفر. تواصل مع الإدارة.")
                 await self._disable_message(interaction, "❌ الطلب ما بقاش صالح.")
                 return
 
-            conflict = student_staff_conflict(member, guild)
+            conflict = student_transfer_conflict(member, guild)
             if conflict:
                 cancel_class_transfer_request(self.request_id)
                 await self._followup(interaction, conflict)
