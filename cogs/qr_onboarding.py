@@ -1118,7 +1118,9 @@ class ClassTransferConfirmationView(discord.ui.View):
                 return
 
             try:
-                member = guild.get_member(interaction.user.id) or await guild.fetch_member(interaction.user.id)
+                # Role assignments may change while a QR is pending. Use fresh Discord state,
+                # not a potentially stale guild cache, for the transfer eligibility check.
+                member = await guild.fetch_member(interaction.user.id)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 cancel_class_transfer_request(self.request_id)
                 await self._followup(interaction, "❌ ما لقيناش حسابك فالسيرفر. تواصل مع الإدارة.")

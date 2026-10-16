@@ -237,3 +237,119 @@ def test_cancelled_transfer_cannot_be_completed(transfer_store):
             "Student A",
             datetime.now(timezone.utc).isoformat(),
         )
+
+
+class _AsyncLock:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_transfer_confirmation_does_not_restore_removed_student_role(monkeypatch):
+    import cogs.qr_onboarding as qr_module
+    import services.role_conflicts as role_conflicts
+    from services.permissions import ROLE_STUDENT, STUDENT_STREAM_ROLE_PREFIX
+
+    student_role = SimpleNamespace(id=10, name=ROLE_STUDENT, managed=False)
+    stream_role = SimpleNamespace(
+        id=20, name=STUDENT_STREAM_ROLE_PREFIX + "2BACSPF", managed=False
+    )
+    class_role = SimpleNamespace(
+        id=30, name=STUDENT_STREAM_ROLE_PREFIX + "2BACSPF-5", managed=False
+    )
+    request = {
+        "id": 9,
+        "guild_id": 101,
+        "student_discord_id": 202,
+        "status": "pending",
+        "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=20)).isoformat(),
+        "academic_year_id": 1,
+        "class_key": "2BACSPF-5",
+        "class_role_id": 30,
+        "stream_code": "2BACSPF",
+        "section": 5,
+        "level_name": "2BAC",
+        "stream_name": "Sciences Physiques",
+        "student_stream_role_id": 20,
+    }
+    member = SimpleNamespace(
+        id=202,
+        display_name="Student A",
+        # Fresh Discord state: the student role was deliberately removed after QR creation.
+        roles=[stream_role],
+        add_roles=AsyncMock(),
+        remove_roles=AsyncMock(),
+    )
+    cached_member = SimpleNamespace(
+        id=202,
+        display_name="Student A",
+        # Simulate a stale cache that still reports the removed student role.
+        roles=[student_role, stream_role],
+        add_roles=AsyncMock(),
+        remove_roles=AsyncMock(),
+    )
+    roles_by_id = {10: student_role, 20: stream_role, 30: class_role}
+    guild = SimpleNamespace(
+        id=101,
+        roles=[student_role, stream_role, class_role],
+        get_role=lambda role_id: roles_by_id.get(role_id),
+        get_member=lambda member_id: cached_member if member_id == cached_member.id else None,
+        fetch_member=AsyncMock(return_value=member),
+    )
+    bot = SimpleNamespace(get_guild=lambda guild_id: guild if guild_id == 101 else None)
+    config = {
+        "class_roles": {
+            "2BACSPF-5": {
+                "role_id": 30,
+                "level_name": "2BAC",
+                "stream_name": "Sciences Physiques",
+                "stream_code": "2BACSPF",
+                "section": 5,
+            }
+        },
+        "managed": {"roles": {}},
+    }
+    cancel = Mock(return_value=True)
+    monkeypatch.setattr(qr_module, "get_class_transfer_request", Mock(return_value=request))
+    monkeypatch.setattr(qr_module, "cancel_class_transfer_request", cancel)
+    monkeypatch.setattr(qr_module, "complete_class_transfer_request", Mock(return_value=1))
+    monkeypatch.setattr(qr_module, "record_event", Mock())
+    monkeypatch.setattr(qr_module, "get_build_lock", lambda _guild_id: _AsyncLock())
+    monkeypatch.setattr(qr_module, "get_active_academic_year", lambda _guild_id: {"id": 1})
+    monkeypatch.setattr(role_conflicts, "student_staff_conflict", lambda _member, _guild: None)
+    monkeypatch.setattr(
+        role_conflicts,
+        "get_managed_role",
+        lambda _guild, name: student_role if name == ROLE_STUDENT else None,
+    )
+    monkeypatch.setattr(qr_module, "get_guild_config", lambda _guild_id: config)
+    monkeypatch.setattr(
+        qr_module,
+        "get_managed_role",
+        lambda _guild, name: {
+            ROLE_STUDENT: student_role,
+            STUDENT_STREAM_ROLE_PREFIX + "2BACSPF": stream_role,
+        }.get(name),
+    )
+
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=202),
+        response=SimpleNamespace(defer=AsyncMock()),
+        followup=SimpleNamespace(send=AsyncMock()),
+        message=SimpleNamespace(edit=AsyncMock()),
+    )
+    view = ClassTransferConfirmationView(bot, 9)
+
+    await view.children[0].callback(interaction)
+
+    guild.fetch_member.assert_awaited_once_with(202)
+    cancel.assert_called_once_with(9)
+    member.add_roles.assert_not_awaited()
+    member.remove_roles.assert_not_awaited()
+    cached_member.add_roles.assert_not_awaited()
+    cached_member.remove_roles.assert_not_awaited()
+    assert "Élève" in interaction.followup.send.await_args.args[0]
+    interaction.message.edit.assert_awaited_once()
