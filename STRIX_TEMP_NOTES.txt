@@ -1,0 +1,45 @@
+Temporary Strix Security Review Notes
+=====================================
+
+Project: school-discord-manager
+Purpose: Temporary notes to help configure a source-code security review in Strix.
+This file is intended to be removed from the repository after the review setup is complete.
+
+Discord bot permission checklist (review against actual code before finalizing):
+- View Channels
+- Send Messages
+- Embed Links
+- Attach Files
+- Read Message History
+- Use Application Commands
+- Manage Roles (only where required for role assignment; bot's top role must be above managed roles)
+- Create Instant Invite (only where invite/QR workflows require it)
+- Manage Channels (only if setup/build commands create or modify channels)
+- Manage Messages (only if implemented features require message moderation/deletion)
+
+Do NOT grant Administrator by default. Use the least-privilege set required by the implemented features.
+Discord permissions are separate from Strix's own repository access and scan configuration.
+
+Security review priorities:
+- Authorization and privilege escalation in slash commands, especially owner/admin-only commands.
+- Teacher onboarding, approval/rejection, activation, onboarding codes, and audit events.
+- QR and invite flows: expiration, one-time use, replay, leakage, concurrent redemption, and unauthorized role assignment.
+- Discord role hierarchy and bot permissions.
+- SQLite access, SQL injection, transactions, migrations, and data integrity.
+- Secrets handling (.env, Discord token, credentials, logs); never print or expose secrets.
+- Input validation, interaction handling/timeouts, rate limits, denial-of-service, and dependency vulnerabilities.
+- Sensitive teacher/student/school data exposure.
+
+Focus areas:
+- Trace each sensitive command from its entry point through authorization, service logic, and database writes.
+- Verify server-side authorization; do not rely on UI visibility or command registration alone.
+- Review shared permission helpers and every code path that can assign privileged roles.
+- Test negative cases, expired/invalid codes, duplicate redemption, and concurrency where safely testable.
+
+Testing constraints:
+- Start with source-code review, not a live penetration test.
+- Restrict testing to this repository and explicitly authorized test environments.
+- Do not attack a live Discord server, contact real users, modify production data, or perform destructive actions without separate explicit authorization.
+- Do not include real tokens, credentials, or other secrets in prompts or reports.
+- For each finding, report severity, affected file/line, evidence, attacker prerequisites, realistic impact, a minimal fix, and a regression test.
+- Distinguish confirmed exploitable vulnerabilities from theoretical risks and false positives.
