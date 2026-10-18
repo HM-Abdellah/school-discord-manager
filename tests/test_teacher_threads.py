@@ -24,13 +24,13 @@ def _row(assignment_id=1, section=3, subject="Mathématiques", thread_id=None, s
     }
 
 
-def _channel(active=(), archive_error=None):
+def _channel(active=(), archived=(), archive_error=None):
     async def archived_threads(limit=None):
         assert limit is None
         if archive_error is not None:
             raise archive_error
-        if False:
-            yield None
+        for thread in archived:
+            yield thread
 
     return SimpleNamespace(
         id=500,
@@ -96,6 +96,45 @@ async def test_ensure_teacher_threads_reuses_exact_existing_thread(monkeypatch):
     assert result["existing"] == 1
     channel.create_thread.assert_not_awaited()
     assert updates[0] == {"status": "created", "thread_id": 9001, "error": None}
+
+
+@pytest.mark.asyncio
+async def test_ensure_teacher_threads_reactivates_matching_archived_thread(monkeypatch):
+    archived = SimpleNamespace(
+        id=9011,
+        name="Prof Test • 3",
+        type=discord.ChannelType.public_thread,
+        archived=True,
+        locked=True,
+        edit=AsyncMock(),
+    )
+    channel = _channel(archived=[archived])
+    updates = []
+
+    async def resolve(*_args, **_kwargs):
+        return channel
+
+    monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: [_row()])
+    monkeypatch.setattr(teacher_threads, "get_guild_config", lambda *_args: {})
+    monkeypatch.setattr(teacher_threads, "resolve_registered_text_channel", resolve)
+    monkeypatch.setattr(
+        teacher_threads,
+        "update_teacher_assignment_thread",
+        lambda guild_id, assignment_id, **kwargs: updates.append(kwargs),
+    )
+
+    result = await teacher_threads.ensure_teacher_threads(SimpleNamespace(id=1), 101)
+
+    assert result["created"] == 0
+    assert result["existing"] == 1
+    assert result["failed"] == 0
+    archived.edit.assert_awaited_once_with(
+        archived=False,
+        locked=False,
+        reason="School Manager: restore current teacher assignment thread",
+    )
+    channel.create_thread.assert_not_awaited()
+    assert updates[0] == {"status": "created", "thread_id": 9011, "error": None}
 
 
 @pytest.mark.asyncio

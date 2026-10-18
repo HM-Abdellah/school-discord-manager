@@ -1,6 +1,6 @@
 import sqlite3
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import discord
 
@@ -45,6 +45,113 @@ def test_teacher_registration_is_one_time(tmp_path, monkeypatch):
             "2BACPC",
             "Mathématiques",
         )
+
+
+def test_delete_teacher_registration_removes_assignments_and_allows_fresh_registration(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
+    storage.initialize_database()
+    storage.record_teacher_registration(1, 101, "Prof A", "male", "2ème Année Bac", "2ème Année Bac Sciences Physiques", "Mathématiques")
+    storage.record_teacher_assignments(1, 101, [{
+        "level": "2ème Année Bac",
+        "stream": "2ème Année Bac Sciences Physiques",
+        "section": 3,
+        "subjects": ["Mathématiques"],
+    }])
+    row = storage.get_teacher_assignments(1, 101)[0]
+    storage.update_teacher_assignment_thread(1, row["id"], status="created", thread_id=9001)
+
+    storage.delete_teacher_registration(1, 101)
+
+    assert storage.get_teacher_registration(1, 101) is None
+    assert storage.get_teacher_assignments(1, 101) == []
+    storage.record_teacher_registration(1, 101, "Prof A", "female", "1ère Année Bac", "1ère Année Bac Sciences Expérimentales", "Sciences de la Vie et de la Terre (SVT)")
+    storage.record_teacher_assignments(1, 101, [{
+        "level": "1ère Année Bac",
+        "stream": "1ère Année Bac Sciences Expérimentales",
+        "section": 2,
+        "subjects": ["Sciences de la Vie et de la Terre (SVT)"],
+    }])
+    fresh = storage.get_teacher_registration(1, 101)
+    assert fresh is not None
+    assert fresh["profile_type"] == "female"
+    assert fresh["level_name"] == "1ère Année Bac"
+    assert [row["subject_name"] for row in storage.get_teacher_assignments(1, 101)] == ["Sciences de la Vie et de la Terre (SVT)"]
+
+
+@pytest.mark.asyncio
+async def test_member_remove_clears_teacher_data_and_archives_linked_threads(monkeypatch):
+    from cogs.teacher_qr_onboarding import TeacherQROnboarding
+
+    thread = SimpleNamespace(
+        id=9001,
+        type=discord.ChannelType.public_thread,
+        archived=False,
+        locked=False,
+        edit=AsyncMock(),
+    )
+    guild = SimpleNamespace(
+        id=1,
+        get_thread=lambda thread_id: thread if thread_id == thread.id else None,
+    )
+    member = SimpleNamespace(bot=False, id=101, display_name="Prof A", guild=guild)
+    registration = {"discord_id": 101, "full_name": "Prof A"}
+    assignments = [{"id": 5, "thread_id": 9001}]
+    delete_registration = Mock()
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda *_args: registration)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_assignments", lambda *_args: assignments)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.delete_teacher_registration", delete_registration)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.record_event", lambda *_args, **_kwargs: None)
+
+    await TeacherQROnboarding(SimpleNamespace(get_channel=lambda _id: None)).on_member_remove(member)
+
+    delete_registration.assert_called_once_with(1, 101)
+    thread.edit.assert_awaited_once_with(
+        archived=True,
+        locked=True,
+        reason="School Manager: archive teacher assignment after leaving the server",
+    )
+
+
+@pytest.mark.asyncio
+async def test_member_remove_still_clears_teacher_data_when_thread_archiving_fails(monkeypatch):
+    from cogs.teacher_qr_onboarding import TeacherQROnboarding
+
+    response = SimpleNamespace(status=403, reason="Forbidden")
+    thread = SimpleNamespace(
+        id=9001, type=discord.ChannelType.public_thread, archived=False, locked=False,
+        edit=AsyncMock(side_effect=discord.Forbidden(response, "Missing Manage Threads")),
+    )
+    guild = SimpleNamespace(id=1, get_thread=lambda _thread_id: thread)
+    member = SimpleNamespace(bot=False, id=101, display_name="Prof A", guild=guild)
+    delete_registration = Mock()
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda *_args: {"discord_id": 101})
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_assignments", lambda *_args: [{"thread_id": 9001}])
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.delete_teacher_registration", delete_registration)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.record_event", lambda *_args, **_kwargs: None)
+
+    await TeacherQROnboarding(SimpleNamespace()).on_member_remove(member)
+
+    delete_registration.assert_called_once_with(1, 101)
+
+
+@pytest.mark.asyncio
+async def test_member_remove_keeps_members_without_teacher_registration_untouched(monkeypatch):
+    from cogs.teacher_qr_onboarding import TeacherQROnboarding
+
+    member = SimpleNamespace(bot=False, id=101, display_name="Student", guild=SimpleNamespace(id=1))
+    delete_registration = Mock()
+    assignments = Mock()
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda *_args: None)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_assignments", assignments)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.delete_teacher_registration", delete_registration)
+
+    await TeacherQROnboarding(SimpleNamespace()).on_member_remove(member)
+
+    assignments.assert_not_called()
+    delete_registration.assert_not_called()
 
 
 def test_only_one_active_teacher_qr_exists_per_guild(tmp_path, monkeypatch):
@@ -117,6 +224,8 @@ async def test_teacher_qr_join_restores_registered_member_access_and_removes_pen
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_assignments", lambda _guild_id, _discord_id: [assignment])
     monkeypatch.setattr("cogs.teacher_qr_onboarding.teacher_target_conflict", lambda _member, _guild: None)
     monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", execute)
+    sync_threads = AsyncMock(return_value="✅ Threads professeur prêts : 1 (nouveaux : 1, existants : 0).")
+    monkeypatch.setattr("cogs.teacher_qr_onboarding._sync_registered_teacher_threads", sync_threads)
 
     await TeacherQROnboarding(SimpleNamespace()).on_member_join(member)
 
@@ -136,6 +245,7 @@ async def test_teacher_qr_join_restores_registered_member_access_and_removes_pen
     )
     member.send.assert_awaited_once()
     assert "rétablis automatiquement" in member.send.await_args.args[0]
+    sync_threads.assert_awaited_once_with(guild, member.id)
 
 
 @pytest.mark.asyncio
@@ -167,6 +277,8 @@ async def test_teacher_qr_join_restores_registered_member_without_pending_role(m
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_assignments", lambda _guild_id, _discord_id: [])
     monkeypatch.setattr("cogs.teacher_qr_onboarding.teacher_target_conflict", lambda _member, _guild: None)
     monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", execute)
+    sync_threads = AsyncMock(return_value="✅ Threads professeur prêts : 1 (nouveaux : 1, existants : 0).")
+    monkeypatch.setattr("cogs.teacher_qr_onboarding._sync_registered_teacher_threads", sync_threads)
 
     await TeacherQROnboarding(SimpleNamespace()).on_member_join(member)
 
@@ -175,6 +287,7 @@ async def test_teacher_qr_join_restores_registered_member_without_pending_role(m
     member.remove_roles.assert_not_awaited()
     member.send.assert_awaited_once()
     assert "rétablis automatiquement" in member.send.await_args.args[0]
+    sync_threads.assert_awaited_once_with(guild, member.id)
 
 
 @pytest.mark.asyncio
@@ -515,15 +628,19 @@ async def test_start_teacher_registration_restores_existing_registration_without
     restore = AsyncMock(return_value=(True, "Les rôles professeur ont été rétablis."))
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda _guild_id, _discord_id: registration)
     monkeypatch.setattr("cogs.teacher_qr_onboarding._restore_registered_teacher_access", restore)
+    sync_threads = AsyncMock(return_value="✅ Threads professeur prêts : 1 (nouveaux : 1, existants : 0).")
+    monkeypatch.setattr("cogs.teacher_qr_onboarding._sync_registered_teacher_threads", sync_threads)
     monkeypatch.setattr("cogs.teacher_qr_onboarding.record_event", lambda *_args, **_kwargs: None)
 
     cog = TeacherQROnboarding(SimpleNamespace())
     await cog.start_teacher_registration.callback(cog, interaction, teacher)
 
     restore.assert_awaited_once_with(teacher, registration)
+    sync_threads.assert_awaited_once_with(guild, teacher.id)
     teacher.send.assert_awaited_once()
     interaction.followup.send.assert_awaited_once()
     assert "les rôles professeur ont été rétablis" in interaction.followup.send.await_args.args[0].lower()
+    assert "threads professeur prêts" in interaction.followup.send.await_args.args[0].lower()
     assert "formulaire d'inscription" not in interaction.followup.send.await_args.args[0].lower()
 
 

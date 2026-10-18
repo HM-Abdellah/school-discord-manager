@@ -36,6 +36,16 @@ def _error_text(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"[:500]
 
 
+async def _activate_thread(thread: discord.Thread) -> None:
+    """Reopen a matching historical thread when it becomes a current assignment again."""
+    if getattr(thread, "archived", False) or getattr(thread, "locked", False):
+        await thread.edit(
+            archived=False,
+            locked=False,
+            reason="School Manager: restore current teacher assignment thread",
+        )
+
+
 async def ensure_teacher_threads(guild: discord.Guild, teacher_id: int) -> dict[str, object]:
     """Ensure one public thread exists per registered section/subject assignment.
 
@@ -101,7 +111,18 @@ async def ensure_teacher_threads(guild: discord.Guild, teacher_id: int) -> dict[
             name = _thread_name(str(row["full_name"]), section)
             saved_thread_id = row["thread_id"]
             if row["thread_status"] == "created" and isinstance(saved_thread_id, int):
-                if saved_thread_id in by_id:
+                saved_thread = by_id.get(saved_thread_id)
+                if saved_thread is not None:
+                    try:
+                        await _activate_thread(saved_thread)
+                    except (discord.Forbidden, discord.HTTPException) as exc:
+                        message = f"{code} / {get_subject_display_name(subject)} / section {section}: {_error_text(exc)}"
+                        errors.append(message)
+                        update_teacher_assignment_thread(
+                            guild.id, assignment_id, status="failed", error=message
+                        )
+                        result["failed"] = int(result["failed"]) + 1
+                        continue
                     result["existing"] = int(result["existing"]) + 1
                     continue
 
@@ -130,6 +151,16 @@ async def ensure_teacher_threads(guild: discord.Guild, teacher_id: int) -> dict[
 
             if candidates:
                 match = candidates[0]
+                try:
+                    await _activate_thread(match)
+                except (discord.Forbidden, discord.HTTPException) as exc:
+                    message = f"{code} / {get_subject_display_name(subject)} / section {section}: {_error_text(exc)}"
+                    errors.append(message)
+                    update_teacher_assignment_thread(
+                        guild.id, assignment_id, status="failed", error=message
+                    )
+                    result["failed"] = int(result["failed"]) + 1
+                    continue
                 update_teacher_assignment_thread(
                     guild.id,
                     assignment_id,

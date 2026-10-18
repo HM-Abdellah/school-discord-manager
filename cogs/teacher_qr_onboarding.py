@@ -28,7 +28,16 @@ from services.teacher_assignment import TeacherAssignmentError, execute_teacher_
 from services.teacher_threads import ensure_teacher_threads
 from services.qr_invites import DEFAULT_QR_MAX_AGE, create_role_invite, delete_invite, qr_file
 from services.role_conflicts import teacher_target_conflict
-from services.storage import get_guild_config, get_teacher_assignments, get_teacher_qr_invites, get_teacher_registration, mark_teacher_qr_invite_revoked, record_teacher_qr_invite, save_guild_config
+from services.storage import (
+    delete_teacher_registration,
+    get_guild_config,
+    get_teacher_assignments,
+    get_teacher_qr_invites,
+    get_teacher_registration,
+    mark_teacher_qr_invite_revoked,
+    record_teacher_qr_invite,
+    save_guild_config,
+)
 
 async def _get_or_create_pending_role(guild: discord.Guild, config: dict) -> tuple[discord.Role, bool]:
     managed = config.setdefault("managed", {}).setdefault("roles", {})
@@ -876,6 +885,92 @@ async def _restore_registered_teacher_access(
     return True, "Les rôles professeur ont été rétablis."
 
 
+async def _sync_registered_teacher_threads(guild: discord.Guild, teacher_id: int) -> str:
+    """Ensure the current persisted assignments have usable public threads."""
+    try:
+        async with get_build_lock(guild.id):
+            result = await ensure_teacher_threads(guild, teacher_id)
+    except Exception as exc:
+        logging.getLogger(__name__).exception(
+            "Unable to synchronize teacher threads (guild=%s member=%s)",
+            guild.id,
+            teacher_id,
+        )
+        return (
+            "⚠️ La synchronisation des threads n'a pas pu être terminée. "
+            "L'administration peut vérifier puis relancer /sync-teacher-threads. "
+            f"Détail : {type(exc).__name__}."
+        )
+
+    created = int(result.get("created", 0))
+    existing = int(result.get("existing", 0))
+    failed = int(result.get("failed", 0))
+    if failed:
+        return (
+            f"⚠️ {failed} thread(s) n'ont pas pu être préparés. "
+            "L'administration peut vérifier puis relancer /sync-teacher-threads."
+        )
+    if created + existing == 0:
+        return "ℹ️ Aucun thread à synchroniser : aucune affectation de section/matière n'est enregistrée."
+    return f"✅ Threads professeur prêts : {created + existing} (nouveaux : {created}, existants : {existing})."
+
+
+async def _archive_teacher_assignment_threads(
+    bot: discord.Client,
+    guild: discord.Guild,
+    teacher_id: int,
+    assignments,
+) -> tuple[int, int]:
+    """Archive and lock only the public threads recorded for this teacher."""
+    archived_count = 0
+    failure_count = 0
+    seen: set[int] = set()
+    logger = logging.getLogger(__name__)
+
+    for assignment in assignments:
+        raw_thread_id = assignment["thread_id"]
+        if not isinstance(raw_thread_id, int) or raw_thread_id <= 0 or raw_thread_id in seen:
+            continue
+        seen.add(raw_thread_id)
+        try:
+            thread = guild.get_thread(raw_thread_id) if hasattr(guild, "get_thread") else None
+            if thread is None and hasattr(bot, "get_channel"):
+                thread = bot.get_channel(raw_thread_id)
+            if thread is None and hasattr(bot, "fetch_channel"):
+                thread = await bot.fetch_channel(raw_thread_id)
+            if thread is None:
+                failure_count += 1
+                logger.warning(
+                    "Teacher thread unavailable during departure cleanup (guild=%s member=%s thread=%s)",
+                    guild.id, teacher_id, raw_thread_id,
+                )
+                continue
+            if getattr(thread, "type", None) != discord.ChannelType.public_thread:
+                logger.warning(
+                    "Stored teacher thread ID is not a public thread (guild=%s thread=%s)",
+                    guild.id, raw_thread_id,
+                )
+                failure_count += 1
+                continue
+            if not getattr(thread, "archived", False) or not getattr(thread, "locked", False):
+                await thread.edit(
+                    archived=True,
+                    locked=True,
+                    reason="School Manager: archive teacher assignment after leaving the server",
+                )
+            archived_count += 1
+        except discord.NotFound:
+            # A deleted Discord thread is already cleaned up; deleting its DB row is safe.
+            continue
+        except Exception as exc:
+            failure_count += 1
+            logger.warning(
+                "Could not archive teacher thread during departure cleanup (guild=%s thread=%s): %s: %s",
+                guild.id, raw_thread_id, type(exc).__name__, exc,
+            )
+    return archived_count, failure_count
+
+
 class TeacherQROnboarding(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -913,6 +1008,7 @@ class TeacherQROnboarding(commands.Cog):
             return
         if registration is not None:
             restored, detail = await _restore_registered_teacher_access(teacher, registration)
+            thread_detail = await _sync_registered_teacher_threads(guild, teacher.id) if restored else ""
             if restored:
                 dm_sent = True
                 try:
@@ -925,6 +1021,8 @@ class TeacherQROnboarding(commands.Cog):
                 message = "✅ L'inscription existe déjà et les rôles professeur ont été rétablis."
                 if "mais" in detail:
                     message += "\n⚠️ " + detail
+                if thread_detail:
+                    message += "\n" + thread_detail
                 if not dm_sent:
                     message += "\nℹ️ Les accès ont été rétablis, mais le DM du professeur est fermé."
             else:
@@ -1283,12 +1381,14 @@ class TeacherQROnboarding(commands.Cog):
 
             if registration is not None:
                 if restored:
+                    thread_detail = await _sync_registered_teacher_threads(member.guild, member.id)
                     message = (
                         "✅ Votre inscription professeur existante a été retrouvée. "
                         "Les rôles nécessaires à vos accès ont été rétablis automatiquement."
                     )
                     if "mais" in detail:
                         message += "\n\n⚠️ " + detail
+                    message += "\n\n" + thread_detail
                     print(
                         "[TeacherQR] Restored registered teacher access; guild="
                         + str(member.guild.id)
@@ -1350,6 +1450,58 @@ class TeacherQROnboarding(commands.Cog):
                 pass
             return
         await _send_teacher_onboarding_prompt(self.bot, member)
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member) -> None:
+        """Forget teacher onboarding data when the teacher leaves this guild."""
+        if member.bot:
+            return
+
+        guild_id = member.guild.id
+        logger = logging.getLogger(__name__)
+        try:
+            async with get_build_lock(guild_id):
+                registration = get_teacher_registration(guild_id, member.id)
+                if registration is None:
+                    return
+                assignments = get_teacher_assignments(guild_id, member.id)
+
+                # Commit the database cleanup before network calls so Discord
+                # API delays cannot leave the account registered in local data.
+                # Assignment rows were captured first so their thread IDs remain available.
+                delete_teacher_registration(guild_id, member.id)
+
+                # Preserve discussion history, but lock/archive old workspaces.
+                # Discord failures do not reverse the authoritative DB deletion.
+                archived_count, thread_failures = await _archive_teacher_assignment_threads(
+                    self.bot, member.guild, member.id, assignments
+                )
+        except sqlite3.Error:
+            logger.exception(
+                "Unable to clear teacher registration during member departure (guild=%s member=%s)",
+                guild_id, member.id,
+            )
+            return
+        except Exception:
+            logger.exception(
+                "Unexpected teacher departure cleanup failure (guild=%s member=%s)",
+                guild_id, member.id,
+            )
+            return
+
+        record_event(
+            guild_id,
+            member.id,
+            member.display_name,
+            "teacher_registration_cleared_on_leave",
+            str(member.id),
+            f"assignments={len(assignments)};threads_archived={archived_count};thread_failures={thread_failures}",
+        )
+        logger.info(
+            "Cleared teacher registration after departure (guild=%s member=%s assignments=%s "
+            "threads_archived=%s thread_failures=%s)",
+            guild_id, member.id, len(assignments), archived_count, thread_failures,
+        )
 
 
 async def setup(bot: commands.Bot) -> None:
