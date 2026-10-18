@@ -23,7 +23,17 @@ from config.curriculum import (
 from services.audit import record_event
 from services.discord_registry import resolve_registered_text_channel
 from services.build_guard import get_build_lock
-from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_TEACHER_PENDING, get_managed_role, management_check, owner_only_check
+from services.permissions import (
+    ROLE_ADMIN,
+    ROLE_PROFESSOR,
+    ROLE_PROFESSOR_FEMALE,
+    ROLE_TEACHER_PENDING,
+    SUBJECT_ROLE_PREFIX,
+    STREAM_ROLE_PREFIX,
+    get_managed_role,
+    management_check,
+    owner_only_check,
+)
 from services.teacher_assignment import TeacherAssignmentError, execute_teacher_assignment
 from services.teacher_threads import ensure_teacher_threads
 from services.qr_invites import DEFAULT_QR_MAX_AGE, create_role_invite, delete_invite, qr_file
@@ -244,7 +254,31 @@ class TeacherOnboardingView(discord.ui.View):
             )
             if role is not None
         }
-        if pending_role is None or pending_role not in member.roles:
+        if pending_role is None:
+            await self._respond(interaction, "❌ Le rôle temporaire d'inscription est introuvable. Contactez l'administration.")
+            return None
+
+        # A role-change REST request and its gateway cache update can race with
+        # the teacher clicking the form. Refresh only when the cached role state
+        # is inconsistent with an active onboarding session.
+        if pending_role not in member.roles or any(role in member.roles for role in professor_roles):
+            fetch_member = getattr(guild, "fetch_member", None)
+            if not callable(fetch_member):
+                await self._respond(
+                    interaction,
+                    "❌ Impossible de vérifier vos rôles actuels. Réessayez dans un instant ou contactez l'administration.",
+                )
+                return None
+            try:
+                member = await fetch_member(self.user_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                await self._respond(
+                    interaction,
+                    "❌ Impossible de vérifier votre accès actuel au serveur. Contactez l'administration.",
+                )
+                return None
+
+        if pending_role not in member.roles:
             await self._respond(interaction, "❌ Cette inscription QR n'est plus active.")
             return None
 
@@ -885,6 +919,103 @@ async def _restore_registered_teacher_access(
     return True, "Les rôles professeur ont été rétablis."
 
 
+async def _ensure_pending_teacher_role(member: discord.Member) -> discord.Role:
+    """Ensure the member has the managed pending role required by the onboarding form."""
+    guild = member.guild
+    working_config = deepcopy(get_guild_config(guild.id) or {})
+    pending_role = get_managed_role(guild, ROLE_TEACHER_PENDING)
+    if pending_role is None:
+        pending_role, created_role = await _get_or_create_pending_role(guild, working_config)
+        if created_role:
+            save_guild_config(guild.id, working_config)
+    if pending_role not in member.roles:
+        await member.add_roles(
+            pending_role,
+            reason="School Manager teacher re-enrollment",
+        )
+    return pending_role
+
+
+async def _remove_registered_teacher_roles(
+    member: discord.Member,
+    registration,
+    assignments,
+) -> int:
+    """Remove only managed teacher roles from the old profile before re-enrollment."""
+    role_names = {ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE}
+    stream_pairs: set[tuple[str, str]] = set()
+    subjects: set[str] = {str(row["subject_name"]) for row in assignments}
+
+    primary_level = str(registration["level_name"])
+    primary_stream = str(registration["stream_name"])
+    stream_pairs.add((primary_level, primary_stream))
+    for row in assignments:
+        stream_pairs.add((str(row["level_name"]), str(row["stream_name"])))
+
+    # Older registrations may have only the primary subjects_text field and no
+    # teacher_assignments rows. Reconstruct those canonical subject roles too.
+    selected_labels = {
+        value.strip().casefold()
+        for value in str(registration["subjects_text"]).split(",")
+        if value.strip()
+    }
+    for subject in get_stream_subjects(primary_level, primary_stream):
+        display_name = get_subject_display_name(subject)
+        if subject.casefold() in selected_labels or display_name.casefold() in selected_labels:
+            subjects.add(subject)
+
+    for level_name, stream_name in stream_pairs:
+        role_names.add(f"{STREAM_ROLE_PREFIX}{get_stream_abbreviation(level_name, stream_name)}")
+    for subject in subjects:
+        role_names.add(f"{SUBJECT_ROLE_PREFIX}{get_subject_display_name(subject)}"[:100])
+
+    roles_to_remove = [
+        role
+        for name in sorted(role_names)
+        if (role := get_managed_role(member.guild, name)) is not None and role in member.roles
+    ]
+    if roles_to_remove:
+        await member.remove_roles(
+            *roles_to_remove,
+            reason="School Manager: remove old teacher profile before re-enrollment",
+        )
+    return len(roles_to_remove)
+
+
+async def _prepare_teacher_reenrollment(
+    bot: discord.Client,
+    member: discord.Member,
+) -> dict[str, int | bool]:
+    """Reset any old teacher profile and get the member ready for a fresh form."""
+    guild = member.guild
+    async with get_build_lock(guild.id):
+        registration = get_teacher_registration(guild.id, member.id)
+        assignments = get_teacher_assignments(guild.id, member.id) if registration is not None else []
+
+        # Assign the pending role before destructive changes. If Discord refuses,
+        # the old registration remains intact and an administrator can retry.
+        await _ensure_pending_teacher_role(member)
+
+        removed_roles = 0
+        if registration is not None:
+            removed_roles = await _remove_registered_teacher_roles(member, registration, assignments)
+            delete_teacher_registration(guild.id, member.id)
+
+        # The rows are already captured, so clean up linked threads after the DB
+        # reset. Thread API failures are reported but do not restore stale DB data.
+        archived_count, thread_failures = await _archive_teacher_assignment_threads(
+            bot, guild, member.id, assignments
+        )
+
+    return {
+        "had_registration": registration is not None,
+        "assignments": len(assignments),
+        "roles_removed": removed_roles,
+        "threads_archived": archived_count,
+        "thread_failures": thread_failures,
+    }
+
+
 async def _sync_registered_teacher_threads(guild: discord.Guild, teacher_id: int) -> str:
     """Ensure the current persisted assignments have usable public threads."""
     try:
@@ -979,13 +1110,17 @@ class TeacherQROnboarding(commands.Cog):
         name="startteacherregistration",
         description="Envoyer le formulaire professeur à un membre déjà présent dans le serveur.",
     )
-    @app_commands.describe(teacher="Membre du serveur à inscrire ou dont les accès doivent être rétablis")
+    @app_commands.describe(
+        teacher="Membre du serveur à inscrire ou dont le dossier professeur doit être réinitialisé",
+        restart="Réinitialiser son ancien profil professeur et renvoyer le formulaire",
+    )
     @app_commands.default_permissions(manage_roles=True)
     @management_check()
     async def start_teacher_registration(
         self,
         interaction: discord.Interaction,
         teacher: discord.Member,
+        restart: bool = False,
     ) -> None:
         """Start onboarding for a selected existing member without requiring a leave/rejoin."""
         guild = interaction.guild
@@ -1006,6 +1141,57 @@ class TeacherQROnboarding(commands.Cog):
                 ephemeral=True,
             )
             return
+        if restart:
+            try:
+                summary = await _prepare_teacher_reenrollment(self.bot, teacher)
+            except (discord.Forbidden, discord.HTTPException, OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
+                logging.getLogger(__name__).exception(
+                    "Unable to restart teacher registration (guild=%s member=%s)",
+                    guild.id, teacher.id,
+                )
+                await interaction.followup.send(
+                    "❌ La préparation de la réinscription a échoué : "
+                    f"{type(exc).__name__}: {exc}. Certains changements peuvent déjà avoir été appliqués; "
+                    "consultez les logs et vérifiez le dossier avant de réessayer.",
+                    ephemeral=True,
+                )
+                return
+
+            dm_sent = await _send_teacher_onboarding_prompt(self.bot, teacher)
+            record_event(
+                guild.id,
+                interaction.user.id,
+                interaction.user.display_name,
+                "restartteacherregistration",
+                teacher.display_name,
+                "had_registration=" + str(bool(summary["had_registration"])).lower()
+                + ";assignments=" + str(summary["assignments"])
+                + ";threads_archived=" + str(summary["threads_archived"])
+                + ";thread_failures=" + str(summary["thread_failures"]),
+            )
+            if dm_sent:
+                detail = (
+                    " Anciennes affectations supprimées : " + str(summary["assignments"]) + "."
+                    + " Rôles professeur retirés : " + str(summary["roles_removed"]) + "."
+                    + " Threads archivés : " + str(summary["threads_archived"]) + "."
+                )
+                if int(summary["thread_failures"]):
+                    detail += " Attention : certains threads n'ont pas pu être archivés; consultez les logs."
+                await interaction.followup.send(
+                    f"✅ Le formulaire de réinscription a été envoyé à {teacher.mention}. "
+                    "L'ancienne inscription a été réinitialisée. Aucun départ du serveur n'est nécessaire."
+                    + detail,
+                    ephemeral=True,
+                )
+            else:
+                await interaction.followup.send(
+                    f"⚠️ Le profil a été réinitialisé et le rôle temporaire préparé pour {teacher.mention}, "
+                    "mais l'envoi du DM a échoué. Autorisez les messages privés du serveur puis relancez "
+                    "/startteacherregistration avec restart activé.",
+                    ephemeral=True,
+                )
+            return
+
         if registration is not None:
             restored, detail = await _restore_registered_teacher_access(teacher, registration)
             thread_detail = await _sync_registered_teacher_threads(guild, teacher.id) if restored else ""
@@ -1350,9 +1536,8 @@ class TeacherQROnboarding(commands.Cog):
         if member.bot:
             return
 
-        # A registration row survives a Discord departure, but the guild removes
-        # all guild-specific roles when the member leaves. Restore access first,
-        # even when they did not use a teacher QR on the way back in.
+        # A stale registration row must never cause automatic restoration after
+        # departure; use it only to clean the old profile and start fresh onboarding.
         try:
             registration = get_teacher_registration(member.guild.id, member.id)
         except sqlite3.Error:
@@ -1366,37 +1551,22 @@ class TeacherQROnboarding(commands.Cog):
         logger = logging.getLogger(__name__)
         pending_role = get_managed_role(member.guild, ROLE_TEACHER_PENDING)
 
-        # A freshly joined member carrying the QR's pending role is explicitly
-        # entering onboarding. If a prior departure event was missed or another
-        # running bot instance left stale registration data, do not silently
-        # restore the old profile: discard its identity/assignments and begin a
-        # genuinely fresh registration. This is a recovery path in addition to
-        # on_member_remove, not a substitute for the departure handler.
-        if registration is not None and pending_role is not None and pending_role in member.roles:
-            archived_count = 0
-            thread_failures = 0
+        # A teacher who leaves and rejoins must register again even if the
+        # temporary role was not present in the join event. Never silently restore
+        # an old profile just because Discord did not attach that role to the invite.
+        if registration is not None:
             try:
-                async with get_build_lock(member.guild.id):
-                    registration = get_teacher_registration(member.guild.id, member.id)
-                    if registration is not None:
-                        old_assignments = get_teacher_assignments(member.guild.id, member.id)
-                        delete_teacher_registration(member.guild.id, member.id)
-                        archived_count, thread_failures = await _archive_teacher_assignment_threads(
-                            self.bot, member.guild, member.id, old_assignments
-                        )
-                    # If the departure listener already removed the row, the
-                    # pending QR still means the member should continue onboarding.
-                    registration = None
-            except (sqlite3.Error, OSError, RuntimeError):
+                summary = await _prepare_teacher_reenrollment(self.bot, member)
+            except (discord.Forbidden, discord.HTTPException, OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
                 logger.exception(
-                    "Unable to clear stale teacher registration for QR re-enrollment (guild=%s member=%s)",
-                    member.guild.id,
-                    member.id,
+                    "Unable to restart stale teacher registration during member join (guild=%s member=%s)",
+                    member.guild.id, member.id,
                 )
                 try:
                     await member.send(
-                        "❌ Impossible de nettoyer l'ancienne inscription professeur. "
-                        "Contactez l'administration avant de poursuivre."
+                        "❌ Votre ancien dossier professeur existe toujours, mais le bot n'a pas pu "
+                        "préparer la réinscription. Contactez l'administration sans quitter le serveur. "
+                        f"Détail : {type(exc).__name__}."
                     )
                 except discord.HTTPException:
                     pass
@@ -1406,68 +1576,25 @@ class TeacherQROnboarding(commands.Cog):
                 member.guild.id,
                 member.id,
                 member.display_name,
-                "teacher_registration_reset_for_qr_reenrollment",
+                "teacher_registration_reset_on_rejoin",
                 str(member.id),
-                f"threads_archived={archived_count};thread_failures={thread_failures}",
+                "assignments=" + str(summary["assignments"])
+                + ";roles_removed=" + str(summary["roles_removed"])
+                + ";threads_archived=" + str(summary["threads_archived"])
+                + ";thread_failures=" + str(summary["thread_failures"]),
             )
             logger.warning(
-                "Discarded stale teacher registration because member rejoined with QR pending role "
-                "(guild=%s member=%s threads_archived=%s thread_failures=%s)",
-                member.guild.id, member.id, archived_count, thread_failures,
+                "Reset existing teacher profile on rejoin and restarting onboarding "
+                "(guild=%s member=%s had_registration=%s assignments=%s threads_archived=%s thread_failures=%s)",
+                member.guild.id, member.id, summary["had_registration"], summary["assignments"],
+                summary["threads_archived"], summary["thread_failures"],
             )
-
-        if registration is not None:
-            # Serialize restoration with administrative role changes, then re-read
-            # the row so a concurrent reset cannot revive a deleted registration.
-            try:
-                async with get_build_lock(member.guild.id):
-                    registration = get_teacher_registration(member.guild.id, member.id)
-                    if registration is not None:
-                        restored, detail = await _restore_registered_teacher_access(member, registration)
-            except sqlite3.Error:
-                logger.exception(
-                    "Unable to restore teacher registration during member join (guild=%s member=%s)",
-                    member.guild.id,
-                    member.id,
+            if not await _send_teacher_onboarding_prompt(self.bot, member):
+                logger.warning(
+                    "Teacher re-enrollment form DM failed (guild=%s member=%s)",
+                    member.guild.id, member.id,
                 )
-                return
-
-            if registration is not None:
-                if restored:
-                    thread_detail = await _sync_registered_teacher_threads(member.guild, member.id)
-                    message = (
-                        "✅ Votre inscription professeur existante a été retrouvée. "
-                        "Les rôles nécessaires à vos accès ont été rétablis automatiquement."
-                    )
-                    if "mais" in detail:
-                        message += "\n\n⚠️ " + detail
-                    message += "\n\n" + thread_detail
-                    print(
-                        "[TeacherQR] Restored registered teacher access; guild="
-                        + str(member.guild.id)
-                        + " member="
-                        + str(member.id),
-                        flush=True,
-                    )
-                else:
-                    message = (
-                        "⚠️ Votre dossier professeur existe déjà, mais le bot n'a pas pu rétablir les accès automatiquement. "
-                        "Contactez l'administration sans réutiliser le QR.\n\n" + detail
-                    )
-                    print(
-                        "[TeacherQR] Failed to restore registered teacher access; guild="
-                        + str(member.guild.id)
-                        + " member="
-                        + str(member.id)
-                        + " reason="
-                        + detail,
-                        flush=True,
-                    )
-                try:
-                    await member.send(message)
-                except discord.HTTPException:
-                    pass
-                return
+            return
 
         if pending_role is None or pending_role not in member.roles:
             return
@@ -1522,13 +1649,9 @@ class TeacherQROnboarding(commands.Cog):
                     return
                 assignments = get_teacher_assignments(guild_id, member.id)
 
-                # Commit the database cleanup before network calls so Discord
-                # API delays cannot leave the account registered in local data.
-                # Assignment rows were captured first so their thread IDs remain available.
+                # The member has already left; Discord has stripped guild roles.
+                # Delete their identity/assignments first, then archive linked work.
                 delete_teacher_registration(guild_id, member.id)
-
-                # Preserve discussion history, but lock/archive old workspaces.
-                # Discord failures do not reverse the authoritative DB deletion.
                 archived_count, thread_failures = await _archive_teacher_assignment_threads(
                     self.bot, member.guild, member.id, assignments
                 )
