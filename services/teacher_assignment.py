@@ -204,6 +204,7 @@ async def execute_teacher_assignment(
     actor_display_name: str,
     self_registration: bool,
     assignments: list[dict] | None = None,
+    event_action: str | None = "assignteacherfull",
 ) -> dict:
     conflict = teacher_target_conflict(teacher, guild)
     if conflict:
@@ -442,14 +443,15 @@ async def execute_teacher_assignment(
             for item in validated_assignments
         )
         assignments_count = sum(len(item["subjects"]) for item in validated_assignments)
-    record_event(
-        guild.id,
-        actor_id,
-        actor_display_name,
-        "assignteacherfull",
-        teacher.display_name,
-        assignment_summary + (";self-registration" if self_registration else ""),
-    )
+    if event_action is not None:
+        record_event(
+            guild.id,
+            actor_id,
+            actor_display_name,
+            event_action,
+            teacher.display_name,
+            assignment_summary + (";self-registration" if self_registration else ""),
+        )
     return {
         "stream_code": stream_code,
         "subject_names": subject_names,

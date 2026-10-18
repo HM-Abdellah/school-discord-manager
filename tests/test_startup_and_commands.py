@@ -230,6 +230,7 @@ def test_teacher_qr_commands_are_admin_visible_only():
 
     for callback in (
         cog.create_teacher_qr,
+        cog.start_teacher_registration,
         cog.revoke_teacher_qr,
         cog.list_teacher_qr,
     ):

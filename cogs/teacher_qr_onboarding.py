@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import timedelta
+import logging
+import sqlite3
 import traceback
 
 import discord
@@ -26,7 +28,7 @@ from services.teacher_assignment import TeacherAssignmentError, execute_teacher_
 from services.teacher_threads import ensure_teacher_threads
 from services.qr_invites import DEFAULT_QR_MAX_AGE, create_role_invite, delete_invite, qr_file
 from services.role_conflicts import teacher_target_conflict
-from services.storage import get_guild_config, get_teacher_qr_invites, get_teacher_registration, mark_teacher_qr_invite_revoked, record_teacher_qr_invite, save_guild_config
+from services.storage import get_guild_config, get_teacher_assignments, get_teacher_qr_invites, get_teacher_registration, mark_teacher_qr_invite_revoked, record_teacher_qr_invite, save_guild_config
 
 async def _get_or_create_pending_role(guild: discord.Guild, config: dict) -> tuple[discord.Role, bool]:
     managed = config.setdefault("managed", {}).setdefault("roles", {})
@@ -804,7 +806,7 @@ class TeacherOnboardingView(discord.ui.View):
 async def _send_teacher_onboarding_prompt(
     bot: discord.Client,
     user: discord.Member,
-) -> None:
+) -> bool:
     view = TeacherOnboardingView(bot, user.guild.id, user.id)
     try:
         view.message = await user.send(
@@ -815,12 +817,193 @@ async def _send_teacher_onboarding_prompt(
             view=view,
         )
     except discord.HTTPException:
-        pass
+        return False
+    return True
+
+
+async def _restore_registered_teacher_access(
+    member: discord.Member,
+    registration,
+) -> tuple[bool, str]:
+    """Reconcile Discord roles from the trusted persisted teacher registration."""
+    conflict = teacher_target_conflict(member, member.guild)
+    if conflict:
+        return False, conflict
+
+    try:
+        stored_assignments = get_teacher_assignments(member.guild.id, member.id)
+        assignments = [
+            {
+                "level": str(row["level_name"]),
+                "stream": str(row["stream_name"]),
+                "section": int(row["section"]),
+                "subjects": [str(row["subject_name"])],
+            }
+            for row in stored_assignments
+        ] or None
+        await execute_teacher_assignment(
+            guild=member.guild,
+            teacher=member,
+            gender_value=str(registration["profile_type"]),
+            level=str(registration["level_name"]),
+            stream=str(registration["stream_name"]),
+            subjects=str(registration["subjects_text"]),
+            actor_id=member.id,
+            actor_display_name=member.display_name,
+            self_registration=False,
+            assignments=assignments,
+            event_action=None,
+        )
+    except (TeacherAssignmentError, sqlite3.Error, OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        return False, str(exc)
+
+    pending_role = get_managed_role(member.guild, ROLE_TEACHER_PENDING)
+    if pending_role is not None and pending_role in member.roles:
+        try:
+            await member.remove_roles(
+                pending_role,
+                reason="School Manager restored registered teacher access",
+            )
+        except discord.HTTPException as exc:
+            logging.getLogger(__name__).warning(
+                "Teacher access restored but pending role could not be removed (guild=%s member=%s): %s",
+                member.guild.id,
+                member.id,
+                exc,
+            )
+            return True, "Les accès ont été rétablis, mais le rôle temporaire n'a pas pu être retiré automatiquement."
+
+    return True, "Les rôles professeur ont été rétablis."
 
 
 class TeacherQROnboarding(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+
+    @app_commands.command(
+        name="startteacherregistration",
+        description="Envoyer le formulaire professeur à un membre déjà présent dans le serveur.",
+    )
+    @app_commands.describe(teacher="Membre du serveur à inscrire ou dont les accès doivent être rétablis")
+    @app_commands.default_permissions(manage_roles=True)
+    @management_check()
+    async def start_teacher_registration(
+        self,
+        interaction: discord.Interaction,
+        teacher: discord.Member,
+    ) -> None:
+        """Start onboarding for a selected existing member without requiring a leave/rejoin."""
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
+        if teacher.bot:
+            await interaction.response.send_message("❌ Un bot ne peut pas être inscrit comme professeur.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            registration = get_teacher_registration(guild.id, teacher.id)
+        except sqlite3.Error as exc:
+            await interaction.followup.send(
+                "❌ Impossible de lire le dossier professeur dans la base de données : "
+                + type(exc).__name__ + ". Réessayez après vérification des logs.",
+                ephemeral=True,
+            )
+            return
+        if registration is not None:
+            restored, detail = await _restore_registered_teacher_access(teacher, registration)
+            if restored:
+                dm_sent = True
+                try:
+                    await teacher.send(
+                        "✅ Votre inscription professeur existante a été retrouvée. "
+                        "Les accès de votre compte ont été vérifiés et rétablis par l'administration."
+                    )
+                except discord.HTTPException:
+                    dm_sent = False
+                message = "✅ L'inscription existe déjà et les rôles professeur ont été rétablis."
+                if "mais" in detail:
+                    message += "\n⚠️ " + detail
+                if not dm_sent:
+                    message += "\nℹ️ Les accès ont été rétablis, mais le DM du professeur est fermé."
+            else:
+                message = (
+                    "⚠️ Un dossier professeur existe déjà, mais les accès n'ont pas été modifiés automatiquement. "
+                    "Vérifiez le conflit ou les rôles gérés avant toute correction.\n\n" + detail
+                )
+            record_event(
+                guild.id,
+                interaction.user.id,
+                interaction.user.display_name,
+                "startteacherregistration",
+                teacher.display_name,
+                "existing-registration;restored=" + str(restored).lower(),
+            )
+            await interaction.followup.send(message, ephemeral=True)
+            return
+
+        professor_roles = {
+            role
+            for role in (
+                get_managed_role(guild, ROLE_PROFESSOR),
+                get_managed_role(guild, ROLE_PROFESSOR_FEMALE),
+            )
+            if role is not None
+        }
+        if any(role in teacher.roles for role in professor_roles):
+            await interaction.followup.send(
+                "❌ Ce membre possède déjà un rôle professeur, mais aucun dossier d'inscription QR n'a été trouvé. "
+                "Aucune nouvelle inscription n'a été lancée; vérifiez son affectation existante.",
+                ephemeral=True,
+            )
+            return
+
+        conflict = teacher_target_conflict(teacher, guild)
+        if conflict:
+            await interaction.followup.send(conflict, ephemeral=True)
+            return
+
+        working_config = deepcopy(get_guild_config(guild.id) or {})
+        pending_role: discord.Role | None = None
+        try:
+            pending_role = get_managed_role(guild, ROLE_TEACHER_PENDING)
+            if pending_role is None:
+                pending_role, created_role = await _get_or_create_pending_role(guild, working_config)
+                if created_role:
+                    save_guild_config(guild.id, working_config)
+            if pending_role not in teacher.roles:
+                await teacher.add_roles(
+                    pending_role,
+                    reason="School Manager administrator-triggered teacher onboarding",
+                )
+        except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError, ValueError) as exc:
+            await interaction.followup.send(
+                "❌ Impossible de préparer l'inscription de ce membre : " + type(exc).__name__ + ": " + str(exc),
+                ephemeral=True,
+            )
+            return
+
+        dm_sent = await _send_teacher_onboarding_prompt(self.bot, teacher)
+        record_event(
+            guild.id,
+            interaction.user.id,
+            interaction.user.display_name,
+            "startteacherregistration",
+            teacher.display_name,
+            "dm_sent=" + str(dm_sent).lower(),
+        )
+        if dm_sent:
+            await interaction.followup.send(
+                f"✅ Le formulaire d'inscription a été envoyé à {teacher.mention}. Aucun départ/réintégration du serveur n'est nécessaire.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                f"⚠️ Le rôle temporaire a été préparé pour {teacher.mention}, mais son DM a échoué. "
+                "Demandez-lui d'autoriser les messages privés du serveur, puis relancez cette commande.",
+                ephemeral=True,
+            )
 
     @app_commands.command(
         name="createadminqr",
@@ -1010,6 +1193,8 @@ class TeacherQROnboarding(commands.Cog):
             f"Utilisations max : {int(max_uses)}\n\n"
             "Le QR donne un accès temporaire pour compléter l'inscription avec les menus ci-dessous. "
             "Après une inscription réussie, le rôle temporaire est retiré et ce compte ne peut plus se réinscrire via QR.\n\n"
+            "Si le professeur est déjà membre du serveur, utilisez `/startteacherregistration` avec son compte : "
+            "il n'a pas besoin de quitter puis de revenir.\n\n"
             + invite_url,
             file=qr,
             ephemeral=True,
@@ -1066,11 +1251,75 @@ class TeacherQROnboarding(commands.Cog):
     async def on_member_join(self, member: discord.Member) -> None:
         if member.bot:
             return
+
+        # A registration row survives a Discord departure, but the guild removes
+        # all guild-specific roles when the member leaves. Restore access first,
+        # even when they did not use a teacher QR on the way back in.
+        try:
+            registration = get_teacher_registration(member.guild.id, member.id)
+        except sqlite3.Error:
+            logging.getLogger(__name__).exception(
+                "Unable to inspect teacher registration during member join (guild=%s member=%s)",
+                member.guild.id,
+                member.id,
+            )
+            return
+
+        if registration is not None:
+            # Serialize restoration with administrative role changes, then re-read
+            # the row so a concurrent reset cannot revive a deleted registration.
+            try:
+                async with get_build_lock(member.guild.id):
+                    registration = get_teacher_registration(member.guild.id, member.id)
+                    if registration is not None:
+                        restored, detail = await _restore_registered_teacher_access(member, registration)
+            except sqlite3.Error:
+                logging.getLogger(__name__).exception(
+                    "Unable to restore teacher registration during member join (guild=%s member=%s)",
+                    member.guild.id,
+                    member.id,
+                )
+                return
+
+            if registration is not None:
+                if restored:
+                    message = (
+                        "✅ Votre inscription professeur existante a été retrouvée. "
+                        "Les rôles nécessaires à vos accès ont été rétablis automatiquement."
+                    )
+                    if "mais" in detail:
+                        message += "\n\n⚠️ " + detail
+                    print(
+                        "[TeacherQR] Restored registered teacher access; guild="
+                        + str(member.guild.id)
+                        + " member="
+                        + str(member.id),
+                        flush=True,
+                    )
+                else:
+                    message = (
+                        "⚠️ Votre dossier professeur existe déjà, mais le bot n'a pas pu rétablir les accès automatiquement. "
+                        "Contactez l'administration sans réutiliser le QR.\n\n" + detail
+                    )
+                    print(
+                        "[TeacherQR] Failed to restore registered teacher access; guild="
+                        + str(member.guild.id)
+                        + " member="
+                        + str(member.id)
+                        + " reason="
+                        + detail,
+                        flush=True,
+                    )
+                try:
+                    await member.send(message)
+                except discord.HTTPException:
+                    pass
+                return
+
         pending_role = get_managed_role(member.guild, ROLE_TEACHER_PENDING)
         if pending_role is None or pending_role not in member.roles:
             return
 
-        registration = get_teacher_registration(member.guild.id, member.id)
         professor_roles = {
             role
             for role in (
@@ -1079,14 +1328,15 @@ class TeacherQROnboarding(commands.Cog):
             )
             if role is not None
         }
-        if registration is not None or any(role in member.roles for role in professor_roles):
+        if any(role in member.roles for role in professor_roles):
             try:
                 await member.remove_roles(
                     pending_role,
-                    reason="School Manager teacher QR already consumed",
+                    reason="School Manager teacher QR conflicts with an existing professor role",
                 )
                 await member.send(
-                    "ℹ️ Ce compte est déjà enregistré comme professeur. Le QR professeur ne peut pas être réutilisé pour ce compte."
+                    "⚠️ Ce compte possède déjà un rôle professeur mais aucun dossier QR correspondant. "
+                    "Contactez l'administration pour vérifier l'affectation existante."
                 )
             except discord.HTTPException:
                 pass
