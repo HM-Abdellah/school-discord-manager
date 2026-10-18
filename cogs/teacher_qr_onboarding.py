@@ -1363,6 +1363,59 @@ class TeacherQROnboarding(commands.Cog):
             )
             return
 
+        logger = logging.getLogger(__name__)
+        pending_role = get_managed_role(member.guild, ROLE_TEACHER_PENDING)
+
+        # A freshly joined member carrying the QR's pending role is explicitly
+        # entering onboarding. If a prior departure event was missed or another
+        # running bot instance left stale registration data, do not silently
+        # restore the old profile: discard its identity/assignments and begin a
+        # genuinely fresh registration. This is a recovery path in addition to
+        # on_member_remove, not a substitute for the departure handler.
+        if registration is not None and pending_role is not None and pending_role in member.roles:
+            archived_count = 0
+            thread_failures = 0
+            try:
+                async with get_build_lock(member.guild.id):
+                    registration = get_teacher_registration(member.guild.id, member.id)
+                    if registration is not None:
+                        old_assignments = get_teacher_assignments(member.guild.id, member.id)
+                        delete_teacher_registration(member.guild.id, member.id)
+                        archived_count, thread_failures = await _archive_teacher_assignment_threads(
+                            self.bot, member.guild, member.id, old_assignments
+                        )
+                    # If the departure listener already removed the row, the
+                    # pending QR still means the member should continue onboarding.
+                    registration = None
+            except (sqlite3.Error, OSError, RuntimeError):
+                logger.exception(
+                    "Unable to clear stale teacher registration for QR re-enrollment (guild=%s member=%s)",
+                    member.guild.id,
+                    member.id,
+                )
+                try:
+                    await member.send(
+                        "❌ Impossible de nettoyer l'ancienne inscription professeur. "
+                        "Contactez l'administration avant de poursuivre."
+                    )
+                except discord.HTTPException:
+                    pass
+                return
+
+            record_event(
+                member.guild.id,
+                member.id,
+                member.display_name,
+                "teacher_registration_reset_for_qr_reenrollment",
+                str(member.id),
+                f"threads_archived={archived_count};thread_failures={thread_failures}",
+            )
+            logger.warning(
+                "Discarded stale teacher registration because member rejoined with QR pending role "
+                "(guild=%s member=%s threads_archived=%s thread_failures=%s)",
+                member.guild.id, member.id, archived_count, thread_failures,
+            )
+
         if registration is not None:
             # Serialize restoration with administrative role changes, then re-read
             # the row so a concurrent reset cannot revive a deleted registration.
@@ -1372,7 +1425,7 @@ class TeacherQROnboarding(commands.Cog):
                     if registration is not None:
                         restored, detail = await _restore_registered_teacher_access(member, registration)
             except sqlite3.Error:
-                logging.getLogger(__name__).exception(
+                logger.exception(
                     "Unable to restore teacher registration during member join (guild=%s member=%s)",
                     member.guild.id,
                     member.id,
@@ -1416,7 +1469,6 @@ class TeacherQROnboarding(commands.Cog):
                     pass
                 return
 
-        pending_role = get_managed_role(member.guild, ROLE_TEACHER_PENDING)
         if pending_role is None or pending_role not in member.roles:
             return
 
@@ -1454,11 +1506,15 @@ class TeacherQROnboarding(commands.Cog):
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member) -> None:
         """Forget teacher onboarding data when the teacher leaves this guild."""
+        logger = logging.getLogger(__name__)
+        logger.info(
+            "Discord member-remove event received (guild=%s member=%s bot=%s)",
+            member.guild.id, member.id, member.bot,
+        )
         if member.bot:
             return
 
         guild_id = member.guild.id
-        logger = logging.getLogger(__name__)
         try:
             async with get_build_lock(guild_id):
                 registration = get_teacher_registration(guild_id, member.id)
