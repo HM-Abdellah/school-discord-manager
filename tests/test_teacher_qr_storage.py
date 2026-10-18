@@ -122,6 +122,7 @@ async def test_teacher_onboarding_view_uses_fixed_choices():
     assert [option.value for option in view.gender_select.options] == ["male", "female"]
     assert [option.value for option in view.level_select.options] == get_levels()
     assert view.stream_select.disabled is True
+    assert view.section_select.disabled is True
     assert view.subject_select.disabled is True
     assert view.confirm_button.disabled is True
     assert view.guild_id == 1
@@ -228,7 +229,12 @@ async def test_teacher_onboarding_confirm_success(monkeypatch):
     }
 
     async def fake_assignment(**_kwargs):
-        return {"stream_code": "2BACPC", "subject_names": "Math"}
+        return {
+            "stream_code": "2BACPC",
+            "subject_names": "Math",
+            "assignments_count": 1,
+            "assignment_summary": "2BACPC-S3: Math",
+        }
 
     response = _FakeInteractionResponse()
     edit_original_response = AsyncMock()
@@ -242,12 +248,19 @@ async def test_teacher_onboarding_confirm_success(monkeypatch):
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda _guild_id, _discord_id: None)
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
     monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
+    monkeypatch.setattr(
+        "cogs.teacher_qr_onboarding.ensure_teacher_threads",
+        AsyncMock(return_value={"created": 1, "existing": 0, "failed": 0, "errors": []}),
+    )
 
     view = TeacherOnboardingView(bot, 1, 101)
     view.selected_gender = "male"
     view.selected_level = "2ème Année Bac"
     view.selected_stream = "2ème Année Bac Sciences Physiques"
+    view.selected_sections = [3]
     view.selected_subjects = ["Mathématiques"]
+    view._show_subject_stage()
+    view._refresh_control_state()
 
     await view.confirm_button.callback(interaction)
 
@@ -303,7 +316,10 @@ async def test_teacher_onboarding_confirm_business_error_is_visible(monkeypatch)
     view.selected_gender = "male"
     view.selected_level = "2ème Année Bac"
     view.selected_stream = "2ème Année Bac Sciences Physiques"
+    view.selected_sections = [3]
     view.selected_subjects = ["Mathématiques"]
+    view._show_subject_stage()
+    view._refresh_control_state()
 
     await view.confirm_button.callback(interaction)
 
@@ -358,7 +374,10 @@ async def test_teacher_onboarding_confirm_unexpected_error_is_visible(monkeypatc
     view.selected_gender = "male"
     view.selected_level = "2ème Année Bac"
     view.selected_stream = "2ème Année Bac Sciences Physiques"
+    view.selected_sections = [3]
     view.selected_subjects = ["Mathématiques"]
+    view._show_subject_stage()
+    view._refresh_control_state()
 
     await view.confirm_button.callback(interaction)
 
@@ -396,3 +415,143 @@ async def test_teacher_qr_join_prompts_only_unregistered_member(monkeypatch):
 
     member.remove_roles.assert_not_awaited()
     prompt.assert_awaited_once_with(bot, member)
+
+
+def test_teacher_assignments_store_multiple_sections_and_preserve_thread_state(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
+    storage.initialize_database()
+    storage.record_teacher_registration(1, 101, "Prof Multi", "male", "2ème Année Bac", "2ème Année Bac Sciences Physiques", "Mathématiques")
+    assignments = [
+        {"level": "2ème Année Bac", "stream": "2ème Année Bac Sciences Physiques", "section": 3, "subjects": ["Mathématiques"]},
+        {"level": "2ème Année Bac", "stream": "2ème Année Bac Sciences Physiques", "section": 4, "subjects": ["Mathématiques"]},
+        {"level": "1ère Année Bac", "stream": "1ère Année Bac Sciences Expérimentales", "section": 2, "subjects": ["Sciences de la Vie et de la Terre (SVT)"]},
+    ]
+    assert storage.record_teacher_assignments(1, 101, assignments) == 3
+    rows = storage.get_teacher_assignments(1, 101)
+    assert len(rows) == 3
+    assert {(row["level_name"], row["section"], row["subject_name"]) for row in rows} == {
+        ("2ème Année Bac", 3, "Mathématiques"),
+        ("2ème Année Bac", 4, "Mathématiques"),
+        ("1ère Année Bac", 2, "Sciences de la Vie et de la Terre (SVT)"),
+    }
+    row = next(row for row in rows if row["section"] == 3)
+    storage.update_teacher_assignment_thread(1, row["id"], status="created", thread_id=9001)
+    assert storage.record_teacher_assignments(1, 101, assignments) == 0
+    created = next(row for row in storage.get_teacher_assignments(1, 101) if row["section"] == 3)
+    assert created["thread_status"] == "created"
+    assert created["thread_id"] == 9001
+
+
+def test_teacher_assignments_reject_invalid_section(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
+    storage.initialize_database()
+    storage.record_teacher_registration(1, 101, "Prof A", "male", "2ème Année Bac", "2ème Année Bac Sciences Physiques", "Mathématiques")
+    with pytest.raises(ValueError, match="section"):
+        storage.record_teacher_assignments(1, 101, [{"level": "2ème Année Bac", "stream": "2ème Année Bac Sciences Physiques", "section": 9, "subjects": ["Mathématiques"]}])
+
+
+def test_reset_guild_data_clears_teacher_assignments(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
+    storage.initialize_database()
+    storage.record_teacher_registration(1, 101, "Prof A", "male", "2ème Année Bac", "2ème Année Bac Sciences Physiques", "Mathématiques")
+    storage.record_teacher_assignments(1, 101, [{"level": "2ème Année Bac", "stream": "2ème Année Bac Sciences Physiques", "section": 3, "subjects": ["Mathématiques"]}])
+    storage.reset_guild_data(1)
+    assert storage.get_teacher_assignments(1, 101) == []
+
+
+@pytest.mark.asyncio
+async def test_teacher_onboarding_collects_multiple_levels_and_sections(monkeypatch):
+    from cogs.teacher_qr_onboarding import TeacherOnboardingView
+    from config.curriculum import get_stream_subjects, get_streams
+    from services.permissions import ROLE_TEACHER_PENDING
+
+    pending = object()
+    member = SimpleNamespace(id=101, roles=[pending], display_name="Prof Multi", guild=None)
+    guild = SimpleNamespace(id=1)
+    member.guild = guild
+    bot = SimpleNamespace()
+    captured = {}
+
+    async def fake_assignment(**kwargs):
+        captured.update(kwargs)
+        return {
+            "stream_code": "2BACPC",
+            "subject_names": "Math",
+            "assignments_count": 3,
+            "assignment_summary": "2BACPC-S3: Math; 2BACPC-S4: Math; 1BACSE-S2: SVT",
+        }
+
+    response = _FakeInteractionResponse()
+    edit_original_response = AsyncMock()
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=101),
+        response=response,
+        edit_original_response=edit_original_response,
+    )
+
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_managed_role", lambda _guild, name: pending if name == ROLE_TEACHER_PENDING else None)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda *_args: None)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
+    monkeypatch.setattr(
+        "cogs.teacher_qr_onboarding.ensure_teacher_threads",
+        AsyncMock(return_value={"created": 3, "existing": 0, "failed": 0, "errors": []}),
+    )
+
+    view = TeacherOnboardingView(bot, 1, 101)
+    view._ensure_eligible = AsyncMock(return_value=member)
+
+    view.gender_select._values = ["male"]
+    await view.gender_select.callback(interaction)
+
+    level_a = "2ème Année Bac"
+    stream_a = "2ème Année Bac Sciences Physiques"
+    view.level_select._values = [level_a]
+    await view.level_select.callback(interaction)
+    view.stream_select._values = [stream_a]
+    await view.stream_select.callback(interaction)
+    view.section_select._values = ["3", "4"]
+    await view.section_select.callback(interaction)
+    await view.continue_button.callback(interaction)
+    assert "Mathématiques" in get_stream_subjects(level_a, stream_a)
+    view.subject_select._values = ["Mathématiques"]
+    await view.subject_select.callback(interaction)
+    await view.add_assignment_button.callback(interaction)
+
+    level_b = "1ère Année Bac"
+    stream_b = "1ère Année Bac Sciences Expérimentales"
+    view.level_select._values = [level_b]
+    await view.level_select.callback(interaction)
+    view.stream_select._values = [stream_b]
+    await view.stream_select.callback(interaction)
+    view.section_select._values = ["2"]
+    await view.section_select.callback(interaction)
+    await view.continue_button.callback(interaction)
+    subject_b = "Sciences de la Vie et de la Terre (SVT)"
+    assert subject_b in get_stream_subjects(level_b, stream_b)
+    view.subject_select._values = [subject_b]
+    await view.subject_select.callback(interaction)
+    await view.confirm_button.callback(interaction)
+
+    assert captured["assignments"] == [
+        {
+            "level": level_a,
+            "stream": stream_a,
+            "section": 3,
+            "subjects": ["Mathématiques"],
+        },
+        {
+            "level": level_a,
+            "stream": stream_a,
+            "section": 4,
+            "subjects": ["Mathématiques"],
+        },
+        {
+            "level": level_b,
+            "stream": stream_b,
+            "section": 2,
+            "subjects": [subject_b],
+        },
+    ]
+    assert captured["self_registration"] is True
+    assert "Inscription terminée" in edit_original_response.await_args.kwargs["content"]
