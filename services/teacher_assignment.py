@@ -457,8 +457,11 @@ async def execute_teacher_assignment(
         if registration_created and self_registration:
             try:
                 delete_teacher_registration(guild.id, teacher.id)
-            except OSError:
-                pass
+            except (OSError, sqlite3.Error):
+                logging.getLogger(__name__).exception(
+                    "Teacher registration cleanup failed after SQLite transaction error (guild=%s member=%s)",
+                    guild.id, teacher.id,
+                )
         for channel, role, overwrite in reversed(migration_permission_backups):
             try:
                 await channel.set_permissions(
@@ -488,8 +491,11 @@ async def execute_teacher_assignment(
         if registration_created and self_registration:
             try:
                 delete_teacher_registration(guild.id, teacher.id)
-            except OSError:
-                pass
+            except (OSError, sqlite3.Error):
+                logging.getLogger(__name__).exception(
+                    "Teacher registration cleanup failed after SQLite transaction error (guild=%s member=%s)",
+                    guild.id, teacher.id,
+                )
         for channel, role, overwrite in reversed(migration_permission_backups):
             try:
                 await channel.set_permissions(

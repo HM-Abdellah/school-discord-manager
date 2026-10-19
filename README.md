@@ -109,7 +109,7 @@ Administrators use `/createclasstransferqr` to prepare a one-student, one-use tr
 
 `/usagereport` is restricted to the configured server administrator or owner. It exports daily aggregate command-use counts and selected action names from existing audited workflows as a CSV attachment, and stores a local copy under `data/reports/`. The optional `days` value supports `1..400` days. The analytics tables store only server ID, command/action name, outcome, and UTC timestamp; they do not store user IDs, names, command arguments, message contents, or targets. Existing security/audit logs remain separate. Records older than 400 days are pruned as new analytics events are recorded. The report distinguishes completed command callbacks from uncaught application-command errors and from actions recorded by audited workflows; a callback completing is **not** proof that its business operation succeeded, and these metrics do not automatically measure time saved.
 
-`/resetserver` is scoped to persisted School Manager resource IDs. Unmanaged Discord resources are outside its deletion scope.
+`/resetserver` is scoped to persisted School Manager resource IDs and clears that guild’s student/teacher records, audit events, and aggregate usage telemetry. It refuses to start or continue deleting when unregistered channels remain inside a managed category, because keeping such a category after clearing its registry would block a clean rebuild. Move those channels to a separate category, then retry. Unmanaged Discord resources are never directly deleted.
 
 ## 🧱 Code organization
 

@@ -311,7 +311,10 @@ def save_all(data: dict[str, Any]) -> None:
 def _refresh_json_cache() -> None:
     try:
         save_all(_load_all_from_database())
-    except OSError as exc:
+    except (OSError, sqlite3.Error) as exc:
+        # The JSON file is a recoverable cache. Once the SQLite transaction has
+        # committed, a cache refresh error must not make the caller compensate
+        # an already-committed Discord operation as if the database write failed.
         print(f"[STORAGE] JSON cache refresh failed; SQLite remains authoritative: {exc}", flush=True)
 
 
@@ -1243,6 +1246,15 @@ def reset_guild_data(guild_id: int) -> None:
             conn.execute("DELETE FROM academic_years WHERE guild_id=?", (guild_id,))
             if _table_exists(conn, "audit_events"):
                 conn.execute("DELETE FROM audit_events WHERE guild_id=?", (guild_id,))
+            # Usage and audited-action telemetry is guild-scoped state too. Do
+            # not let demo/test activity leak into reports after a production
+            # reset; retain all other guilds' aggregate metrics.
+            for analytics_table in ("command_usage_events", "audited_action_events"):
+                if _table_exists(conn, analytics_table):
+                    conn.execute(
+                        f"DELETE FROM {analytics_table} WHERE guild_id=?",
+                        (guild_id,),
+                    )
             _mark_config_deleted_conn(conn, guild_id)
             conn.commit()
         except Exception:

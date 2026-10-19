@@ -13,6 +13,7 @@ rediscovering resources by name.
 from __future__ import annotations
 
 from copy import deepcopy
+import sqlite3
 import unicodedata
 
 import discord
@@ -465,7 +466,7 @@ class SafeRemoveStream(commands.Cog):
             try:
                 async with lock:
                     await _recover_pending_removal(guild, config, pending)
-            except (discord.Forbidden, discord.HTTPException, discord.NotFound, OSError, RuntimeError) as exc:
+            except (discord.Forbidden, discord.HTTPException, discord.NotFound, OSError, sqlite3.Error, RuntimeError) as exc:
                 await interaction.followup.send(f"❌ Reprise interrompue : `{type(exc).__name__}`. Le journal reste conservé pour une nouvelle reprise sûre.", ephemeral=True)
                 return
             await interaction.followup.send(f"✅ Reprise terminée : **{pending.get('code', '?')}** est maintenant cohérente côté Discord et configuration.", ephemeral=True)
@@ -550,7 +551,7 @@ class SafeRemoveStream(commands.Cog):
                 clear_removal_journal(candidate, checkpoint=checkpoint)
                 config.clear()
                 config.update(candidate)
-        except (discord.Forbidden, discord.HTTPException, discord.NotFound, OSError, RuntimeError) as exc:
+        except (discord.Forbidden, discord.HTTPException, discord.NotFound, OSError, sqlite3.Error, RuntimeError) as exc:
             await interaction.followup.send(f"❌ Suppression interrompue : `{type(exc).__name__}`. Le journal de reprise a été conservé; aucune nouvelle target ne sera découverte par son nom.", ephemeral=True)
             return
 

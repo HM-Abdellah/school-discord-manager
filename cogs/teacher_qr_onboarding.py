@@ -1734,18 +1734,29 @@ class TeacherQROnboarding(commands.Cog):
 
         working_config = deepcopy(get_guild_config(guild.id) or {})
         pending_role: discord.Role | None = None
+        created_role = False
+        registry_saved = False
         try:
             pending_role = get_managed_role(guild, ROLE_TEACHER_PENDING)
             if pending_role is None:
                 pending_role, created_role = await _get_or_create_pending_role(guild, working_config)
                 if created_role:
                     save_guild_config(guild.id, working_config)
+                    registry_saved = True
             if pending_role not in teacher.roles:
                 await teacher.add_roles(
                     pending_role,
                     reason="School Manager administrator-triggered teacher onboarding",
                 )
-        except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError, ValueError) as exc:
+        except (discord.Forbidden, discord.HTTPException, OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
+            if created_role and not registry_saved and pending_role is not None:
+                try:
+                    await pending_role.delete(reason="School Manager teacher registration setup rollback")
+                except discord.HTTPException as rollback_exc:
+                    logging.getLogger(__name__).error(
+                        "Could not roll back unregistered pending teacher role (guild=%s role=%s): %s",
+                        guild.id, pending_role.id, rollback_exc,
+                    )
             await interaction.followup.send(
                 "❌ Impossible de préparer l'inscription de ce membre : " + type(exc).__name__ + ": " + str(exc),
                 ephemeral=True,

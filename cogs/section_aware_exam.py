@@ -6,6 +6,7 @@ number is metadata on the exam, not a separate Discord stream or category.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 
 import discord
@@ -198,7 +199,7 @@ class SectionAwareExamCommands(commands.Cog):
                 f"{code}:section:{section}:exam:{message.id}"
             ] = message.id
             save_guild_config(guild.id, config)
-        except (discord.Forbidden, discord.HTTPException, OSError) as exc:
+        except (discord.Forbidden, discord.HTTPException, OSError, sqlite3.Error) as exc:
             if message is not None:
                 try:
                     await message.delete(reason="School Manager exam persistence rollback")

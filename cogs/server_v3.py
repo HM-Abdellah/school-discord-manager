@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 from copy import deepcopy
 
 import discord
@@ -555,9 +556,9 @@ class ServerCommands(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         try:
             create_and_activate_academic_year(guild.id, year, config)
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, sqlite3.Error) as exc:
             await interaction.followup.send(
-                f"❌ Impossible d'enregistrer l'année scolaire : `{exc}`",
+                f"❌ Impossible d'enregistrer l'année scolaire : `{type(exc).__name__}: {exc}`",
                 ephemeral=True,
             )
             return

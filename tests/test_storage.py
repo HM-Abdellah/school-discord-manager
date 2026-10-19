@@ -384,3 +384,29 @@ def test_reset_guild_data_clears_only_that_guild_transfer_requests(tmp_path, mon
     storage.reset_guild_data(101)
     with storage._connect() as conn:
         assert [tuple(row) for row in conn.execute("SELECT guild_id FROM class_transfer_requests ORDER BY guild_id").fetchall()] == [(202,)]
+
+
+def test_reset_guild_data_clears_only_target_guild_analytics(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
+    storage.initialize_database()
+    with storage._connect() as conn:
+        conn.execute(
+            "CREATE TABLE command_usage_events (id INTEGER PRIMARY KEY, guild_id INTEGER, command_name TEXT, outcome TEXT, created_at TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE audited_action_events (id INTEGER PRIMARY KEY, guild_id INTEGER, action TEXT, created_at TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO command_usage_events VALUES(?,?,?,?,?)",
+            [(1, 101, "build", "completed", "2026-10-01"), (2, 202, "status", "completed", "2026-10-01")],
+        )
+        conn.executemany(
+            "INSERT INTO audited_action_events VALUES(?,?,?,?)",
+            [(1, 101, "assignstudent", "2026-10-01"), (2, 202, "newyear", "2026-10-01")],
+        )
+        conn.commit()
+
+    storage.reset_guild_data(101)
+    with storage._connect() as conn:
+        assert [tuple(row) for row in conn.execute("SELECT guild_id,command_name FROM command_usage_events").fetchall()] == [(202, "status")]
+        assert [tuple(row) for row in conn.execute("SELECT guild_id,action FROM audited_action_events").fetchall()] == [(202, "newyear")]

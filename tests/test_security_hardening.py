@@ -276,3 +276,27 @@ def test_reset_reuses_only_valid_archive_for_matching_guild(tmp_path, monkeypatc
     assert reset_module._existing_reset_archive(101, archive.name) == archive
     assert reset_module._existing_reset_archive(202, archive.name) is None
     assert reset_module._existing_reset_archive(101, "../school.db") is None
+
+
+def test_reset_preflight_detects_unregistered_channels_inside_managed_categories():
+    from cogs.security_hardening_v3 import _unregistered_children_of_managed_categories
+
+    managed_text = SimpleNamespace(id=201, name="📌-TCS・informations", category_id=200)
+    unmanaged_text = SimpleNamespace(id=999, name="manual-notes", category_id=200)
+    outside_text = SimpleNamespace(id=1000, name="unrelated", category_id=555)
+    category = SimpleNamespace(id=200, name="managed-category", category_id=None)
+    live_channels = {item.id: item for item in (category, managed_text, unmanaged_text, outside_text)}
+
+    assert _unregistered_children_of_managed_categories(live_channels, {201}, {200}) == [
+        (200, "manual-notes")
+    ]
+
+
+def test_reset_preflight_allows_categories_with_only_registered_children():
+    from cogs.security_hardening_v3 import _unregistered_children_of_managed_categories
+
+    category = SimpleNamespace(id=200, name="managed-category", category_id=None)
+    managed_text = SimpleNamespace(id=201, name="managed-text", category_id=200)
+    live_channels = {200: category, 201: managed_text}
+
+    assert _unregistered_children_of_managed_categories(live_channels, {201}, {200}) == []
