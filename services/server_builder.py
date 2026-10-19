@@ -110,7 +110,7 @@ def _level_category_name(level_name: str) -> str:
     return LEVEL_PREFIXES.get(level_name, f"📚・{_safe_name(level_name, 30).upper()}")
 
 
-def _subject_channel_overwrites(everyone, admin_role, professor_role, female_professor_role, teacher_stream_role, student_stream_role, student_role=None):
+def _subject_channel_overwrites(everyone, admin_role, professor_role, female_professor_role, teacher_stream_role, student_stream_role, student_role=None, bot_member=None):
     teacher = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, create_public_threads=True, send_messages_in_threads=True)
     professor = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
     student = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, create_public_threads=True, send_messages_in_threads=True)
@@ -118,6 +118,16 @@ def _subject_channel_overwrites(everyone, admin_role, professor_role, female_pro
     overwrites = {everyone: discord.PermissionOverwrite(view_channel=False), admin_role: admin, professor_role: professor, female_professor_role: professor, teacher_stream_role: teacher, student_stream_role: student}
     if student_role is not None:
         overwrites[student_role] = student_view_overwrite()
+    if bot_member is not None:
+        # Subject channels are hidden from @everyone, so the bot needs a narrow
+        # member overwrite to manage teacher threads in those managed channels.
+        overwrites[bot_member] = discord.PermissionOverwrite(
+            view_channel=True,
+            read_message_history=True,
+            send_messages=True,
+            create_public_threads=True,
+            manage_threads=True,
+        )
     return overwrites
 
 
@@ -442,7 +452,16 @@ class ServerBuilder:
             await self._get_or_create_text(category, f"📌-{code}・informations", topic=f"{code} — {stream_name}. Informations générales et organisation de la filière.", overwrites=announcement_overwrites)
             await self._get_or_create_text(category, f"🗓️-{code}・emploi-du-temps", topic=f"Emplois du temps de {stream_name} ({level_name}).", overwrites=announcement_overwrites)
             await self._get_or_create_text(category, f"📝-{code}・examens", topic=f"Dates, horaires et consignes des examens pour {stream_name} — {level_name}.", overwrites=announcement_overwrites)
-            subject_overwrites = _subject_channel_overwrites(self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], roles[ROLE_PROFESSOR_FEMALE], teacher_stream_role, student_stream_role, roles[ROLE_STUDENT])
+            subject_overwrites = _subject_channel_overwrites(
+                self.guild.default_role,
+                roles[ROLE_ADMIN],
+                roles[ROLE_PROFESSOR],
+                roles[ROLE_PROFESSOR_FEMALE],
+                teacher_stream_role,
+                student_stream_role,
+                roles[ROLE_STUDENT],
+                bot_member=getattr(self.guild, "me", None),
+            )
             for subject in subjects:
                 await self._get_or_create_text(category, _subject_channel_name(code, subject), topic=f"Cours, devoirs, exercices, examens blancs et ressources de {get_subject_display_name(subject)} pour {stream_name} ({level_name}).", overwrites=subject_overwrites)
             await self._get_or_create_voice(voice_category, f"🔊-{_safe_name(code, 30)}-à-distance", public_voice_overwrites(self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT], teacher_stream_role, student_stream_role))

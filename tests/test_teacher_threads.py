@@ -1,10 +1,11 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import discord
 import pytest
 
 from services import teacher_threads
+from services.teacher_threads import _ensure_bot_thread_channel_access
 
 
 def _row(assignment_id=1, section=3, subject="Mathématiques", thread_id=None, status="pending", full_name="Prof Test", discord_id=101):
@@ -321,3 +322,117 @@ async def test_ensure_teacher_threads_does_not_adopt_same_named_thread_owned_by_
     assert result["existing"] == 0
     channel.create_thread.assert_awaited_once()
     assert updates[0] == (1, {"status": "created", "thread_id": 9002, "error": None})
+
+
+@pytest.mark.asyncio
+async def test_bot_thread_channel_access_repairs_missing_access_with_member_overwrite():
+    bot_member = SimpleNamespace(
+        id=777,
+        guild_permissions=discord.Permissions(manage_roles=True),
+    )
+    effective = discord.Permissions.none()
+    channel = SimpleNamespace(
+        name="📚-2BACPC・math",
+        permissions_for=lambda member: effective,
+        overwrites_for=lambda member: discord.PermissionOverwrite(embed_links=False),
+        set_permissions=AsyncMock(),
+    )
+
+    repaired = await _ensure_bot_thread_channel_access(
+        SimpleNamespace(me=bot_member), channel
+    )
+
+    assert repaired is True
+    channel.set_permissions.assert_awaited_once()
+    target = channel.set_permissions.await_args.args[0]
+    overwrite = channel.set_permissions.await_args.kwargs["overwrite"]
+    assert target is bot_member
+    assert overwrite.view_channel is True
+    assert overwrite.read_message_history is True
+    assert overwrite.send_messages is True
+    assert overwrite.create_public_threads is True
+    assert overwrite.manage_threads is True
+    assert overwrite.embed_links is False
+
+
+@pytest.mark.asyncio
+async def test_bot_thread_channel_access_does_not_change_correct_permissions():
+    bot_member = SimpleNamespace(
+        id=777,
+        guild_permissions=discord.Permissions(manage_roles=True),
+    )
+    effective = discord.Permissions(
+        view_channel=True,
+        read_message_history=True,
+        send_messages=True,
+        create_public_threads=True,
+        manage_threads=True,
+    )
+    channel = SimpleNamespace(
+        name="📚-2BACPC・math",
+        permissions_for=lambda member: effective,
+        overwrites_for=lambda member: discord.PermissionOverwrite(),
+        set_permissions=AsyncMock(),
+    )
+
+    repaired = await _ensure_bot_thread_channel_access(
+        SimpleNamespace(me=bot_member), channel
+    )
+
+    assert repaired is False
+    channel.set_permissions.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bot_thread_channel_access_fails_closed_without_manage_roles():
+    bot_member = SimpleNamespace(
+        id=777,
+        guild_permissions=discord.Permissions.none(),
+    )
+    channel = SimpleNamespace(
+        name="📚-2BACPC・math",
+        permissions_for=lambda member: discord.Permissions.none(),
+        overwrites_for=lambda member: discord.PermissionOverwrite(),
+        set_permissions=AsyncMock(),
+    )
+
+    with pytest.raises(RuntimeError, match="Manage Roles"):
+        await _ensure_bot_thread_channel_access(
+            SimpleNamespace(me=bot_member), channel
+        )
+    channel.set_permissions.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ensure_teacher_threads_repairs_bot_channel_access_before_listing_or_creating(monkeypatch):
+    events = []
+    channel = _channel()
+    channel.permissions_for = MagicMock(return_value=discord.Permissions.none())
+    channel.overwrites_for = MagicMock(return_value=discord.PermissionOverwrite(embed_links=False))
+    async def set_permissions(*args, **kwargs):
+        events.append("repair_permissions")
+    channel.set_permissions = AsyncMock(side_effect=set_permissions)
+    async def archived_threads(limit=None):
+        events.append("list_archives")
+        if False:
+            yield None
+    channel.archived_threads = archived_threads
+    async def create_thread(**kwargs):
+        events.append("create_thread")
+        return SimpleNamespace(id=9099, name=kwargs["name"], type=discord.ChannelType.public_thread)
+    channel.create_thread = AsyncMock(side_effect=create_thread)
+    bot_member = SimpleNamespace(
+        id=777, guild_permissions=discord.Permissions(manage_roles=True)
+    )
+    guild = SimpleNamespace(id=1, me=bot_member)
+    monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: [_row()])
+    monkeypatch.setattr(teacher_threads, "get_guild_config", lambda *_args: {})
+    async def resolve(*_args, **_kwargs):
+        return channel, False
+    monkeypatch.setattr(teacher_threads, "resolve_managed_text_channel", resolve)
+    monkeypatch.setattr(teacher_threads, "update_teacher_assignment_thread", lambda *_args, **_kwargs: None)
+
+    result = await teacher_threads.ensure_teacher_threads(guild, 101)
+
+    assert result["created"] == 1
+    assert events == ["repair_permissions", "list_archives", "create_thread"]

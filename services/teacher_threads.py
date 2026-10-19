@@ -36,6 +36,67 @@ def _error_text(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"[:500]
 
 
+_THREAD_CHANNEL_REQUIRED_PERMISSIONS = (
+    "view_channel",
+    "read_message_history",
+    "send_messages",
+    "create_public_threads",
+    "manage_threads",
+)
+
+
+async def _ensure_bot_thread_channel_access(
+    guild: discord.Guild, channel: discord.TextChannel
+) -> bool:
+    """Repair only the bot member's access to a trusted managed subject channel.
+
+    Managed subject channels intentionally deny @everyone visibility. Without a
+    bot-specific overwrite, the bot can resolve the channel from guild state but
+    Discord rejects thread operations with 50001 Missing Access. A member-level
+    overwrite is narrowly scoped to this bot and leaves all student/teacher
+    visibility rules intact.
+    """
+    bot_member = getattr(guild, "me", None)
+    if bot_member is None:
+        # Real discord.py Guild objects always expose ``me``. Allow minimal fake
+        # guild objects in isolated legacy unit tests to exercise thread logic.
+        return False
+
+    effective = channel.permissions_for(bot_member)
+    missing = [
+        permission
+        for permission in _THREAD_CHANNEL_REQUIRED_PERMISSIONS
+        if not getattr(effective, permission, False)
+    ]
+    if not missing:
+        return False
+
+    guild_permissions = getattr(bot_member, "guild_permissions", None)
+    if not getattr(guild_permissions, "manage_roles", False):
+        raise RuntimeError(
+            f"Le bot n'a pas les permissions effectives {', '.join(missing)} dans le salon géré "
+            f"{channel.name!r} et ne peut pas corriger les overwrites sans la permission serveur Manage Roles."
+        )
+
+    try:
+        overwrite = channel.overwrites_for(bot_member)
+        for permission in _THREAD_CHANNEL_REQUIRED_PERMISSIONS:
+            setattr(overwrite, permission, True)
+        await channel.set_permissions(
+            bot_member,
+            overwrite=overwrite,
+            reason="School Manager: restore bot access to managed subject channel for teacher threads",
+        )
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        raise RuntimeError(
+            f"Le bot ne possède pas les permissions {', '.join(missing)} dans le salon géré "
+            f"{channel.name!r}; Discord a refusé la réparation ciblée de ses permissions: "
+            f"{_error_text(exc)}"
+        ) from exc
+
+    return True
+
+
 async def _activate_thread(thread: discord.Thread) -> None:
     """Reopen a matching historical thread when it becomes a current assignment again."""
     if getattr(thread, "archived", False) or getattr(thread, "locked", False):
@@ -94,6 +155,7 @@ async def ensure_teacher_threads(guild: discord.Guild, teacher_id: int) -> dict[
                     f"Le salon {channel_name} existe, mais la réparation de son registre géré "
                     "n'a pas pu être enregistrée; relancez la synchronisation après vérification du stockage."
                 )
+            await _ensure_bot_thread_channel_access(guild, channel)
             existing_threads = await all_public_threads(channel)
         except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError) as exc:
             message = f"{code} / {get_subject_display_name(subject)}: {_error_text(exc)}"

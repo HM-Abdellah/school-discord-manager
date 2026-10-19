@@ -7,6 +7,7 @@ import pytest
 from services.server_builder import (
     ServerBuilder,
     _stream_category_name,
+    _subject_channel_overwrites,
 )
 
 
@@ -209,3 +210,28 @@ def test_validate_capacity_rejects_existing_category_that_would_exceed_limit():
 
     with pytest.raises(ValueError, match="dépasserait.*51"):
         builder._validate_capacity(selected)
+
+
+def test_subject_channel_overwrites_grant_bot_scoped_thread_access_without_exposing_channel():
+    everyone = object()
+    admin = object()
+    professor = object()
+    female_professor = object()
+    teacher_stream = object()
+    student_stream = object()
+    student = object()
+    bot_member = object()
+
+    overwrites = _subject_channel_overwrites(
+        everyone, admin, professor, female_professor, teacher_stream,
+        student_stream, student, bot_member=bot_member,
+    )
+
+    assert overwrites[everyone].view_channel is False
+    assert overwrites[bot_member].view_channel is True
+    assert overwrites[bot_member].read_message_history is True
+    assert overwrites[bot_member].send_messages is True
+    assert overwrites[bot_member].create_public_threads is True
+    assert overwrites[bot_member].manage_threads is True
+    assert overwrites[student].view_channel is True
+    assert overwrites[student].send_messages is False
