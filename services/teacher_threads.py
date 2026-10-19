@@ -58,9 +58,16 @@ async def _ensure_bot_thread_channel_access(
     """
     bot_member = getattr(guild, "me", None)
     if bot_member is None:
-        # Real discord.py Guild objects always expose ``me``. Allow minimal fake
-        # guild objects in isolated legacy unit tests to exercise thread logic.
-        return False
+        # Lightweight test doubles predating this helper have no ``me`` field.
+        # A real Guild exposes the property but can return None if the bot member
+        # is not cached; fail clearly instead of silently skipping the repair.
+        if not hasattr(guild, "me"):
+            return False
+        raise RuntimeError(
+            "Impossible de réparer les permissions du salon géré : le membre du bot "
+            "(guild.me) n'est pas disponible dans le cache Discord. Vérifiez que le bot "
+            "est bien présent dans ce serveur puis reconnectez-le avant de relancer la synchronisation."
+        )
 
     effective = channel.permissions_for(bot_member)
     missing = [

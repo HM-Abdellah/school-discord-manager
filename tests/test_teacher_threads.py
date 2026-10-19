@@ -436,3 +436,81 @@ async def test_ensure_teacher_threads_repairs_bot_channel_access_before_listing_
 
     assert result["created"] == 1
     assert events == ["repair_permissions", "list_archives", "create_thread"]
+
+
+@pytest.mark.asyncio
+async def test_bot_thread_channel_access_reports_missing_cached_bot_member():
+    bot_member = None
+    channel = SimpleNamespace(
+        name="📚-2BACPC・math",
+        permissions_for=MagicMock(),
+        overwrites_for=MagicMock(),
+        set_permissions=AsyncMock(),
+    )
+
+    with pytest.raises(RuntimeError, match="guild.me.*pas disponible"):
+        await _ensure_bot_thread_channel_access(
+            SimpleNamespace(me=bot_member), channel
+        )
+
+    channel.set_permissions.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bot_thread_channel_access_reports_discord_permission_rejection():
+    bot_member = SimpleNamespace(
+        id=777, guild_permissions=discord.Permissions(manage_roles=True)
+    )
+    response = SimpleNamespace(status=403, reason="Forbidden")
+    channel = SimpleNamespace(
+        name="📚-2BACPC・math",
+        permissions_for=MagicMock(return_value=discord.Permissions.none()),
+        overwrites_for=MagicMock(return_value=discord.PermissionOverwrite()),
+        set_permissions=AsyncMock(
+            side_effect=discord.Forbidden(response, "Missing Manage Roles")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="réparation ciblée.*Forbidden"):
+        await _ensure_bot_thread_channel_access(
+            SimpleNamespace(me=bot_member), channel
+        )
+
+
+@pytest.mark.asyncio
+async def test_teacher_thread_sync_stops_before_archive_scan_if_permission_repair_is_rejected(monkeypatch):
+    response = SimpleNamespace(status=403, reason="Forbidden")
+    channel = _channel()
+    channel.permissions_for = MagicMock(return_value=discord.Permissions.none())
+    channel.overwrites_for = MagicMock(return_value=discord.PermissionOverwrite())
+    channel.set_permissions = AsyncMock(
+        side_effect=discord.Forbidden(response, "Missing Manage Roles")
+    )
+    channel.archived_threads = AsyncMock(side_effect=AssertionError("archive scan must not run"))
+    updates = []
+    bot_member = SimpleNamespace(
+        id=777, guild_permissions=discord.Permissions(manage_roles=True)
+    )
+
+    monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: [_row()])
+    monkeypatch.setattr(teacher_threads, "get_guild_config", lambda *_args: {})
+    async def resolve(*_args, **_kwargs):
+        return channel, False
+    monkeypatch.setattr(teacher_threads, "resolve_managed_text_channel", resolve)
+    monkeypatch.setattr(
+        teacher_threads,
+        "update_teacher_assignment_thread",
+        lambda guild_id, assignment_id, **kwargs: updates.append(kwargs),
+    )
+
+    result = await teacher_threads.ensure_teacher_threads(
+        SimpleNamespace(id=1, me=bot_member), 101
+    )
+
+    assert result["failed"] == 1
+    assert result["created"] == 0
+    assert "refusé la réparation ciblée" in result["errors"][0]
+    assert updates[0]["status"] == "failed"
+    assert updates[0]["error"] == result["errors"][0]
+    channel.archived_threads.assert_not_awaited()
+    channel.create_thread.assert_not_awaited()
