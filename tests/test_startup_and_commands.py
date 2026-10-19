@@ -207,20 +207,18 @@ def test_assignteacherfull_is_admin_only_and_requires_target():
     assert teacher_parameter.required is True
 
 
-def test_teacher_operational_commands_are_registered_and_role_restricted():
+def test_teacher_operational_commands_are_visible_without_manage_roles_default():
     module = importlib.import_module("cogs.teachers")
     bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
     cog = module.TeacherCommands(bot)
 
     absence = cog.absence_teacher
-    assert absence.default_permissions is not None
-    assert absence.default_permissions.manage_roles is True
+    assert absence.default_permissions is None
 
     exam = importlib.import_module("cogs.section_aware_exam")
     exam_cog = exam.SectionAwareExamCommands(bot)
     setexam = exam_cog.set_exam
-    assert setexam.default_permissions is not None
-    assert setexam.default_permissions.manage_roles is True
+    assert setexam.default_permissions is None
 
 
 def test_teacher_qr_commands_are_admin_visible_only():

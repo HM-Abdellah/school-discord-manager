@@ -59,12 +59,14 @@ class TransactionalServerBuilder(ServerBuilder):
 
     async def _create_role(self, name: str, **kwargs: Any) -> discord.Role:
         before = self._role_ids(self.guild)
-        role = await super()._create_role(name, **kwargs)
-        if int(role.id) not in before and all(
-            existing.id != role.id for existing in self.created_roles
-        ):
-            self.created_roles.append(role)
-        return role
+        try:
+            return await super()._create_role(name, **kwargs)
+        finally:
+            for role in getattr(self.guild, "roles", []):
+                if int(role.id) not in before and all(
+                    existing.id != role.id for existing in self.created_roles
+                ):
+                    self.created_roles.append(role)
 
     async def _get_or_create_category(
         self,
@@ -72,12 +74,17 @@ class TransactionalServerBuilder(ServerBuilder):
         overwrites=None,
     ) -> discord.CategoryChannel:
         before = self._channel_ids(self.guild, self._channel_snapshot)
-        category = await super()._get_or_create_category(name, overwrites)
-        if int(category.id) not in before and all(
-            existing.id != category.id for existing in self.created_categories
-        ):
-            self.created_categories.append(category)
-        return category
+        try:
+            return await super()._get_or_create_category(name, overwrites)
+        finally:
+            candidates = list(self._channel_snapshot) + list(getattr(self.guild, "channels", []))
+            for category in candidates:
+                if (
+                    int(getattr(category, "id", 0)) not in before
+                    and isinstance(category, discord.CategoryChannel)
+                    and all(existing.id != category.id for existing in self.created_categories)
+                ):
+                    self.created_categories.append(category)
 
     async def _get_or_create_text(
         self,
@@ -88,17 +95,22 @@ class TransactionalServerBuilder(ServerBuilder):
         overwrites: dict,
     ) -> discord.TextChannel:
         before = self._channel_ids(self.guild, self._channel_snapshot)
-        channel = await super()._get_or_create_text(
-            category,
-            name,
-            topic=topic,
-            overwrites=overwrites,
-        )
-        if int(channel.id) not in before and all(
-            existing.id != channel.id for existing in self.created_channels
-        ):
-            self.created_channels.append(channel)
-        return channel
+        try:
+            return await super()._get_or_create_text(
+                category,
+                name,
+                topic=topic,
+                overwrites=overwrites,
+            )
+        finally:
+            candidates = list(self._channel_snapshot) + list(getattr(self.guild, "channels", []))
+            for channel in candidates:
+                if (
+                    int(getattr(channel, "id", 0)) not in before
+                    and isinstance(channel, discord.TextChannel)
+                    and all(existing.id != channel.id for existing in self.created_channels)
+                ):
+                    self.created_channels.append(channel)
 
     async def _get_or_create_voice(
         self,
@@ -107,12 +119,17 @@ class TransactionalServerBuilder(ServerBuilder):
         overwrites: dict,
     ) -> discord.VoiceChannel:
         before = self._channel_ids(self.guild, self._channel_snapshot)
-        channel = await super()._get_or_create_voice(category, name, overwrites)
-        if int(channel.id) not in before and all(
-            existing.id != channel.id for existing in self.created_channels
-        ):
-            self.created_channels.append(channel)
-        return channel
+        try:
+            return await super()._get_or_create_voice(category, name, overwrites)
+        finally:
+            candidates = list(self._channel_snapshot) + list(getattr(self.guild, "channels", []))
+            for channel in candidates:
+                if (
+                    int(getattr(channel, "id", 0)) not in before
+                    and isinstance(channel, discord.VoiceChannel)
+                    and all(existing.id != channel.id for existing in self.created_channels)
+                ):
+                    self.created_channels.append(channel)
 
     async def rollback(self) -> None:
         """Delete only resources created by this transaction, in dependency order."""
@@ -162,6 +179,10 @@ async def build_and_persist(
     """Run a build against an isolated config and commit it only after success."""
     working_config = deepcopy(config)
     current_config = get_guild_config(guild.id)
+    if isinstance(current_config, dict) and current_config.get("pending_reset") is not None:
+        raise ValueError(
+            "Un reset du serveur est interrompu et doit être repris via /resetserver avant toute nouvelle construction."
+        )
     if isinstance(current_config, dict) and current_config.get("pending_removal") is not None:
         raise ValueError(
             "Une suppression de filière est interrompue et doit être reprise via /removestream avant toute nouvelle construction."
@@ -181,7 +202,10 @@ async def build_and_persist(
         stats = await builder.build(working_config)
         validate_managed_registry_completeness(working_config)
         save_guild_config(guild.id, working_config)
-    except Exception:
+    except BaseException:
+        # asyncio.CancelledError is not an Exception on supported Python versions.
+        # A shutdown/cancellation mid-build must still remove resources created by
+        # this transaction before the cancellation propagates to the caller.
         await builder.rollback()
         raise
 

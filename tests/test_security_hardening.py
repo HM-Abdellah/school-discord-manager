@@ -192,8 +192,8 @@ def test_reset_role_hierarchy_fails_before_mutation():
 
 def test_reset_archives_before_discord_deletion():
     source = open("cogs/security_hardening_v3.py", encoding="utf-8").read()
-    assert "archive_path = archive_guild_database" in source
-    assert source.index("archive_path = archive_guild_database") < source.index("await channel.delete")
+    assert "archive_path = prior_archive or archive_guild_database(guild.id, archive_year)" in source
+    assert source.index("archive_path = prior_archive or archive_guild_database") < source.index("await channel.delete")
 
 
 def test_latency_sensitive_commands_acknowledge_before_slow_work():
@@ -207,3 +207,72 @@ def test_latency_sensitive_commands_acknowledge_before_slow_work():
     assert report.index("await interaction.followup.send") > report.index("await interaction.response.defer(ephemeral=True)")
     assert full.index("await interaction.response.defer(ephemeral=True)") < full.index("execute_teacher_assignment(")
     assert "except TeacherAssignmentError as exc" in full
+
+
+def test_reset_includes_registered_class_roles_outside_managed_role_registry():
+    from cogs.security_hardening_v3 import _registered_class_role_ids
+
+    section_role = FakeComparableRole("Élèves - 2BACPC-2", 303, 3)
+    guild = SimpleNamespace(roles=[section_role], get_role=lambda role_id: section_role if role_id == 303 else None)
+    config = {
+        "class_roles": {
+            "2BACPC-2": {
+                "role_id": 303,
+                "level_name": "2ème Année Bac",
+                "stream_name": "2ème Année Bac Sciences Physiques",
+                "stream_code": "2BACPC",
+                "section": 2,
+            }
+        }
+    }
+
+    assert _registered_class_role_ids(guild, config) == {303}
+
+
+def test_reset_refuses_mismatched_registered_class_role_identity():
+    from cogs.security_hardening_v3 import _registered_class_role_ids
+
+    section_role = FakeComparableRole("Manual Unrelated Role", 303, 3)
+    guild = SimpleNamespace(roles=[section_role], get_role=lambda role_id: section_role if role_id == 303 else None)
+    config = {
+        "class_roles": {
+            "2BACPC-2": {
+                "role_id": 303,
+                "level_name": "2ème Année Bac",
+                "stream_name": "2ème Année Bac Sciences Physiques",
+                "stream_code": "2BACPC",
+                "section": 2,
+            }
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="identité enregistrée"):
+        _registered_class_role_ids(guild, config)
+
+
+def test_reset_always_archives_even_without_active_academic_year():
+    source = open("cogs/security_hardening_v3.py", encoding="utf-8").read()
+    assert 'else "no-active-year"' in source
+    assert "archive_path = prior_archive or archive_guild_database(guild.id, archive_year)" in source
+    assert source.index("archive_path = prior_archive or archive_guild_database") < source.index("await channel.delete")
+
+
+def test_reset_reuses_only_valid_archive_for_matching_guild(tmp_path, monkeypatch):
+    import sqlite3
+    from cogs import security_hardening_v3 as reset_module
+
+    archive_dir = tmp_path / "archives"
+    archive_dir.mkdir()
+    archive = archive_dir / "2026-2027.db"
+    with sqlite3.connect(archive) as conn:
+        conn.execute(
+            "CREATE TABLE archive_metadata (id INTEGER PRIMARY KEY CHECK(id=1), guild_id INTEGER NOT NULL, academic_year TEXT NOT NULL, archived_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO archive_metadata VALUES (1,101,'2026/2027','2026-10-01T00:00:00+00:00')"
+        )
+
+    monkeypatch.setattr(reset_module, "DATA_DIR", tmp_path)
+    assert reset_module._existing_reset_archive(101, archive.name) == archive
+    assert reset_module._existing_reset_archive(202, archive.name) is None
+    assert reset_module._existing_reset_archive(101, "../school.db") is None

@@ -408,6 +408,7 @@ async def test_member_join_persists_the_class_from_its_registered_role(monkeypat
         }
     }
     student_role = Role(901, "Élève")
+    student_stream_role = Role(902, "Élèves - 2BACPC")
     captured = {}
 
     monkeypatch.setattr("cogs.qr_onboarding.get_guild_config", lambda _guild_id: config)
@@ -417,7 +418,10 @@ async def test_member_join_persists_the_class_from_its_registered_role(monkeypat
     )
     monkeypatch.setattr(
         "cogs.qr_onboarding.get_managed_role",
-        lambda _guild, name: student_role if name == "Élève" else None,
+        lambda _guild, name: {
+            "Élève": student_role,
+            "Élèves - 2BACPC": student_stream_role,
+        }.get(name),
     )
     monkeypatch.setattr(
         "cogs.qr_onboarding.enroll_student_record",
@@ -429,6 +433,7 @@ async def test_member_join_persists_the_class_from_its_registered_role(monkeypat
 
     member.add_roles.assert_awaited_once_with(
         student_role,
+        student_stream_role,
         reason="School Manager class QR onboarding",
     )
     assert captured["args"][-1] == "2ème Année Bac Sciences Physiques"

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -213,6 +216,22 @@ class StudentCommands(commands.Cog):
                 await student.remove_roles(*cleanup_roles, reason="Student role normalization")
             await student.add_roles(student_role, student_stream_role, reason="Student stream assignment")
             enroll_student_record(guild.id, student.id, student.display_name, int(year["id"]), level, stream)
+        except asyncio.CancelledError:
+            try:
+                await _restore_school_roles(student, guild, original_school_roles)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Student role rollback failed after cancellation (guild=%s student=%s)",
+                    guild.id, student.id,
+                )
+            try:
+                restore_student_state(guild.id, student.id, student_state_snapshot)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Student database rollback failed after cancellation (guild=%s student=%s)",
+                    guild.id, student.id,
+                )
+            raise
         except discord.Forbidden:
             try:
                 await _restore_school_roles(student, guild, original_school_roles)
@@ -248,7 +267,7 @@ class StudentCommands(commands.Cog):
             return
         code = get_stream_abbreviation(level, stream)
         record_event(guild.id, interaction.user.id, interaction.user.display_name, "assignstudent", student.display_name, f"{level}: {code}")
-        await interaction.followup.send(f"✅ {student.mention} est maintenant dans **{code}** ({level}). Seule sa filière scolaire est accessible.", ephemeral=True)
+        await interaction.followup.send(f"✅ {student.mention} est maintenant dans **{code}** ({level}). Il peut consulter les matières, mais ne peut publier que dans sa filière scolaire.", ephemeral=True)
 
     @app_commands.command(name="studenthistory", description="Voir l'historique scolaire d'un élève.")
     @app_commands.describe(student="Élève")

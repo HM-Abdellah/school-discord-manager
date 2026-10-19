@@ -35,7 +35,7 @@ Managed stream roles are persisted by Discord ID. Destructive operations resolve
 
 Logical academic data is stored in SQLite at `data/school.db`. The JSON file is a cache/export layer and is refreshed from SQLite.
 
-Before `/resetserver` deletes the managed School Manager state, the bot creates a standalone SQLite archive of the current database under `data/archives/<academic-year>.db`. The archive is written atomically and integrity-checked; if archive creation fails, the destructive reset is refused. Existing archive names are never overwritten: a UTC timestamp suffix is used when needed.
+Before `/resetserver` deletes the managed School Manager state, the bot creates a standalone, integrity-checked SQLite archive scoped to that guild under `data/archives/<academic-year>.db`; student/enrollment and analytics records belonging to other guilds are excluded. If no academic year is active, the archive uses `no-active-year`. Existing archive names are never overwritten: a UTC timestamp suffix is used when needed. If a reset is interrupted, the original validated pre-reset archive is reused on retry instead of replacing the recovery point with a partial snapshot. Keep an independent backup as well.
 
 Academic years are **logical state and history**, not Discord deployments. The `academic_years` table is authoritative for the active year. The Discord configuration and managed-resource registry represent the **currently deployed Discord structure**. Changing or rolling back the active academic year does not delete, rebuild, rename, or otherwise mutate Discord channels or roles.
 

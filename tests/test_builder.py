@@ -240,3 +240,30 @@ def test_subject_channel_overwrites_grant_bot_scoped_thread_access_without_expos
     assert overwrites[student_stream].create_public_threads is False
     assert overwrites[student_stream].create_private_threads is False
     assert overwrites[student_stream].send_messages_in_threads is False
+
+
+def test_fresh_channel_snapshot_does_not_reuse_deleted_cached_category():
+    category = MagicMock(spec=discord.CategoryChannel)
+    category.name = "stale-category"
+    category.id = 900
+    guild = SimpleNamespace(categories=[category])
+    builder = ServerBuilder(guild)
+    builder._channel_snapshot = []
+    builder._channel_snapshot_refreshed = True
+
+    assert builder._find_category("stale-category") is None
+
+
+def test_fresh_channel_snapshot_does_not_reuse_deleted_cached_text_channel():
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.name = "stale-channel"
+    channel.id = 901
+    channel.category_id = 902
+    category = MagicMock(spec=discord.CategoryChannel)
+    category.id = 902
+    category.text_channels = [channel]
+    builder = ServerBuilder(SimpleNamespace())
+    builder._channel_snapshot = []
+    builder._channel_snapshot_refreshed = True
+
+    assert builder._find_text(category, "stale-channel") is None

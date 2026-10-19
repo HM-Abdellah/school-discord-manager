@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -230,3 +231,74 @@ def test_channel_registry_completeness_accepts_discord_lowercased_keys():
     }
 
     validate_managed_registry_completeness(config)
+
+
+@pytest.mark.asyncio
+async def test_build_rejects_interrupted_reset_before_any_discord_mutation(monkeypatch):
+    current = {"academic_year": "2026/2027", "pending_reset": {"archive": "2026-2027.db"}}
+    candidate = {"academic_year": "2026/2027", "levels": []}
+    monkeypatch.setattr(build_transaction, "get_guild_config", lambda _guild_id: current)
+
+    with pytest.raises(ValueError, match="reset du serveur est interrompu"):
+        await build_transaction.build_and_persist(SimpleNamespace(id=123), candidate)
+
+
+@pytest.mark.asyncio
+async def test_build_cancellation_attempts_rollback_before_propagating(monkeypatch):
+    class _CancelledBuilder(_FakeBuilder):
+        async def build(self, config):
+            config["managed"] = {"roles": {"Administration": 10}, "categories": {}, "channels": {}}
+            raise asyncio.CancelledError()
+
+    builder = _CancelledBuilder(SimpleNamespace(id=123))
+    monkeypatch.setattr(build_transaction, "TransactionalServerBuilder", lambda guild: builder)
+    monkeypatch.setattr(build_transaction, "validate_managed_registry", _no_conflict)
+    monkeypatch.setattr(build_transaction, "get_guild_config", lambda _guild_id: None)
+    original = {"academic_year": "2026/2027", "levels": []}
+
+    with pytest.raises(asyncio.CancelledError):
+        await build_transaction.build_and_persist(SimpleNamespace(id=123), original)
+
+    builder.rollback.assert_awaited_once()
+    assert original == {"academic_year": "2026/2027", "levels": []}
+
+
+@pytest.mark.asyncio
+async def test_transaction_tracks_category_created_before_cancellation(monkeypatch):
+    import discord
+
+    category = __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock(spec=discord.CategoryChannel)
+    category.id = 303
+    category.name = "created-category"
+    guild = SimpleNamespace(categories=[], channels=[], create_category=AsyncMock(return_value=category))
+    builder = build_transaction.TransactionalServerBuilder(guild)
+
+    async def cancel_after_creation():
+        builder._channel_snapshot.append(category)
+        guild.channels.append(category)
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(build_transaction.ServerBuilder, "_pace_after_create", lambda self: cancel_after_creation())
+    with pytest.raises(asyncio.CancelledError):
+        await builder._get_or_create_category("created-category")
+
+    assert builder.created_categories == [category]
+
+
+@pytest.mark.asyncio
+async def test_transaction_tracks_role_created_before_cancellation(monkeypatch):
+    import discord
+
+    role = SimpleNamespace(id=202, name="new-role")
+    guild = SimpleNamespace(roles=[])
+    builder = build_transaction.TransactionalServerBuilder(guild)
+
+    async def create_then_cancel(self, name, **kwargs):
+        guild.roles.append(role)
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(build_transaction.ServerBuilder, "_create_role", create_then_cancel)
+    with pytest.raises(asyncio.CancelledError):
+        await builder._create_role("new-role")
+
+    assert builder.created_roles == [role]

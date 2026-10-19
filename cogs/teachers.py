@@ -274,7 +274,6 @@ class TeacherCommands(commands.Cog):
         classes="Classes concernées, par exemple : 1BACSE C1/C2",
         details="Précisions ou consignes pour les élèves (optionnel)",
     )
-    @app_commands.default_permissions(manage_roles=True)
     @teacher_professor_check()
     async def absence_teacher(
         self,

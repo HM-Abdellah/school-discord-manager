@@ -1137,6 +1137,46 @@ def archive_guild_database(guild_id: int, academic_year_name: str) -> Path:
         target = sqlite3.connect(temp_name)
         source.backup(target)
 
+        # Archives may be created by a bot installed in more than one school
+        # server. A reset for one guild must not export other schools' student,
+        # teacher, invite, audit, or usage records into that guild's archive.
+        # Filter tables with guild_id directly and join-only tables by their
+        # owning student/stream IDs, all inside the private temporary snapshot.
+        table_names = [
+            str(row[0])
+            for row in target.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+            if str(row[0]) != "archive_metadata"
+        ]
+        table_columns = {
+            name: {str(row[1]) for row in target.execute(f'PRAGMA table_info("{name}")').fetchall()}
+            for name in table_names
+        }
+        target.execute("PRAGMA foreign_keys=OFF")
+        target.execute("BEGIN")
+        # Handle join-only/legacy tables before deleting non-target students.
+        for table_name in table_names:
+            columns = table_columns[table_name]
+            clauses = []
+            params: list[Any] = []
+            if "student_id" in columns:
+                clauses.append('"student_id" NOT IN (SELECT id FROM students WHERE guild_id=?)')
+                params.append(int(guild_id))
+            if "stream_id" in columns:
+                clauses.append('"stream_id" NOT IN (SELECT id FROM streams WHERE guild_id=?)')
+                params.append(int(guild_id))
+            if "guild_id" in columns:
+                clauses.append('("guild_id" != ? OR "guild_id" IS NULL)')
+                params.append(int(guild_id))
+            if clauses:
+                quoted_table = '"' + table_name.replace('"', '""') + '"'
+                target.execute(
+                    f"DELETE FROM {quoted_table} WHERE " + " OR ".join(clauses),
+                    tuple(params),
+                )
+        target.commit()
+
         # The live database uses WAL. Convert the archive to DELETE journal mode
         # so the archived .db is self-contained and needs no sidecar -wal/-shm files.
         journal_mode = target.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
@@ -1199,6 +1239,7 @@ def reset_guild_data(guild_id: int) -> None:
             conn.execute("DELETE FROM teacher_qr_invites WHERE guild_id=?", (guild_id,))
             conn.execute("DELETE FROM teacher_assignments WHERE guild_id=?", (guild_id,))
             conn.execute("DELETE FROM teacher_registrations WHERE guild_id=?", (guild_id,))
+            conn.execute("DELETE FROM class_transfer_requests WHERE guild_id=?", (guild_id,))
             conn.execute("DELETE FROM academic_years WHERE guild_id=?", (guild_id,))
             if _table_exists(conn, "audit_events"):
                 conn.execute("DELETE FROM audit_events WHERE guild_id=?", (guild_id,))
@@ -1342,12 +1383,6 @@ def _sync_configuration_to_database_conn(conn: sqlite3.Connection, guild_id: int
                 (role_name, guild_id, year_id, level["name"], stream_name),
             )
 
-
-def sync_configuration_to_database(guild_id: int, config: dict[str, Any]) -> None:
-    initialize_database()
-    with _connect() as conn:
-        _sync_configuration_to_database_conn(conn, guild_id, config)
-        conn.commit()
 
 def sync_configuration_to_database(guild_id: int, config: dict[str, Any]) -> None:
     initialize_database()

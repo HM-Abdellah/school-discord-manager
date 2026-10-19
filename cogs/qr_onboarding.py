@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+import sqlite3
 from typing import Any
 
 import discord
@@ -531,9 +532,7 @@ class ClassQROnboarding(commands.Cog):
         class_role: discord.Role | None = None
         created_role = False
 
-        revoked_before = 0
         try:
-            revoked_before = await _revoke_class_qrs(self.bot, guild.id, class_key)
             class_role, created_role = await _get_or_create_class_role(
                 guild,
                 working_config,
@@ -611,6 +610,14 @@ class ClassQROnboarding(commands.Cog):
             invite_code = invite_url.rsplit("/", 1)[-1]
             now = discord.utils.utcnow()
             expires_at = now + timedelta(seconds=DEFAULT_QR_MAX_AGE)
+            qr = qr_file(
+                invite_url,
+                "school-manager-" + code + "-" + str(int(section)) + ".png",
+            )
+            # Keep the old working QR alive through role/channel preparation,
+            # invite creation, and QR rendering. Replace it only at the final
+            # persistence boundary, immediately before the unique active-row insert.
+            await _revoke_class_qrs(self.bot, guild.id, class_key)
             record_class_qr_invite(
                 guild.id,
                 invite_code,
@@ -625,16 +632,15 @@ class ClassQROnboarding(commands.Cog):
                 expires_at.isoformat(),
                 int(max_uses),
             )
-            qr = qr_file(
-                invite_url,
-                "school-manager-" + code + "-" + str(int(section)) + ".png",
-            )
-        except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError, ValueError) as exc:
+        except (discord.Forbidden, discord.HTTPException, OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
             if invite_code:
                 try:
                     await delete_invite(self.bot, invite_code)
                 except discord.HTTPException:
                     pass
+            # The class role and its channel permissions were committed before
+            # invite generation started. Keep that valid managed state so a
+            # failed QR attempt cannot leave config pointing at a deleted role.
             await interaction.followup.send(
                 "❌ QR non créé : " + type(exc).__name__ + ": " + str(exc),
                 ephemeral=True,
@@ -1022,11 +1028,21 @@ class ClassQROnboarding(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
-        """Persist a member that entered through a registered class QR role."""
+        """Apply all role-backed class-onboarding effects as one guild mutation."""
         if member.bot:
             return
+        async with get_build_lock(member.guild.id):
+            config = get_guild_config(member.guild.id) or {}
+            if config.get("pending_reset") is not None:
+                print(
+                    f"[QR] Class onboarding skipped during interrupted reset (guild={member.guild.id} member={member.id}).",
+                    flush=True,
+                )
+                return
+            await self._handle_class_qr_join_locked(member, config)
 
-        config = get_guild_config(member.guild.id) or {}
+    async def _handle_class_qr_join_locked(self, member: discord.Member, config: dict) -> None:
+        """Persist a class-QR join only when the base and stream roles are valid."""
         registry = config.get("class_roles", {})
         if not isinstance(registry, dict):
             return
@@ -1037,7 +1053,7 @@ class ClassQROnboarding(commands.Cog):
             if not isinstance(entry, dict):
                 continue
             role_id = entry.get("role_id")
-            if not isinstance(role_id, int) or role_id not in role_ids:
+            if type(role_id) is not int or role_id not in role_ids:
                 continue
             level = entry.get("level_name")
             stream = entry.get("stream_name")
@@ -1047,7 +1063,9 @@ class ClassQROnboarding(commands.Cog):
                 not isinstance(level, str)
                 or not isinstance(stream, str)
                 or not isinstance(code, str)
-                or not isinstance(section, int)
+                or type(section) is not int
+                or not 1 <= section <= 8
+                or str(key) != _class_key(code, section)
             ):
                 continue
             matches.append((str(key), level, stream, code, section))
@@ -1067,22 +1085,34 @@ class ClassQROnboarding(commands.Cog):
         year = get_active_academic_year(member.guild.id)
         if year is None:
             print(
-                "[QR] Cannot persist "
-                + class_key
-                + ": no active academic year for guild="
-                + str(member.guild.id),
+                "[QR] Cannot persist " + class_key
+                + ": no active academic year for guild=" + str(member.guild.id),
                 flush=True,
             )
             return
 
         student_role = get_managed_role(member.guild, ROLE_STUDENT)
+        student_stream_role = get_managed_role(
+            member.guild, STUDENT_STREAM_ROLE_PREFIX + code
+        )
+        if student_role is None or student_stream_role is None:
+            print(
+                f"[QR] Cannot finish class onboarding for member={member.id}: "
+                f"required student roles are missing (guild={member.guild.id}, class={class_key}).",
+                flush=True,
+            )
+            return
+
+        to_add = [
+            role for role in (student_role, student_stream_role)
+            if role not in member.roles
+        ]
         try:
-            if student_role is not None and student_role not in member.roles:
+            if to_add:
                 await member.add_roles(
-                    student_role,
+                    *to_add,
                     reason="School Manager class QR onboarding",
                 )
-
             enroll_student_record(
                 member.guild.id,
                 member.id,
@@ -1092,22 +1122,36 @@ class ClassQROnboarding(commands.Cog):
                 stream,
                 section=section,
             )
-            record_event(
-                member.guild.id,
-                self.bot.user.id if self.bot.user else 0,
-                self.bot.user.display_name if self.bot.user else "School Manager",
-                "class_qr_join",
-                member.display_name,
-                class_key,
-            )
         except (discord.Forbidden, discord.HTTPException, OSError, ValueError) as exc:
+            # Remove only roles added by this handler if persistence failed. The
+            # class role supplied by Discord's invite is intentionally untouched.
+            if to_add:
+                try:
+                    await member.remove_roles(
+                        *to_add,
+                        reason="School Manager class QR onboarding rollback",
+                    )
+                except discord.HTTPException as rollback_exc:
+                    print(
+                        f"[QR] Class onboarding role rollback failed member={member.id}: {rollback_exc}",
+                        flush=True,
+                    )
             print(
                 "[QR] Failed to persist class onboarding for member="
-                + str(member.id)
-                + ": "
-                + str(exc),
+                + str(member.id) + ": " + type(exc).__name__ + ": " + str(exc),
                 flush=True,
             )
+            return
+
+        record_event(
+            member.guild.id,
+            self.bot.user.id if self.bot.user else 0,
+            self.bot.user.display_name if self.bot.user else "School Manager",
+            "class_qr_join",
+            member.display_name,
+            class_key,
+        )
+
 
 
 async def setup(bot: commands.Bot) -> None:
@@ -1197,6 +1241,13 @@ class ClassTransferConfirmationView(discord.ui.View):
             return
 
         async with get_build_lock(guild.id):
+            reset_config = get_guild_config(guild.id) or {}
+            if reset_config.get("pending_reset") is not None:
+                await self._followup(
+                    interaction,
+                    "❌ تغيير القسم متوقف مؤقتًا لأن إعادة ضبط السيرفر لم تكتمل. تواصل مع الإدارة.",
+                )
+                return
             request = get_class_transfer_request(self.request_id)
             if request is None or request["status"] != "pending":
                 await self._followup(interaction, "ℹ️ هاد الطلب تلغى أو تكمل من قبل.")
@@ -1352,6 +1403,16 @@ class ClassTransferConfirmationView(discord.ui.View):
                     member.display_name,
                     completed_at,
                 )
+            except asyncio.CancelledError:
+                try:
+                    await self._restore_roles(guild, member, relevant_role_ids, original_roles)
+                except Exception as rollback_exc:
+                    cancel_class_transfer_request(self.request_id)
+                    print(
+                        f"[QR] Class-transfer rollback failed during cancellation request={self.request_id}: {rollback_exc}",
+                        flush=True,
+                    )
+                raise
             except Exception as exc:
                 rollback_ok = True
                 try:

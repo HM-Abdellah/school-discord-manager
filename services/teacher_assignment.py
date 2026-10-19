@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from copy import deepcopy
 import sqlite3
 
@@ -109,6 +111,7 @@ async def _migrate_legacy_subject_roles(
 
     migrated: list[str] = []
     new_roles: list[discord.Role] = []
+    initial_guild_role_ids = {int(role.id) for role in getattr(guild, "roles", [])}
     created_roles: list[discord.Role] = []
     original_presence = snapshot_role_presence(member, list(old_roles))
     original_permissions: list[tuple[discord.abc.GuildChannel, discord.Role, discord.PermissionOverwrite | None]] = []
@@ -158,7 +161,22 @@ async def _migrate_legacy_subject_roles(
         original_presence = snapshot_role_presence(member, tracked_roles)
         await member.add_roles(*new_roles, reason="School Manager migrate legacy subject roles")
         await member.remove_roles(*old_roles, reason="School Manager remove legacy subject roles")
-    except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError):
+    except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError, asyncio.CancelledError):
+        # The create-role API may succeed just before cancellation prevents the
+        # helper from returning the new Role object. Discover only expected
+        # subject-role names that were absent from the pre-operation snapshot.
+        expected_new_names = {_global_subject_role_name(subject) for subject in legacy_map.values()}
+        tracked_ids = {int(role.id) for role in created_roles}
+        for role in getattr(guild, "roles", []):
+            if (
+                int(role.id) not in initial_guild_role_ids
+                and role.name in expected_new_names
+                and int(role.id) not in tracked_ids
+            ):
+                created_roles.append(role)
+                tracked_ids.add(int(role.id))
+                if role not in new_roles:
+                    new_roles.append(role)
         tracked_roles = list(old_roles) + [role for role in new_roles if role not in old_roles]
         try:
             await restore_role_presence(
@@ -309,9 +327,20 @@ async def execute_teacher_assignment(
 
     stream_roles = [role for role in stream_roles if role is not None]
     config = get_guild_config(guild.id) or {}
+    if config.get("pending_reset") is not None:
+        raise TeacherAssignmentError(
+            "❌ L'inscription et l'affectation sont suspendues jusqu'à la reprise de /resetserver."
+        )
     working_config = deepcopy(config)
     tracked_roles = [role for role in [desired_role, other_role, pending_role, *stream_roles] if role is not None]
     initial_role_ids = {role.id for role in teacher.roles}
+    initial_guild_role_ids = {int(role.id) for role in getattr(guild, "roles", [])}
+    possible_created_subject_role_names = {_global_subject_role_name(subject) for subject in all_subjects}
+    for configured_level, configured_stream, configured_code in _configured_streams(guild):
+        for configured_subject in get_stream_subjects(configured_level, configured_stream):
+            legacy_name = f"{SUBJECT_ROLE_PREFIX}{configured_code} - {get_subject_internal_code(configured_subject)}"
+            if any(role.name == legacy_name for role in teacher.roles):
+                possible_created_subject_role_names.add(_global_subject_role_name(configured_subject))
     created_subject_roles: list[discord.Role] = []
     subject_roles: list[discord.Role] = []
     migration_permission_backups: list[tuple[discord.abc.GuildChannel, discord.Role, discord.PermissionOverwrite | None]] = []
@@ -364,6 +393,57 @@ async def execute_teacher_assignment(
                 await teacher.remove_roles(pending_role, reason="School Manager teacher self-registration completed")
 
         save_guild_config(guild.id, working_config)
+    except asyncio.CancelledError:
+        try:
+            await restore_role_presence(
+                teacher,
+                tracked_roles,
+                initial_role_ids,
+                reason="School Manager cancelled teacher assignment rollback",
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Teacher role rollback failed after cancellation (guild=%s member=%s)",
+                guild.id, teacher.id,
+            )
+        if registration_created and self_registration:
+            try:
+                delete_teacher_registration(guild.id, teacher.id)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Teacher registration rollback failed after cancellation (guild=%s member=%s)",
+                    guild.id, teacher.id,
+                )
+        for channel, role, overwrite in reversed(migration_permission_backups):
+            try:
+                await channel.set_permissions(
+                    role,
+                    overwrite=overwrite,
+                    reason="School Manager cancelled teacher assignment rollback",
+                )
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Subject role overwrite rollback failed after cancellation (guild=%s channel=%s)",
+                    guild.id, getattr(channel, "id", 0),
+                )
+        created_ids = {int(role.id) for role in created_subject_roles}
+        for role in getattr(guild, "roles", []):
+            if (
+                int(role.id) not in initial_guild_role_ids
+                and role.name in possible_created_subject_role_names
+                and int(role.id) not in created_ids
+            ):
+                created_subject_roles.append(role)
+                created_ids.add(int(role.id))
+        for created_role in reversed(created_subject_roles):
+            try:
+                await created_role.delete(reason="School Manager cancelled teacher assignment rollback")
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Created subject role rollback failed after cancellation (guild=%s role=%s)",
+                    guild.id, getattr(created_role, "id", 0),
+                )
+        raise
     except sqlite3.Error as exc:
         try:
             await restore_role_presence(

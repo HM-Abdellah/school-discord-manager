@@ -1,4 +1,8 @@
+import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import discord
 
 import pytest
 
@@ -349,3 +353,65 @@ def test_stream_specific_access_does_not_use_base_student_role():
     assert subject[student_stream].create_private_threads is False
     assert subject[student_stream].send_messages_in_threads is False
     assert student_stream in voice
+
+@pytest.mark.asyncio
+async def test_mutation_lock_rejects_concurrent_command_before_interaction_expires(monkeypatch):
+    from services.build_guard import get_build_lock
+
+    guild_id = 991234
+    lock = get_build_lock(guild_id)
+    called = AsyncMock()
+    response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+    interaction = MagicMock(spec=discord.Interaction)
+    interaction.guild = SimpleNamespace(id=guild_id)
+    interaction.response = response
+    interaction.followup = SimpleNamespace(send=AsyncMock())
+
+    @management_check()
+    async def dummy(_interaction):
+        await called()
+
+    async with lock:
+        task = asyncio.create_task(dummy(interaction))
+        await task
+
+    called.assert_not_awaited()
+    response.send_message.assert_awaited_once()
+    assert "déjà en cours" in response.send_message.await_args.args[0]
+    assert response.send_message.await_args.kwargs["ephemeral"] is True
+
+
+@pytest.mark.asyncio
+async def test_teacher_commands_do_not_require_admin_manage_roles_default():
+    from services.permissions import teacher_professor_check
+
+    @teacher_professor_check(lock=False)
+    async def dummy(_interaction):
+        return True
+
+    assert getattr(dummy, "__discord_app_commands_default_permissions__", None) is None
+
+
+@pytest.mark.asyncio
+async def test_management_mutations_are_blocked_during_interrupted_reset(monkeypatch):
+    everyone = role("@everyone", 0, 1)
+    admin = role(ROLE_ADMIN, 5, 42)
+    bot_role = role("Bot", 10, 99)
+    guild = SimpleNamespace(
+        owner_id=999, id=992222, roles=[everyone, admin, bot_role], default_role=everyone,
+        me=SimpleNamespace(top_role=bot_role),
+        get_role=lambda rid: admin if rid == 42 else None,
+        guild_permissions=SimpleNamespace(manage_channels=True, manage_roles=True),
+    )
+    response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+    user = SimpleNamespace(id=123, roles=[admin])
+    interaction = SimpleNamespace(guild=guild, user=user, response=response, command=SimpleNamespace(name="build"))
+    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {"management_role_id": 42, "pending_reset": {"archive": "2026-2027.db"}})
+
+    @management_check(lock=False)
+    async def dummy(_interaction):
+        return True
+
+    assert await dummy.__discord_app_commands_checks__[0](interaction) is False
+    response.send_message.assert_awaited_once()
+    assert "reset" in response.send_message.await_args.args[0].lower()

@@ -1060,6 +1060,16 @@ class TeacherOnboardingView(discord.ui.View):
 
             stage = "assignment"
             async with get_build_lock(self.guild_id):
+                current_config = get_guild_config(member.guild.id) or {}
+                if current_config.get("pending_reset") is not None:
+                    self.submitting = False
+                    self._refresh_control_state()
+                    await self._update_interaction_message(
+                        interaction,
+                        content="❌ تسجيل الأستاذ متوقف مؤقتًا لأن إعادة ضبط السيرفر لم تكتمل. تواصل مع الإدارة.",
+                        view=self,
+                    )
+                    return
                 pending_role = get_managed_role(member.guild, ROLE_TEACHER_PENDING)
                 if pending_role is None or pending_role not in member.roles:
                     await self._update_interaction_message(
@@ -1111,6 +1121,9 @@ class TeacherOnboardingView(discord.ui.View):
             thread_sync_interrupted = False
             try:
                 async with get_build_lock(self.guild_id):
+                    current_config = get_guild_config(member.guild.id) or {}
+                    if current_config.get("pending_reset") is not None:
+                        raise RuntimeError("Teacher thread provisioning is blocked during an interrupted server reset.")
                     thread_result = await ensure_teacher_threads(member.guild, member.id)
             except Exception as exc:
                 thread_sync_interrupted = True
@@ -1434,6 +1447,9 @@ async def _prepare_teacher_reenrollment(
     """Reset any old teacher profile and get the member ready for a fresh form."""
     guild = member.guild
     async with get_build_lock(guild.id):
+        current_config = get_guild_config(guild.id) or {}
+        if current_config.get("pending_reset") is not None:
+            raise RuntimeError("Teacher re-enrollment is blocked until the interrupted server reset is completed.")
         registration = get_teacher_registration(guild.id, member.id)
         assignments = get_teacher_assignments(guild.id, member.id) if registration is not None else []
 
@@ -1799,6 +1815,7 @@ class TeacherQROnboarding(commands.Cog):
 
         await interaction.response.defer(ephemeral=True, thinking=True)
         config = get_guild_config(guild.id) or {}
+        admin_invite_code: str | None = None
         try:
             channel = await resolve_registered_text_channel(
                 guild,
@@ -1819,8 +1836,17 @@ class TeacherQROnboarding(commands.Cog):
                 max_uses=1,
                 reason="School Manager one-time Administration invite for school director",
             )
+            admin_invite_code = invite_url.rsplit("/", 1)[-1]
             qr = qr_file(invite_url, "school-manager-administration.png")
         except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError, ValueError) as exc:
+            if admin_invite_code:
+                try:
+                    await delete_invite(self.bot, admin_invite_code)
+                except discord.HTTPException as cleanup_exc:
+                    logging.getLogger(__name__).error(
+                        "Failed to revoke undelivered Administration QR (guild=%s): %s",
+                        guild.id, cleanup_exc,
+                    )
             await interaction.followup.send(
                 "❌ QR Administration non créé : " + type(exc).__name__ + ": " + str(exc),
                 ephemeral=True,
@@ -1876,7 +1902,6 @@ class TeacherQROnboarding(commands.Cog):
         invite_code: str | None = None
 
         try:
-            await _revoke_teacher_qrs(self.bot, guild.id)
             pending_role, created_role = await _get_or_create_pending_role(guild, working_config)
 
             channel = await resolve_registered_text_channel(
@@ -1898,6 +1923,10 @@ class TeacherQROnboarding(commands.Cog):
             invite_code = invite_url.rsplit("/", 1)[-1]
             now = discord.utils.utcnow()
             expires_at = now + timedelta(seconds=DEFAULT_QR_MAX_AGE)
+            qr = qr_file(invite_url, "school-manager-teachers.png")
+            # Keep a previous working teacher QR valid until the replacement
+            # invitation and image have both been created successfully.
+            await _revoke_teacher_qrs(self.bot, guild.id)
             record_teacher_qr_invite(
                 guild.id,
                 invite_code,
@@ -1907,9 +1936,8 @@ class TeacherQROnboarding(commands.Cog):
                 expires_at.isoformat(),
                 int(max_uses),
             )
-            qr = qr_file(invite_url, "school-manager-teachers.png")
             save_guild_config(guild.id, working_config)
-        except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError, ValueError) as exc:
+        except (discord.Forbidden, discord.HTTPException, OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
             if invite_code:
                 try:
                     await delete_invite(self.bot, invite_code)
@@ -1917,8 +1945,10 @@ class TeacherQROnboarding(commands.Cog):
                     pass
                 try:
                     mark_teacher_qr_invite_revoked(guild.id, invite_code)
-                except OSError:
-                    pass
+                except (OSError, sqlite3.Error):
+                    logging.getLogger(__name__).exception(
+                        "Teacher QR cleanup could not mark invite revoked (guild=%s)", guild.id
+                    )
             if created_role and pending_role is not None:
                 try:
                     await pending_role.delete(reason="School Manager teacher QR setup rollback")
@@ -2017,6 +2047,13 @@ class TeacherQROnboarding(commands.Cog):
             return
 
         logger = logging.getLogger(__name__)
+        current_config = get_guild_config(member.guild.id) or {}
+        if current_config.get("pending_reset") is not None:
+            logger.warning(
+                "Teacher onboarding skipped during interrupted reset (guild=%s member=%s)",
+                member.guild.id, member.id,
+            )
+            return
         pending_role = get_managed_role(member.guild, ROLE_TEACHER_PENDING)
 
         # A teacher who leaves and rejoins must register again even if the

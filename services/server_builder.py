@@ -151,6 +151,7 @@ class ServerBuilder:
         self.stats = BuildStats()
         self.managed: dict[str, dict[str, int]] = {"roles": {}, "categories": {}, "channels": {}}
         self._channel_snapshot: list[discord.abc.GuildChannel] = []
+        self._channel_snapshot_refreshed = False
 
     @staticmethod
     def _stream_channel_count(level: dict, stream: dict) -> int:
@@ -173,6 +174,7 @@ class ServerBuilder:
     async def _refresh_channel_snapshot(self) -> None:
         """Take a fresh API snapshot so idempotency never depends on a stale cache."""
         self._channel_snapshot = list(await self.guild.fetch_channels())
+        self._channel_snapshot_refreshed = True
 
     def _find_category(self, name: str) -> discord.CategoryChannel | None:
         normalized_name = _normalize_channel_name(name)
@@ -180,7 +182,7 @@ class ServerBuilder:
             lambda channel: isinstance(channel, discord.CategoryChannel) and _normalize_channel_name(channel.name) == normalized_name,
             self._channel_snapshot,
         )
-        if category is not None:
+        if category is not None or self._channel_snapshot_refreshed:
             return category
         return discord.utils.find(
             lambda channel: isinstance(channel, discord.CategoryChannel) and _normalize_channel_name(channel.name) == normalized_name,
@@ -197,6 +199,8 @@ class ServerBuilder:
         )
         if channel is not None and not isinstance(channel, discord.VoiceChannel):
             return channel
+        if self._channel_snapshot_refreshed:
+            return None
         return discord.utils.find(
             lambda item: _normalize_channel_name(getattr(item, "name", "")) == normalized_name,
             getattr(category, "text_channels", []),
@@ -211,6 +215,8 @@ class ServerBuilder:
         )
         if channel is not None and isinstance(channel, discord.VoiceChannel):
             return channel
+        if self._channel_snapshot_refreshed:
+            return None
         return discord.utils.find(
             lambda item: _normalize_channel_name(getattr(item, "name", "")) == normalized_name,
             getattr(category, "voice_channels", []),
