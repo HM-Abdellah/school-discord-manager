@@ -73,8 +73,7 @@ async def test_ensure_teacher_threads_creates_public_thread_and_persists_id(monk
     assert send_kwargs["allowed_mentions"].everyone is False
     assert send_kwargs["allowed_mentions"].users is False
     assert send_kwargs["allowed_mentions"].roles is False
-    assert "Prof Test" in send_kwargs["content"]
-    assert "section 3" in send_kwargs["content"]
+    assert send_kwargs["content"] == "."
     channel.create_thread.assert_awaited_once()
     kwargs = channel.create_thread.await_args.kwargs
     assert kwargs["name"] == "Prof Test • 3"
@@ -82,6 +81,54 @@ async def test_ensure_teacher_threads_creates_public_thread_and_persists_id(monk
     assert kwargs["auto_archive_duration"] == 10080
     assert "type" not in kwargs
     assert updates == [(1, 1, {"status": "created", "thread_id": 9001, "error": None})]
+
+
+@pytest.mark.asyncio
+async def test_same_teacher_and_subject_get_one_thread_per_assigned_section(monkeypatch):
+    channel = _channel()
+    starters = [
+        SimpleNamespace(id=8001, delete=AsyncMock()),
+        SimpleNamespace(id=8002, delete=AsyncMock()),
+    ]
+    threads = [
+        SimpleNamespace(id=9001, name="Prof Test • 2", type=discord.ChannelType.public_thread),
+        SimpleNamespace(id=9002, name="Prof Test • 3", type=discord.ChannelType.public_thread),
+    ]
+    channel.send.side_effect = starters
+    channel.create_thread.side_effect = threads
+    rows = [
+        _row(assignment_id=1, section=2),
+        _row(assignment_id=2, section=3),
+    ]
+    updates = []
+
+    async def resolve(*_args, **_kwargs):
+        return channel
+
+    monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: rows)
+    monkeypatch.setattr(teacher_threads, "get_guild_config", lambda *_args: {})
+    monkeypatch.setattr(teacher_threads, "resolve_registered_text_channel", resolve)
+    monkeypatch.setattr(
+        teacher_threads,
+        "update_teacher_assignment_thread",
+        lambda guild_id, assignment_id, **kwargs: updates.append((assignment_id, kwargs)),
+    )
+
+    result = await teacher_threads.ensure_teacher_threads(SimpleNamespace(id=1), 101)
+
+    assert result == {"created": 2, "existing": 0, "failed": 0, "errors": []}
+    assert channel.send.await_count == 2
+    assert [call.kwargs["content"] for call in channel.send.await_args_list] == [".", "."]
+    assert channel.create_thread.await_count == 2
+    assert [call.kwargs["name"] for call in channel.create_thread.await_args_list] == [
+        "Prof Test • 2",
+        "Prof Test • 3",
+    ]
+    assert [call.kwargs["message"] for call in channel.create_thread.await_args_list] == starters
+    assert updates == [
+        (1, {"status": "created", "thread_id": 9001, "error": None}),
+        (2, {"status": "created", "thread_id": 9002, "error": None}),
+    ]
 
 
 @pytest.mark.asyncio

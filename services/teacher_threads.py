@@ -175,11 +175,7 @@ async def ensure_teacher_threads(guild: discord.Guild, teacher_id: int) -> dict[
             starter_message = None
             try:
                 starter_message = await channel.send(
-                    content=(
-                        f"🧵 **Espace de suivi de l'affectation — {str(row['full_name']).strip()} · section {section}**\n"
-                        f"**Matière :** {get_subject_display_name(subject)}\n"
-                        "Utilisez le fil associé à ce message pour les échanges liés à cette affectation."
-                    ),
+                    content=".",
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
                 # Public threads in text channels must start from a message.
