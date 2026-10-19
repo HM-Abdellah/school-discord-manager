@@ -172,19 +172,13 @@ async def ensure_teacher_threads(guild: discord.Guild, teacher_id: int) -> dict[
                 result["existing"] = int(result["existing"]) + 1
                 continue
 
-            starter_message = None
             try:
-                starter_message = await channel.send(
-                    content=".",
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-                # Public threads in text channels must start from a message.
-                # Passing the message makes discord.py use Discord's
-                # start-thread-from-message endpoint instead of creating a
-                # message-less thread (which is private by default in the API).
+                # Discord supports public threads without a starter message
+                # when the type is explicit; omitting the type defaults to
+                # a private thread in discord.py / API v10.
                 thread = await channel.create_thread(
                     name=name,
-                    message=starter_message,
+                    type=discord.ChannelType.public_thread,
                     auto_archive_duration=10080,
                     reason=(
                         f"School Manager teacher resources: user={teacher_id}; "
@@ -193,11 +187,6 @@ async def ensure_teacher_threads(guild: discord.Guild, teacher_id: int) -> dict[
                 )
             except (discord.Forbidden, discord.HTTPException) as exc:
                 message = f"{code} / {get_subject_display_name(subject)} / section {section}: {_error_text(exc)}"
-                if starter_message is not None:
-                    try:
-                        await starter_message.delete()
-                    except (discord.Forbidden, discord.HTTPException) as cleanup_exc:
-                        message += f"; starter message cleanup failed: {_error_text(cleanup_exc)}"
                 errors.append(message)
                 update_teacher_assignment_thread(
                     guild.id,
