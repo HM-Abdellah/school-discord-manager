@@ -7,6 +7,7 @@ message, not a new channel/category.
 
 from __future__ import annotations
 
+import sqlite3
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -107,7 +108,7 @@ class SectionAwareTimetableCommands(commands.Cog):
                 f"{code}:section:{section}:timetable_message_id"
             ] = message.id
             save_guild_config(guild.id, config)
-        except (discord.Forbidden, discord.HTTPException, OSError) as exc:
+        except (discord.Forbidden, discord.HTTPException, OSError, sqlite3.Error) as exc:
             if message is not None:
                 try:
                     await message.delete(reason="School Manager timetable persistence rollback")

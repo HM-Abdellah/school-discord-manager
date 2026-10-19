@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+import logging
 import sqlite3
 from typing import Any
 
@@ -576,7 +577,7 @@ class ClassQROnboarding(commands.Cog):
                 ephemeral=True,
             )
             return
-        except (OSError, RuntimeError, ValueError) as exc:
+        except (OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
             if created_role and class_role is not None:
                 try:
                     await class_role.delete(reason="School Manager QR setup rollback")
@@ -764,7 +765,7 @@ class ClassQROnboarding(commands.Cog):
                 channels, class_role=class_role, student_stream_role=student_stream_role,
             )
             save_guild_config(guild.id, working_config)
-        except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError, ValueError) as exc:
+        except (discord.Forbidden, discord.HTTPException, OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
             if created_role and class_role is not None:
                 try:
                     await class_role.delete(reason="School Manager transfer QR setup rollback")
@@ -817,8 +818,14 @@ class ClassQROnboarding(commands.Cog):
             )
             set_class_transfer_message(request_id, dm_message.channel.id, dm_message.id)
             await dm_message.edit(content=dm_message.content, view=view)
-        except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError, ValueError) as exc:
-            cancel_class_transfer_request(request_id)
+        except (discord.Forbidden, discord.HTTPException, OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
+            try:
+                cancel_class_transfer_request(request_id)
+            except sqlite3.Error:
+                logging.getLogger(__name__).exception(
+                    "Could not cancel class transfer after DM/setup failure (guild=%s request=%s)",
+                    guild.id, request_id,
+                )
             if dm_message is not None:
                 try:
                     await dm_message.edit(
@@ -955,7 +962,7 @@ class ClassQROnboarding(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         try:
             count = await _revoke_class_qrs(self.bot, interaction.guild.id, class_key)
-        except (discord.Forbidden, discord.HTTPException, OSError) as exc:
+        except (discord.Forbidden, discord.HTTPException, OSError, sqlite3.Error) as exc:
             await interaction.followup.send(
                 "❌ Révocation impossible : " + type(exc).__name__ + ": " + str(exc),
                 ephemeral=True,

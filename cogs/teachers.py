@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import re
+import sqlite3
 from datetime import date
 
 import discord
@@ -233,7 +234,7 @@ class TeacherCommands(commands.Cog):
                 await member.add_roles(stream_role, subject_role, reason=f"School manager teacher assignment: {code} / {curriculum_subject}")
             save_guild_config(guild.id, working_config)
             config = working_config
-        except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError) as exc:
+        except (discord.Forbidden, discord.HTTPException, OSError, sqlite3.Error, RuntimeError) as exc:
             if 'tracked_roles' in locals():
                 for member in selected_members:
                     try:
@@ -259,6 +260,8 @@ class TeacherCommands(commands.Cog):
                 message = f"❌ Discord API : `{exc}`"
             elif isinstance(exc, OSError):
                 message = f"❌ Stockage local : `{exc}`"
+            elif isinstance(exc, sqlite3.Error):
+                message = f"❌ Base de données SQLite : `{type(exc).__name__}: {exc}`"
             else:
                 message = f"❌ Opération refusée : `{exc}`"
             await interaction.followup.send(message, ephemeral=True)

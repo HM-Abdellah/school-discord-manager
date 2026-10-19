@@ -140,6 +140,29 @@ def _validate_reset_role_hierarchy(
     return None
 
 
+def _unregistered_children_of_managed_categories(
+    live_channels: dict[int, discord.abc.GuildChannel],
+    managed_channel_ids: set[int],
+    managed_category_ids: set[int],
+) -> list[tuple[int, str]]:
+    """Find channels the bot does not own that sit inside a managed category.
+
+    Resetting the config while retaining such a category would orphan that
+    category from the managed registry. A subsequent build would correctly
+    reject it as an unmanaged canonical collision, leaving the server unable to
+    rebuild. Refuse before deletion and ask the operator to move those channels.
+    """
+    result = []
+    for channel_id, channel in live_channels.items():
+        parent_id = getattr(channel, "category_id", None)
+        if (
+            channel_id not in managed_channel_ids
+            and parent_id in managed_category_ids
+        ):
+            result.append((int(parent_id), str(getattr(channel, "name", channel_id))))
+    return sorted(result, key=lambda item: (item[0], item[1].casefold()))
+
+
 async def _fetch_reset_channels(guild: discord.Guild) -> dict[int, discord.abc.GuildChannel]:
     """Use a fresh API snapshot; a cold cache must not make reset skip channels."""
     fetch_channels = getattr(guild, "fetch_channels", None)
@@ -215,6 +238,25 @@ class HardenedResetCommands(commands.Cog):
                     value for value in _managed_mapping(config, "categories").values()
                     if type(value) is int and value > 0
                 }
+
+                unmanaged_children = _unregistered_children_of_managed_categories(
+                    live_channels, channel_ids, category_ids
+                )
+                if unmanaged_children:
+                    details = "; ".join(
+                        f"category ID {category_id}: #{channel_name}"
+                        for category_id, channel_name in unmanaged_children[:10]
+                    )
+                    suffix = (
+                        f"; ... et {len(unmanaged_children) - 10} autre(s)"
+                        if len(unmanaged_children) > 10 else ""
+                    )
+                    raise ResetPreflightError(
+                        "Des salons non enregistrés se trouvent dans une catégorie gérée ("
+                        + details + suffix
+                        + "). Aucun autre élément n'a été supprimé. Déplace ces salons hors des catégories gérées "
+                        "puis relance /resetserver."
+                    )
 
                 hierarchy_error = _validate_reset_role_hierarchy(guild, role_ids, roles_by_id=roles_by_id)
                 if hierarchy_error:

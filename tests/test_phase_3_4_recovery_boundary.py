@@ -270,3 +270,30 @@ def test_recorded_id_rejects_ambiguous_normalized_keys():
         )
         is None
     )
+
+
+def test_remove_stream_reports_sqlite_checkpoint_failures_as_recoverable():
+    source = inspect.getsource(removestream_fix.SafeRemoveStream.remove_stream.callback)
+    exception_clauses = [line.strip() for line in source.splitlines() if line.strip().startswith("except (")]
+    removal_handlers = [line for line in exception_clauses if "discord.NotFound" in line and "RuntimeError" in line]
+
+    assert len(removal_handlers) == 2
+    assert all("sqlite3.Error" in clause for clause in removal_handlers)
+    assert "Le journal de reprise a été conservé" in source
+
+
+def test_storage_cache_refresh_does_not_turn_committed_sqlite_write_into_failure():
+    import services.storage as storage_module
+
+    cache_source = inspect.getsource(storage_module._refresh_json_cache)
+    assert "except (OSError, sqlite3.Error) as exc" in cache_source
+    assert "SQLite remains authoritative" in cache_source
+
+
+def test_reset_unregistered_child_preflight_runs_before_archive_and_delete():
+    source = inspect.getsource(__import__("cogs.security_hardening_v3", fromlist=["HardenedResetCommands"]).HardenedResetCommands.reset_server.callback)
+    guard = source.index("unmanaged_children = _unregistered_children_of_managed_categories(")
+    archive = source.index("archive_path = prior_archive or archive_guild_database")
+    delete = source.index("await channel.delete")
+
+    assert guard < archive < delete
