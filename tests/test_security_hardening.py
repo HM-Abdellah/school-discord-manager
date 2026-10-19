@@ -1,5 +1,8 @@
 from types import SimpleNamespace
 
+from unittest.mock import AsyncMock
+
+import discord
 import pytest
 
 from cogs.removestream_fix import _recorded_id, _stream_channel_names, _stream_role_names
@@ -300,3 +303,69 @@ def test_reset_preflight_allows_categories_with_only_registered_children():
     live_channels = {200: category, 201: managed_text}
 
     assert _unregistered_children_of_managed_categories(live_channels, {201}, {200}) == []
+
+
+@pytest.mark.asyncio
+async def test_reset_repairs_bot_view_access_before_deleting_hidden_managed_resources():
+    from cogs.security_hardening_v3 import _ensure_bot_can_view_managed_resources
+
+    bot_member = object()
+    category = SimpleNamespace(
+        id=100,
+        name="private-category",
+        permissions_for=lambda _member: SimpleNamespace(view_channel=False),
+        overwrites={},
+        overwrites_for=lambda _member: discord.PermissionOverwrite(),
+        edit=AsyncMock(),
+    )
+    channel = SimpleNamespace(
+        id=101,
+        name="private-channel",
+        category_id=100,
+        permissions_for=lambda _member: SimpleNamespace(view_channel=False),
+        overwrites={},
+        overwrites_for=lambda _member: discord.PermissionOverwrite(),
+        edit=AsyncMock(),
+    )
+    guild = SimpleNamespace(me=bot_member)
+    live_channels = {100: category, 101: channel}
+
+    repaired = await _ensure_bot_can_view_managed_resources(
+        guild, live_channels, channel_ids={101}, category_ids={100}
+    )
+
+    assert repaired == 2
+    assert category.edit.await_args.kwargs["overwrites"][bot_member].view_channel is True
+    assert channel.edit.await_args.kwargs["overwrites"][bot_member].view_channel is True
+    assert "School Manager reset recovery" in category.edit.await_args.kwargs["reason"]
+
+
+@pytest.mark.asyncio
+async def test_reset_visibility_repair_reports_resource_and_missing_access():
+    from cogs.security_hardening_v3 import ResetPreflightError, _ensure_bot_can_view_managed_resources
+
+    bot_member = object()
+    response = SimpleNamespace(status=403, reason="Forbidden")
+    hidden = SimpleNamespace(
+        id=202,
+        name="teacher-private",
+        category_id=200,
+        permissions_for=lambda _member: SimpleNamespace(view_channel=False),
+        overwrites={},
+        overwrites_for=lambda _member: discord.PermissionOverwrite(),
+        edit=AsyncMock(side_effect=discord.Forbidden(response, {"message": "Missing Access", "code": 50001})),
+    )
+
+    with pytest.raises(ResetPreflightError, match=r"teacher-private.*202.*50001"):
+        await _ensure_bot_can_view_managed_resources(
+            SimpleNamespace(me=bot_member), {202: hidden}, {202}, set()
+        )
+
+
+def test_reset_restores_bot_channel_visibility_before_any_deletion():
+    source = open("cogs/security_hardening_v3.py", encoding="utf-8").read()
+    repair = source.index("await _ensure_bot_can_view_managed_resources")
+    delete = source.index("await channel.delete")
+    assert repair < delete
+    assert "catégorie ID {getattr(channel" in source
+    assert "_reset_access_hint(api_code)" in source

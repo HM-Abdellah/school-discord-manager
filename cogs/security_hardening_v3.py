@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from copy import copy
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -177,6 +178,83 @@ async def _fetch_reset_channels(guild: discord.Guild) -> dict[int, discord.abc.G
     }
 
 
+def _reset_access_hint(api_code: object) -> str:
+    if api_code == 50001:
+        return (
+            "Discord renvoie Missing Access (50001). Accorde au membre du bot View Channel "
+            "dans ce salon et sa catégorie parente, puis vérifie les permission overwrites."
+        )
+    if api_code == 50013:
+        return (
+            "Discord renvoie Missing Permissions (50013). Vérifie Manage Channels et Manage Roles "
+            "dans les permissions serveur/catégorie du bot."
+        )
+    return "Vérifie les permissions et les overwrites du bot sur ce resource."
+
+
+async def _ensure_bot_can_view_managed_resources(
+    guild: discord.Guild,
+    live_channels: dict[int, discord.abc.GuildChannel],
+    channel_ids: set[int],
+    category_ids: set[int],
+) -> int:
+    """Restore bot visibility on owned resources before continuing a destructive reset.
+
+    Categories are repaired first, then their child channels. Existing overwrites
+    are preserved, with only the direct bot-member view_channel allow changed.
+    """
+    bot_member = getattr(guild, "me", None)
+    if bot_member is None:
+        raise ResetPreflightError("Impossible d'identifier le membre du bot pour vérifier l'accès aux resources gérés.")
+
+    repaired = 0
+    target_ids = [*sorted(category_ids), *sorted(channel_ids)]
+    for resource_id in target_ids:
+        resource = live_channels.get(resource_id)
+        if resource is None:
+            continue
+        permissions_for = getattr(resource, "permissions_for", None)
+        if not callable(permissions_for):
+            raise ResetPreflightError(
+                f"Impossible de vérifier l'accès au resource géré ID {resource_id}; reset interrompu avant les suppressions suivantes."
+            )
+        try:
+            effective_permissions = permissions_for(bot_member)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ResetPreflightError(
+                f"Impossible de calculer les permissions du bot pour le resource {getattr(resource, 'name', resource_id)!r} "
+                f"(ID {resource_id}): {exc}"
+            ) from exc
+        if getattr(effective_permissions, "view_channel", False):
+            continue
+
+        current_overwrite_for = getattr(resource, "overwrites_for", None)
+        try:
+            bot_overwrite = copy(
+                current_overwrite_for(bot_member)
+                if callable(current_overwrite_for)
+                else discord.PermissionOverwrite()
+            )
+            bot_overwrite.view_channel = True
+            overwrites = dict(getattr(resource, "overwrites", {}) or {})
+            overwrites[bot_member] = bot_overwrite
+            await resource.edit(
+                overwrites=overwrites,
+                reason="School Manager reset recovery: restore bot visibility to managed resource",
+            )
+        except discord.HTTPException as exc:
+            api_code = getattr(exc, "code", None)
+            api_status = getattr(exc, "status", None)
+            raise ResetPreflightError(
+                f"Impossible de restaurer View Channel pour le resource géré "
+                f"{getattr(resource, 'name', resource_id)!r} (ID {resource_id}; HTTP {api_status}; "
+                f"code {api_code}). {_reset_access_hint(api_code)} Aucun autre resource ne sera supprimé "
+                "tant que cet accès n'est pas corrigé."
+            ) from exc
+        repaired += 1
+    return repaired
+
+
 class HardenedResetCommands(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -291,6 +369,15 @@ class HardenedResetCommands(commands.Cog):
                 save_guild_config(guild.id, config)
                 reset_started = True
 
+                # Older builds did not grant the bot explicit visibility in every
+                # private category/channel. Repair that before deleting anything,
+                # so 50001 cannot leave a partially-reset guild just because of an
+                # @everyone deny. If the API refuses the repair, keep the journal
+                # and report the exact resource to fix manually.
+                await _ensure_bot_can_view_managed_resources(
+                    guild, live_channels, channel_ids, category_ids
+                )
+
                 for channel_id in sorted(channel_ids):
                     channel = live_channels.get(channel_id)
                     if channel is None:
@@ -303,6 +390,14 @@ class HardenedResetCommands(commands.Cog):
                         await channel.delete(reason="School Manager scoped reset")
                     except discord.NotFound:
                         pass
+                    except discord.HTTPException as exc:
+                        api_code = getattr(exc, "code", None)
+                        api_status = getattr(exc, "status", None)
+                        raise RuntimeError(
+                            f"Discord a refusé la suppression du salon géré {channel.name!r} "
+                            f"(ID {channel_id}, catégorie ID {getattr(channel, 'category_id', None)}; "
+                            f"HTTP {api_status}; code {api_code}). {_reset_access_hint(api_code)}"
+                        ) from exc
                     live_channels.pop(channel_id, None)
                     deleted_channels += 1
 
@@ -326,6 +421,13 @@ class HardenedResetCommands(commands.Cog):
                         await category.delete(reason="School Manager scoped reset")
                     except discord.NotFound:
                         pass
+                    except discord.HTTPException as exc:
+                        api_code = getattr(exc, "code", None)
+                        api_status = getattr(exc, "status", None)
+                        raise RuntimeError(
+                            f"Discord a refusé la suppression de la catégorie gérée {category.name!r} "
+                            f"(ID {category_id}; HTTP {api_status}; code {api_code}). {_reset_access_hint(api_code)}"
+                        ) from exc
                     live_channels.pop(category_id, None)
                     deleted_categories += 1
 
@@ -337,6 +439,14 @@ class HardenedResetCommands(commands.Cog):
                         await role.delete(reason="School Manager scoped reset")
                     except discord.NotFound:
                         pass
+                    except discord.HTTPException as exc:
+                        api_code = getattr(exc, "code", None)
+                        api_status = getattr(exc, "status", None)
+                        raise RuntimeError(
+                            f"Discord a refusé la suppression du rôle géré {role.name!r} "
+                            f"(ID {role_id}; HTTP {api_status}; code {api_code}). "
+                            "Vérifie la hiérarchie des rôles et Manage Roles."
+                        ) from exc
                     deleted_roles += 1
 
                 reset_guild_data(guild.id)
