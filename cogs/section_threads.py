@@ -132,13 +132,21 @@ class SectionThreads(commands.Cog):
         description="Réessayer la création des threads des professeurs inscrits.",
     )
     @app_commands.default_permissions(manage_roles=True)
-    @management_check()
+    # Acknowledge the interaction before waiting for this guild's mutation lock.
+    # Otherwise a competing long-running mutation can hold the lock beyond
+    # Discord's initial response window, producing "The application did not respond".
+    # The callback locks each teacher's sync operation explicitly below.
+    @management_check(lock=False)
     async def sync_teacher_threads(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
 
+        print(
+            f"[TEACHER THREAD SYNC] Command received; acknowledging interaction (guild={guild.id}).",
+            flush=True,
+        )
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             rows = get_teacher_assignments(guild.id)
@@ -159,6 +167,11 @@ class SectionThreads(commands.Cog):
         # A thread can be deleted or moved after SQLite marked it as created;
         # its saved ID must be verified against Discord before declaring it synced.
         teacher_ids = list(dict.fromkeys(int(row["discord_id"]) for row in rows))
+        print(
+            f"[TEACHER THREAD SYNC] Loaded {len(rows)} assignment row(s) / "
+            f"{len(teacher_ids)} teacher(s); waiting for the guild mutation lock.",
+            flush=True,
+        )
         if not teacher_ids:
             await interaction.followup.send(
                 "ℹ️ Aucune affectation professeur n'est enregistrée.",

@@ -150,3 +150,47 @@ async def test_sync_teacher_threads_exposes_failure_reason_to_admin(monkeypatch)
     assert "Affectations à réparer : **1**" in content
     assert "Détails des erreurs" in content
     assert "Salon de matière géré introuvable" in content
+
+
+@pytest.mark.asyncio
+async def test_sync_teacher_threads_acknowledges_before_waiting_for_guild_lock(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from cogs.section_threads import SectionThreads
+
+    lock_waiting = asyncio.Event()
+    release_lock = asyncio.Event()
+    deferred = asyncio.Event()
+    response = SimpleNamespace(defer=AsyncMock(side_effect=lambda **_kwargs: deferred.set()))
+    followup = SimpleNamespace(send=AsyncMock())
+    interaction = SimpleNamespace(guild=SimpleNamespace(id=1), response=response, followup=followup)
+
+    class BlockingLock:
+        async def __aenter__(self):
+            lock_waiting.set()
+            await release_lock.wait()
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    async def fake_sync(_guild, _teacher_id):
+        return {"created": 1, "existing": 0, "failed": 0, "errors": []}
+
+    monkeypatch.setattr("cogs.section_threads.get_teacher_assignments", lambda _guild_id: [{"discord_id": 101}])
+    monkeypatch.setattr("cogs.section_threads.get_build_lock", lambda _guild_id: BlockingLock())
+    monkeypatch.setattr("cogs.section_threads.ensure_teacher_threads", fake_sync)
+
+    # The command callback must not be wrapped in a lock-taking decorator: Discord
+    # requires an initial response before waiting for any other mutation to finish.
+    assert not hasattr(SectionThreads.sync_teacher_threads.callback, "__wrapped__")
+
+    task = asyncio.create_task(SectionThreads.sync_teacher_threads.callback(SectionThreads(SimpleNamespace()), interaction))
+    try:
+        await asyncio.wait_for(lock_waiting.wait(), timeout=1)
+        assert deferred.is_set()
+        response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+    finally:
+        release_lock.set()
+    await asyncio.wait_for(task, timeout=1)
+    followup.send.assert_awaited_once()
