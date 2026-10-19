@@ -17,6 +17,26 @@ def _configure_storage(tmp_path, monkeypatch):
 
 
 
+def test_active_sections_follow_active_academic_year_student_import(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
+    level = "2ème Année Bac"
+    stream = "2ème Année Bac Sciences Physiques"
+    config = {"levels": [{"name": level, "streams": [{"name": stream, "abbreviation": "2BACPC"}]}]}
+
+    storage.create_and_activate_academic_year(1, "2025/2026", config)
+    old_year = storage.get_active_academic_year(1)
+    storage.enroll_student_record(1, 1001, "Old year student", int(old_year["id"]), level, stream, section=1)
+
+    storage.create_and_activate_academic_year(1, "2026/2027", config)
+    current_year = storage.get_active_academic_year(1)
+    storage.enroll_student_record(1, 1002, "Section three student", int(current_year["id"]), level, stream, section=3)
+    storage.enroll_student_record(1, 1003, "Section four student", int(current_year["id"]), level, stream, section=4)
+    storage.enroll_student_record(1, 1004, "Second section four student", int(current_year["id"]), level, stream, section=4)
+
+    assert storage.get_active_sections_for_stream(1, level, stream) == [3, 4]
+    assert storage.get_active_sections_for_stream(1, level, "1ère Année Bac Sciences Expérimentales") == []
+
+
 def test_teacher_registration_is_one_time(tmp_path, monkeypatch):
     _configure_storage(tmp_path, monkeypatch)
     storage.initialize_database()
@@ -363,7 +383,9 @@ async def test_teacher_onboarding_view_uses_fixed_choices():
 
     view = TeacherOnboardingView(SimpleNamespace(), 1, 101)
 
-    assert len(view.children) == 5
+    assert len(view.children) == 6
+    assert view.reset_button.label == "Recommencer"
+    assert view.back_button.label == "Retour à la classe"
     assert [option.value for option in view.gender_select.options] == ["male", "female"]
     assert [option.value for option in view.level_select.options] == get_levels()
     assert view.stream_select.disabled is True
@@ -442,10 +464,98 @@ class _AsyncLock:
 class _FakeInteractionResponse:
     def __init__(self):
         self.edit_message = AsyncMock()
+        self.send_message = AsyncMock()
+        self.defer = AsyncMock()
         self.done = True
 
     def is_done(self):
         return self.done
+
+
+@pytest.mark.asyncio
+async def test_teacher_onboarding_reset_clears_all_unsubmitted_choices(monkeypatch):
+    from cogs.teacher_qr_onboarding import TeacherOnboardingView
+
+    view = TeacherOnboardingView(SimpleNamespace(), 1, 101)
+    view._ensure_eligible = AsyncMock(return_value=SimpleNamespace(id=101))
+    view.selected_gender = "male"
+    view.selected_level = "2ème Année Bac"
+    view.selected_stream = "2ème Année Bac Sciences Physiques"
+    view.selected_sections = [3]
+    view.available_sections = [3, 4]
+    view.selected_subjects = ["Mathématiques"]
+    view.assignments = [{"level": view.selected_level, "stream": view.selected_stream, "section": 3, "subjects": ["Mathématiques"]}]
+    view._show_subject_stage()
+    interaction = SimpleNamespace(user=SimpleNamespace(id=101), response=_FakeInteractionResponse())
+
+    await view.reset_button.callback(interaction)
+
+    assert view.stage == "class"
+    assert view.selected_gender is None
+    assert view.selected_level is None
+    assert view.selected_stream is None
+    assert view.selected_sections == []
+    assert view.available_sections == []
+    assert view.selected_subjects == []
+    assert view.assignments == []
+    assert "Formulaire réinitialisé" in interaction.response.edit_message.await_args.kwargs["content"]
+
+
+@pytest.mark.asyncio
+async def test_teacher_onboarding_back_button_returns_to_class_without_losing_section(monkeypatch):
+    from cogs.teacher_qr_onboarding import TeacherOnboardingView
+
+    view = TeacherOnboardingView(SimpleNamespace(), 1, 101)
+    view._ensure_eligible = AsyncMock(return_value=SimpleNamespace(id=101))
+    view.selected_gender = "male"
+    view.selected_level = "2ème Année Bac"
+    view.selected_stream = "2ème Année Bac Sciences Physiques"
+    view.selected_sections = [3]
+    view.available_sections = [3, 4]
+    view.selected_subjects = ["Mathématiques"]
+    view._show_subject_stage()
+    interaction = SimpleNamespace(user=SimpleNamespace(id=101), response=_FakeInteractionResponse())
+
+    await view.back_button.callback(interaction)
+
+    assert view.stage == "class"
+    assert view.selected_sections == [3]
+    assert view.available_sections == [3, 4]
+    assert view.selected_subjects == []
+
+
+@pytest.mark.asyncio
+async def test_teacher_onboarding_caps_subjects_at_two_across_entire_registration(monkeypatch):
+    from cogs.teacher_qr_onboarding import TeacherOnboardingView
+    from config.curriculum import get_stream_subjects
+
+    view = TeacherOnboardingView(SimpleNamespace(), 1, 101)
+    view._ensure_eligible = AsyncMock(return_value=SimpleNamespace(id=101))
+    view.selected_level = "2ème Année Bac"
+    view.selected_stream = "2ème Année Bac Sciences Physiques"
+    other_subjects = [
+        subject for subject in get_stream_subjects(view.selected_level, view.selected_stream)
+        if subject != "Mathématiques"
+    ][:2]
+    assert len(other_subjects) == 2
+    view.assignments = [{
+        "level": view.selected_level,
+        "stream": view.selected_stream,
+        "section": 3,
+        "subjects": ["Mathématiques"],
+    }]
+    view.subject_select.options = [
+        discord.SelectOption(label=subject, value=subject)
+        for subject in ["Mathématiques", *other_subjects]
+    ]
+    view.subject_select._values = other_subjects
+    view._show_subject_stage()
+    interaction = SimpleNamespace(user=SimpleNamespace(id=101), response=_FakeInteractionResponse())
+
+    await view.subject_select.callback(interaction)
+
+    assert "deux matières au total" in interaction.response.send_message.await_args.args[0]
+    assert view.selected_subjects == []
 
 
 @pytest.mark.asyncio
@@ -491,6 +601,7 @@ async def test_teacher_onboarding_confirm_success(monkeypatch):
 
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_managed_role", lambda _guild, name: role_map.get(name))
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda _guild_id, _discord_id: None)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_active_sections_for_stream", lambda *_args: [3])
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
     monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
     monkeypatch.setattr(
@@ -554,6 +665,7 @@ async def test_teacher_onboarding_confirm_business_error_is_visible(monkeypatch)
 
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_managed_role", lambda _guild, name: role_map.get(name))
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda _guild_id, _discord_id: None)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_active_sections_for_stream", lambda *_args: [3])
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
     monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
 
@@ -612,6 +724,7 @@ async def test_teacher_onboarding_confirm_unexpected_error_is_visible(monkeypatc
 
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_managed_role", lambda _guild, name: role_map.get(name))
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda _guild_id, _discord_id: None)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_active_sections_for_stream", lambda *_args: [3])
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
     monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
 
@@ -796,6 +909,93 @@ async def test_start_teacher_registration_sends_prompt_to_existing_member_withou
     assert "Aucun départ/réintégration" in interaction.followup.send.await_args.args[0]
 
 
+@pytest.mark.asyncio
+async def test_new_teacher_form_replaces_and_disables_previous_form():
+    from cogs.teacher_qr_onboarding import _send_teacher_onboarding_prompt
+
+    guild = SimpleNamespace(id=1)
+    first_message = SimpleNamespace(edit=AsyncMock())
+    second_message = SimpleNamespace(edit=AsyncMock())
+    member = SimpleNamespace(
+        id=101,
+        guild=guild,
+        send=AsyncMock(side_effect=[first_message, second_message]),
+    )
+    bot = SimpleNamespace()
+
+    assert await _send_teacher_onboarding_prompt(bot, member) is True
+    first_view = bot._teacher_onboarding_views[(1, 101)]
+    assert await _send_teacher_onboarding_prompt(bot, member) is True
+    second_view = bot._teacher_onboarding_views[(1, 101)]
+
+    assert second_view is not first_view
+    assert all(item.disabled for item in first_view.children)
+    first_message.edit.assert_awaited_once()
+    assert "remplacé" in first_message.edit.await_args.kwargs["content"]
+
+
+@pytest.mark.asyncio
+async def test_teacher_can_restart_own_incomplete_registration(monkeypatch):
+    from cogs.teacher_qr_onboarding import TeacherQROnboarding
+    from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_TEACHER_PENDING
+
+    guild = SimpleNamespace(id=1)
+    pending = SimpleNamespace(id=10, name=ROLE_TEACHER_PENDING)
+    member = SimpleNamespace(
+        id=202, display_name="Teacher awaiting registration", guild=guild,
+        roles=[pending], bot=False,
+    )
+    actor = member
+    interaction = SimpleNamespace(
+        guild=guild,
+        user=actor,
+        response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
+        followup=SimpleNamespace(send=AsyncMock()),
+    )
+    prompt = AsyncMock(return_value=True)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda *_args: None)
+    monkeypatch.setattr(
+        "cogs.teacher_qr_onboarding.get_managed_role",
+        lambda _guild, name: {
+            ROLE_TEACHER_PENDING: pending,
+            ROLE_PROFESSOR: None,
+            ROLE_PROFESSOR_FEMALE: None,
+        }.get(name),
+    )
+    monkeypatch.setattr("cogs.teacher_qr_onboarding._send_teacher_onboarding_prompt", prompt)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.record_event", lambda *_args, **_kwargs: None)
+
+    bot = SimpleNamespace()
+    cog = TeacherQROnboarding(bot)
+    await cog.restart_teacher_registration.callback(cog, interaction)
+
+    prompt.assert_awaited_once_with(bot, member)
+    interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+    assert "formulaire propre" in interaction.followup.send.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_teacher_cannot_self_restart_completed_registration(monkeypatch):
+    from cogs.teacher_qr_onboarding import TeacherQROnboarding
+
+    guild = SimpleNamespace(id=1)
+    member = SimpleNamespace(id=202, display_name="Registered teacher", guild=guild, roles=[], bot=False)
+    interaction = SimpleNamespace(
+        guild=guild, user=member,
+        response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
+        followup=SimpleNamespace(send=AsyncMock()),
+    )
+    prompt = AsyncMock()
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda *_args: {"discord_id": 202})
+    monkeypatch.setattr("cogs.teacher_qr_onboarding._send_teacher_onboarding_prompt", prompt)
+
+    cog = TeacherQROnboarding(SimpleNamespace())
+    await cog.restart_teacher_registration.callback(cog, interaction)
+
+    prompt.assert_not_awaited()
+    assert "déjà enregistrée" in interaction.response.send_message.await_args.args[0]
+
+
 def test_teacher_assignments_store_multiple_sections_and_preserve_thread_state(tmp_path, monkeypatch):
     _configure_storage(tmp_path, monkeypatch)
     storage.initialize_database()
@@ -839,6 +1039,25 @@ def test_reset_guild_data_clears_teacher_assignments(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_teacher_onboarding_rejects_section_not_in_active_import(monkeypatch):
+    from cogs.teacher_qr_onboarding import TeacherOnboardingView
+
+    view = TeacherOnboardingView(SimpleNamespace(), 1, 101)
+    view._ensure_eligible = AsyncMock(return_value=SimpleNamespace(id=101))
+    view.selected_level = "2ème Année Bac"
+    view.selected_stream = "2ème Année Bac Sciences Physiques"
+    view.available_sections = [3, 4]
+    view.section_select._values = ["8"]
+    response = _FakeInteractionResponse()
+    interaction = SimpleNamespace(user=SimpleNamespace(id=101), response=response)
+
+    await view.section_select.callback(interaction)
+
+    assert view.selected_sections == []
+    assert "sections réellement disponibles" in response.send_message.await_args.args[0]
+
+
+@pytest.mark.asyncio
 async def test_teacher_onboarding_collects_multiple_levels_and_sections(monkeypatch):
     from cogs.teacher_qr_onboarding import TeacherOnboardingView
     from config.curriculum import get_stream_subjects, get_streams
@@ -870,6 +1089,10 @@ async def test_teacher_onboarding_collects_multiple_levels_and_sections(monkeypa
 
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_managed_role", lambda _guild, name: pending if name == ROLE_TEACHER_PENDING else None)
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda *_args: None)
+    monkeypatch.setattr(
+        "cogs.teacher_qr_onboarding.get_active_sections_for_stream",
+        lambda _guild_id, _level, stream: [3, 4] if stream == "2ème Année Bac Sciences Physiques" else [2],
+    )
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
     monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
     monkeypatch.setattr(
@@ -889,6 +1112,8 @@ async def test_teacher_onboarding_collects_multiple_levels_and_sections(monkeypa
     await view.level_select.callback(interaction)
     view.stream_select._values = [stream_a]
     await view.stream_select.callback(interaction)
+    assert [option.value for option in view.section_select.options] == ["3", "4"]
+    assert view.section_select.max_values == 2
     view.section_select._values = ["3", "4"]
     await view.section_select.callback(interaction)
     await view.continue_button.callback(interaction)

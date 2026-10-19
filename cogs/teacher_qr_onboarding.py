@@ -41,6 +41,7 @@ from services.role_conflicts import teacher_target_conflict
 from services.storage import (
     delete_teacher_registration,
     get_guild_config,
+    get_active_sections_for_stream,
     get_teacher_assignments,
     get_teacher_qr_invites,
     get_teacher_registration,
@@ -104,6 +105,7 @@ class TeacherOnboardingView(discord.ui.View):
         self.selected_level: str | None = None
         self.selected_stream: str | None = None
         self.selected_sections: list[int] = []
+        self.available_sections: list[int] = []
         self.selected_subjects: list[str] = []
         # One entry per class section; subjects are scoped to that section.
         self.assignments: list[dict[str, object]] = []
@@ -190,6 +192,22 @@ class TeacherOnboardingView(discord.ui.View):
             row=1,
         )
         self.confirm_button.callback = self._confirm_registration
+
+        self.back_button = discord.ui.Button(
+            label="Retour à la classe",
+            style=discord.ButtonStyle.secondary,
+            emoji="⬅️",
+            row=1,
+        )
+        self.back_button.callback = self._back_to_class
+
+        self.reset_button = discord.ui.Button(
+            label="Recommencer",
+            style=discord.ButtonStyle.danger,
+            emoji="🔄",
+            row=4,
+        )
+        self.reset_button.callback = self._reset_form
         self._show_class_stage()
 
     async def _respond(self, interaction: discord.Interaction, content: str) -> None:
@@ -231,6 +249,15 @@ class TeacherOnboardingView(discord.ui.View):
             await self._respond(
                 interaction,
                 "❌ Le serveur n'est plus accessible. Contactez l'administration.",
+            )
+            return None
+
+        registry = getattr(self.bot, "_teacher_onboarding_views", {})
+        active_view = registry.get((self.guild_id, self.user_id)) if isinstance(registry, dict) else None
+        if active_view is not None and active_view is not self:
+            await self._respond(
+                interaction,
+                "ℹ️ Ce formulaire a été remplacé par un formulaire plus récent. Utilisez le dernier message privé reçu.",
             )
             return None
 
@@ -308,7 +335,10 @@ class TeacherOnboardingView(discord.ui.View):
             self.stream_select,
             self.section_select,
             self.continue_button,
+            self.reset_button,
         ):
+            if item is self.reset_button:
+                item.row = 4
             self.add_item(item)
         self._refresh_control_state()
 
@@ -316,7 +346,15 @@ class TeacherOnboardingView(discord.ui.View):
         for item in list(self.children):
             self.remove_item(item)
         self.stage = "subjects"
-        for item in (self.subject_select, self.add_assignment_button, self.confirm_button):
+        self.back_button.row = 1
+        self.reset_button.row = 2
+        for item in (
+            self.subject_select,
+            self.back_button,
+            self.add_assignment_button,
+            self.confirm_button,
+            self.reset_button,
+        ):
             self.add_item(item)
         self._refresh_control_state()
 
@@ -325,21 +363,34 @@ class TeacherOnboardingView(discord.ui.View):
             self.gender_select.disabled = bool(self.assignments)
             self.level_select.disabled = False
             self.stream_select.disabled = self.selected_level is None
-            self.section_select.disabled = self.selected_stream is None
+            self.section_select.disabled = not self.available_sections
             self.continue_button.disabled = not (
                 self.selected_gender
                 and self.selected_level
                 and self.selected_stream
                 and self.selected_sections
+                and all(section in self.available_sections for section in self.selected_sections)
             )
             self.subject_select.disabled = True
+            self.back_button.disabled = True
             self.add_assignment_button.disabled = True
             self.confirm_button.disabled = True
         else:
             self.subject_select.disabled = self.selected_stream is None
+            self.back_button.disabled = False
             self.add_assignment_button.disabled = not bool(self.selected_subjects)
             self.confirm_button.disabled = not bool(self.selected_subjects)
             self.continue_button.disabled = True
+
+    def _assigned_subject_keys(self, assignments: list[dict[str, object]] | None = None) -> set[str]:
+        source = self.assignments if assignments is None else assignments
+        keys: set[str] = set()
+        for item in source:
+            subjects = item.get("subjects", [])
+            if not isinstance(subjects, (list, tuple, set)):
+                continue
+            keys.update(get_subject_display_name(str(subject)).casefold() for subject in subjects)
+        return keys
 
     def _assignment_lines(self) -> list[str]:
         lines: list[str] = []
@@ -463,7 +514,18 @@ class TeacherOnboardingView(discord.ui.View):
         self.selected_level = level
         self.selected_stream = None
         self.selected_sections = []
+        self.available_sections = []
         self.selected_subjects = []
+        self.level_select.options = [
+            discord.SelectOption(label=item, value=item, default=item == level)
+            for item in get_levels()
+        ]
+        self.section_select.options = [
+            discord.SelectOption(label="Choisissez une filière d'abord", value="__disabled__")
+        ]
+        self.section_select.min_values = 1
+        self.section_select.max_values = 1
+        self.section_select.disabled = True
         self.stream_select.options = [
             discord.SelectOption(
                 label=stream,
@@ -489,8 +551,56 @@ class TeacherOnboardingView(discord.ui.View):
             return
         self.selected_stream = stream
         self.selected_sections = []
+        self.available_sections = []
         self.selected_subjects = []
-        self.section_select.disabled = False
+        self.section_select.options = [
+            discord.SelectOption(label="Chargement des sections…", value="__disabled__")
+        ]
+        self.section_select.min_values = 1
+        self.section_select.max_values = 1
+        self.section_select.disabled = True
+        self._refresh_control_state()
+        try:
+            self.available_sections = get_active_sections_for_stream(
+                self.guild_id, self.selected_level, self.selected_stream
+            )
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            logging.getLogger(__name__).exception(
+                "Unable to load active sections for teacher onboarding (guild=%s level=%s stream=%s)",
+                self.guild_id, self.selected_level, self.selected_stream,
+            )
+            await interaction.response.edit_message(
+                content=(
+                    "❌ Impossible de lire les sections issues de l'import scolaire. Réessayez ou contactez l'administration.\n\n"
+                    + self._summary_text()
+                ),
+                view=self,
+            )
+            return
+        if self.available_sections:
+            self.section_select.options = [
+                discord.SelectOption(label=f"Section {section}", value=str(section))
+                for section in self.available_sections
+            ]
+            self.section_select.min_values = 1
+            self.section_select.max_values = len(self.available_sections)
+            self.section_select.disabled = False
+        else:
+            self.section_select.options = [
+                discord.SelectOption(label="Aucune section active importée", value="__disabled__")
+            ]
+            self.section_select.min_values = 1
+            self.section_select.max_values = 1
+            self.section_select.disabled = True
+        self.stream_select.options = [
+            discord.SelectOption(
+                label=item,
+                value=item,
+                description=get_stream_abbreviation(self.selected_level, item),
+                default=item == stream,
+            )
+            for item in get_streams(self.selected_level)
+        ]
         self._refresh_control_state()
         await self._edit_form(interaction)
 
@@ -504,10 +614,25 @@ class TeacherOnboardingView(discord.ui.View):
             sections = sorted({int(value) for value in self.section_select.values})
         except (TypeError, ValueError):
             sections = []
-        if not sections or any(section < 1 or section > 8 for section in sections):
-            await interaction.response.send_message("❌ Sélectionnez une ou plusieurs sections entre 1 et 8.")
+        if (
+            not sections
+            or any(section < 1 or section > 8 for section in sections)
+            or any(section not in self.available_sections for section in sections)
+        ):
+            await interaction.response.send_message(
+                "❌ Sélectionnez uniquement les sections réellement disponibles dans la liste. "
+                "Les sections non importées ne peuvent pas être affectées."
+            )
             return
         self.selected_sections = sections
+        self.section_select.options = [
+            discord.SelectOption(
+                label=f"Section {section}",
+                value=str(section),
+                default=section in sections,
+            )
+            for section in self.available_sections
+        ]
         self._refresh_control_state()
         await self._edit_form(interaction)
 
@@ -522,9 +647,29 @@ class TeacherOnboardingView(discord.ui.View):
         ):
             await interaction.response.send_message("❌ Choisissez le type, le niveau, la filière et au moins une section.")
             return
+        if not self.available_sections or any(
+            section not in self.available_sections for section in self.selected_sections
+        ):
+            await interaction.response.send_message(
+                "❌ Cette filière ne contient aucune section active issue de l'import scolaire. "
+                "Changez de filière ou demandez à l'administration de vérifier l'import XLSX."
+            )
+            return
         subjects = get_stream_subjects(self.selected_level, self.selected_stream)
         if not subjects:
             await interaction.response.send_message("❌ Aucune matière n'est configurée pour cette filière.")
+            return
+        assigned_subjects = self._assigned_subject_keys()
+        eligible_subjects = [
+            subject for subject in subjects
+            if get_subject_display_name(subject).casefold() in assigned_subjects or len(assigned_subjects) < 2
+        ]
+        if not eligible_subjects:
+            await interaction.response.send_message(
+                "❌ Vous avez déjà choisi deux matières pour cette inscription. "
+                "Pour ajouter une autre classe, elle doit proposer au moins une de ces deux matières; "
+                "sinon utilisez **Recommencer** pour corriger vos choix non validés."
+            )
             return
         self.subject_select.options = [
             discord.SelectOption(
@@ -532,10 +677,11 @@ class TeacherOnboardingView(discord.ui.View):
                 value=subject,
                 description=subject[:100] if get_subject_display_name(subject) != subject else None,
             )
-            for subject in subjects
+            for subject in eligible_subjects
         ]
         self.subject_select.min_values = 1
-        self.subject_select.max_values = len(subjects)
+        self.subject_select.max_values = min(2, len(eligible_subjects))
+        self.subject_select.placeholder = "Choisissez au maximum 2 matières"
         self.selected_subjects = []
         self._show_subject_stage()
         await self._edit_form(interaction)
@@ -551,7 +697,28 @@ class TeacherOnboardingView(discord.ui.View):
         if not selected:
             await interaction.response.send_message("❌ Choisissez au moins une matière valide.")
             return
+        if len(selected) > 2:
+            await interaction.response.send_message("❌ Vous pouvez sélectionner deux matières au maximum.")
+            return
+        all_subject_keys = self._assigned_subject_keys() | {
+            get_subject_display_name(value).casefold() for value in selected
+        }
+        if len(all_subject_keys) > 2:
+            await interaction.response.send_message(
+                "❌ Vous pouvez choisir au maximum **deux matières au total** pour toute l'inscription, "
+                "même si vous ajoutez plusieurs classes. Gardez une matière déjà choisie ou appuyez sur Recommencer."
+            )
+            return
         self.selected_subjects = selected
+        self.subject_select.options = [
+            discord.SelectOption(
+                label=get_subject_display_name(str(option.value))[:100],
+                value=str(option.value),
+                description=str(option.value)[:100] if get_subject_display_name(str(option.value)) != str(option.value) else None,
+                default=str(option.value) in selected,
+            )
+            for option in self.subject_select.options
+        ]
         self._refresh_control_state()
         await self._edit_form(interaction)
 
@@ -571,16 +738,84 @@ class TeacherOnboardingView(discord.ui.View):
         self.selected_level = None
         self.selected_stream = None
         self.selected_sections = []
+        self.available_sections = []
         self.selected_subjects = []
         self.stream_select.options = [
             discord.SelectOption(label="Choisissez un niveau d'abord", value="__disabled__")
         ]
+        self.section_select.options = [
+            discord.SelectOption(label="Choisissez un niveau et une filière", value="__disabled__")
+        ]
+        self.section_select.min_values = 1
+        self.section_select.max_values = 1
         self.section_select.disabled = True
         self.subject_select.options = [
             discord.SelectOption(label="Choisissez une filière d'abord", value="__disabled__")
         ]
         self._show_class_stage()
         await self._edit_form(interaction)
+
+    async def _back_to_class(self, interaction: discord.Interaction) -> None:
+        if await self._ensure_eligible(interaction) is None:
+            return
+        if self.stage != "subjects":
+            await self._respond(interaction, "ℹ️ Vous êtes déjà à l'étape de sélection de la classe.")
+            return
+        self.selected_subjects = []
+        self.subject_select.options = [
+            discord.SelectOption(
+                label=get_subject_display_name(subject)[:100],
+                value=subject,
+            )
+            for subject in (
+                get_stream_subjects(self.selected_level, self.selected_stream)
+                if self.selected_level and self.selected_stream
+                else []
+            )
+        ]
+        self._show_class_stage()
+        await interaction.response.edit_message(content=self._summary_text(), view=self)
+
+    async def _reset_form(self, interaction: discord.Interaction) -> None:
+        if await self._ensure_eligible(interaction) is None:
+            return
+        if self.submitting:
+            await self._respond(interaction, "⏳ L'inscription est en cours; attendez le résultat avant de réinitialiser.")
+            return
+        self.selected_gender = None
+        self.selected_level = None
+        self.selected_stream = None
+        self.selected_sections = []
+        self.available_sections = []
+        self.selected_subjects = []
+        self.assignments = []
+        self.gender_select.options = [
+            discord.SelectOption(label="Prof", value="male", description="Rôle professeur"),
+            discord.SelectOption(label="Prof (F)", value="female", description="Rôle professeur féminin"),
+        ]
+        self.level_select.options = [
+            discord.SelectOption(label=level, value=level) for level in get_levels()
+        ]
+        self.stream_select.options = [
+            discord.SelectOption(label="Choisissez un niveau d'abord", value="__disabled__")
+        ]
+        self.section_select.options = [
+            discord.SelectOption(label="Choisissez un niveau et une filière", value="__disabled__")
+        ]
+        self.section_select.min_values = 1
+        self.section_select.max_values = 1
+        self.subject_select.options = [
+            discord.SelectOption(label="Choisissez une filière d'abord", value="__disabled__")
+        ]
+        self.subject_select.min_values = 1
+        self.subject_select.max_values = 1
+        self.subject_select.placeholder = "Choisissez au maximum 2 matières"
+        self._show_class_stage()
+        await interaction.response.edit_message(
+            content="🔄 **Formulaire réinitialisé.** Vos choix non validés ont été effacés.\n\n"
+            + self._summary_text(),
+            view=self,
+        )
 
     async def _confirm_registration(self, interaction: discord.Interaction) -> None:
         stage = "validation"
@@ -606,6 +841,43 @@ class TeacherOnboardingView(discord.ui.View):
         if not assignment_payload:
             await interaction.response.send_message("❌ Ajoutez au moins une affectation valide.")
             return
+        all_subject_keys = self._assigned_subject_keys(assignment_payload)
+        if self.selected_subjects:
+            all_subject_keys.update(
+                get_subject_display_name(subject).casefold() for subject in self.selected_subjects
+            )
+        if len(all_subject_keys) > 2:
+            await interaction.response.send_message(
+                "❌ Une inscription professeur ne peut contenir que deux matières distinctes au maximum. "
+                "Appuyez sur Recommencer pour corriger les choix."
+            )
+            return
+
+        try:
+            available_by_stream: dict[tuple[str, str], list[int]] = {}
+            for item in assignment_payload:
+                pair = (str(item["level"]), str(item["stream"]))
+                if pair not in available_by_stream:
+                    available_by_stream[pair] = get_active_sections_for_stream(
+                        self.guild_id, pair[0], pair[1]
+                    )
+                if int(item["section"]) not in available_by_stream[pair]:
+                    await interaction.response.send_message(
+                        "❌ Une des sections choisies n'existe plus dans l'import scolaire actif "
+                        f"({get_stream_abbreviation(str(item['level']), str(item['stream']))}-S{item['section']}). "
+                        "Utilisez **Retour à la classe** ou **Recommencer** pour corriger les choix."
+                    )
+                    return
+        except (OSError, sqlite3.Error, ValueError):
+            logging.getLogger(__name__).exception(
+                "Unable to revalidate teacher sections before registration (guild=%s member=%s)",
+                self.guild_id, self.user_id,
+            )
+            await interaction.response.send_message(
+                "❌ Impossible de revérifier les sections de l'import scolaire. Aucune inscription n'a été enregistrée; réessayez plus tard."
+            )
+            return
+
         primary = assignment_payload[0]
         primary_subjects = primary["subjects"]
         if not isinstance(primary_subjects, list) or not primary_subjects:
@@ -855,12 +1127,37 @@ async def _send_teacher_onboarding_prompt(
         view.message = await user.send(
             "## 👨‍🏫 Inscription professeur\n\n"
             "Bienvenue ! Sélectionnez tous les niveaux, filières, sections et matières que vous enseignez.\n\n"
+            "Vous pouvez choisir au maximum deux matières distinctes pour toute l'inscription, même si vous enseignez plusieurs classes. Les sections proposées viennent des élèves "
+            "importés pour l'année scolaire active. Utilisez **Retour à la classe** pour corriger un choix ou "
+            "**Recommencer** pour effacer vos choix non validés. Vous pouvez aussi lancer `/restartteacherregistration` "
+            "dans le serveur pour recevoir un nouveau formulaire.\n\n"
             "Les choix proviennent du programme scolaire configuré. Après validation, le bot attribuera vos rôles "
             "et préparera automatiquement les threads publics de vos sections dans les salons des matières.",
             view=view,
         )
     except discord.HTTPException:
         return False
+
+    registry = getattr(bot, "_teacher_onboarding_views", None)
+    if not isinstance(registry, dict):
+        registry = {}
+        setattr(bot, "_teacher_onboarding_views", registry)
+    key = (user.guild.id, user.id)
+    previous = registry.get(key)
+    registry[key] = view
+    if previous is not None and previous is not view:
+        previous.stop()
+        for item in previous.children:
+            item.disabled = True
+        previous_message = getattr(previous, "message", None)
+        if previous_message is not None:
+            try:
+                await previous_message.edit(
+                    content="ℹ️ Ce formulaire a été remplacé par un formulaire plus récent. Utilisez le dernier message privé reçu.",
+                    view=previous,
+                )
+            except discord.HTTPException:
+                pass
     return True
 
 
@@ -1105,6 +1402,88 @@ async def _archive_teacher_assignment_threads(
 class TeacherQROnboarding(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+
+    @app_commands.command(
+        name="restartteacherregistration",
+        description="Renvoyer votre formulaire professeur si vous avez fait une erreur avant de valider.",
+    )
+    @app_commands.guild_only()
+    async def restart_teacher_registration(self, interaction: discord.Interaction) -> None:
+        """Resend onboarding only for the invoking member's incomplete registration."""
+        guild = interaction.guild
+        member = interaction.user
+        if guild is None or getattr(member, "guild", None) is None:
+            await interaction.response.send_message(
+                "❌ Utilisez cette commande dans le serveur, pas dans les messages privés.",
+                ephemeral=True,
+            )
+            return
+        if member.bot:
+            await interaction.response.send_message("❌ Un bot ne peut pas démarrer une inscription professeur.", ephemeral=True)
+            return
+        try:
+            registration = get_teacher_registration(guild.id, member.id)
+        except (OSError, sqlite3.Error):
+            logging.getLogger(__name__).exception(
+                "Unable to check teacher registration before self-restart (guild=%s member=%s)",
+                guild.id, member.id,
+            )
+            await interaction.response.send_message(
+                "❌ Impossible de vérifier votre dossier. Contactez l'administration avant de réessayer.",
+                ephemeral=True,
+            )
+            return
+        if registration is not None:
+            await interaction.response.send_message(
+                "ℹ️ Votre inscription est déjà enregistrée. Pour protéger vos affectations et threads, "
+                "seule l'administration peut réinitialiser un dossier terminé avec "
+                "/startteacherregistration en activant `restart`.",
+                ephemeral=True,
+            )
+            return
+
+        pending_role = get_managed_role(guild, ROLE_TEACHER_PENDING)
+        professor_roles = {
+            role
+            for role in (
+                get_managed_role(guild, ROLE_PROFESSOR),
+                get_managed_role(guild, ROLE_PROFESSOR_FEMALE),
+            )
+            if role is not None
+        }
+        if pending_role is None or pending_role not in member.roles or any(
+            role in member.roles for role in professor_roles
+        ):
+            await interaction.response.send_message(
+                "❌ Votre compte n'est pas dans un état d'inscription incomplète. "
+                "Demandez à l'administration de vérifier le rôle `Professeur - En attente`.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        dm_sent = await _send_teacher_onboarding_prompt(self.bot, member)
+        record_event(
+            guild.id,
+            member.id,
+            member.display_name,
+            "selfrestartteacherregistration",
+            member.display_name,
+            "dm_sent=" + str(dm_sent).lower(),
+        )
+        if dm_sent:
+            await interaction.followup.send(
+                "✅ Je vous ai renvoyé un formulaire propre en message privé. Vous pouvez aussi utiliser "
+                "les boutons **Retour à la classe** et **Recommencer** dans le formulaire. "
+                "Vos choix n'avaient pas été enregistrés; aucun départ du serveur n'est nécessaire.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                "⚠️ Je n'ai pas pu vous envoyer le formulaire en privé. Autorisez les messages privés du serveur "
+                "puis relancez `/restartteacherregistration`. Votre inscription reste en attente.",
+                ephemeral=True,
+            )
 
     @app_commands.command(
         name="startteacherregistration",
