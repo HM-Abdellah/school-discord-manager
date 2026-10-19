@@ -29,6 +29,7 @@ from services.permissions import (
     stream_announcement_overwrites,
     teacher_area_overwrites,
     student_view_overwrite,
+    student_subject_channel_overwrite,
 )
 
 CATEGORY_GENERAL = "🏢・INFORMATIONS & ADMINISTRATION"
@@ -113,7 +114,7 @@ def _level_category_name(level_name: str) -> str:
 def _subject_channel_overwrites(everyone, admin_role, professor_role, female_professor_role, teacher_stream_role, student_stream_role, student_role=None, bot_member=None):
     teacher = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, create_public_threads=True, send_messages_in_threads=True)
     professor = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
-    student = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, create_public_threads=True, send_messages_in_threads=True)
+    student = student_subject_channel_overwrite()
     admin = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, manage_channels=True, manage_permissions=True, manage_messages=True, manage_threads=True)
     overwrites = {everyone: discord.PermissionOverwrite(view_channel=False), admin_role: admin, professor_role: professor, female_professor_role: professor, teacher_stream_role: teacher, student_stream_role: student}
     if student_role is not None:

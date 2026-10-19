@@ -5,7 +5,10 @@ import discord
 import pytest
 
 from services import teacher_threads
-from services.teacher_threads import _ensure_bot_thread_channel_access
+from services.teacher_threads import (
+    _ensure_bot_thread_channel_access,
+    _ensure_students_cannot_write_threads,
+)
 
 
 class _HashableNamespace(SimpleNamespace):
@@ -78,6 +81,43 @@ async def test_ensure_teacher_threads_creates_public_thread_and_persists_id(monk
     assert kwargs["auto_archive_duration"] == 10080
     assert "message" not in kwargs
     assert updates == [(1, 1, {"status": "created", "thread_id": 9001, "error": None})]
+
+
+@pytest.mark.asyncio
+async def test_students_keep_parent_channel_access_but_cannot_create_or_post_in_threads(monkeypatch):
+    student_stream_role = _HashableNamespace(id=202, name="Élèves - 2BACPC")
+    original = discord.PermissionOverwrite(
+        view_channel=True,
+        send_messages=True,
+        create_public_threads=True,
+        create_private_threads=True,
+        send_messages_in_threads=True,
+        embed_links=False,
+    )
+    channel = SimpleNamespace(
+        overwrites={student_stream_role: original},
+        overwrites_for=lambda role: original if role == student_stream_role else discord.PermissionOverwrite(),
+        edit=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        teacher_threads,
+        "get_managed_role",
+        lambda _guild, name: student_stream_role if name == "Élèves - 2BACPC" else None,
+    )
+
+    changed = await _ensure_students_cannot_write_threads(
+        SimpleNamespace(id=1), channel, "2BACPC"
+    )
+
+    assert changed is True
+    channel.edit.assert_awaited_once()
+    updated = channel.edit.await_args.kwargs["overwrites"][student_stream_role]
+    assert updated.view_channel is True
+    assert updated.send_messages is True  # Parent channel chatting is unchanged.
+    assert updated.create_public_threads is False
+    assert updated.create_private_threads is False
+    assert updated.send_messages_in_threads is False
+    assert updated.embed_links is False  # Unrelated overwrite flags are preserved.
 
 
 @pytest.mark.asyncio

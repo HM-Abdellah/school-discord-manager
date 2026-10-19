@@ -343,4 +343,9 @@ def test_stream_specific_access_does_not_use_base_student_role():
     assert student not in voice
     assert student_stream in stream
     assert student_stream in subject
+    assert subject[student_stream].view_channel is True
+    assert subject[student_stream].send_messages is True
+    assert subject[student_stream].create_public_threads is False
+    assert subject[student_stream].create_private_threads is False
+    assert subject[student_stream].send_messages_in_threads is False
     assert student_stream in voice

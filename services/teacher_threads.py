@@ -6,6 +6,7 @@ import discord
 
 from config.curriculum import get_stream_abbreviation, get_subject_display_name
 from services.discord_registry import persist_registry_repair, resolve_managed_text_channel
+from services.permissions import STUDENT_STREAM_ROLE_PREFIX, get_managed_role
 from services.server_builder import _stream_category_name, _subject_channel_name
 from services.storage import (
     get_guild_config,
@@ -181,6 +182,43 @@ async def _activate_thread(thread: discord.Thread) -> None:
         )
 
 
+async def _ensure_students_cannot_write_threads(
+    guild: discord.Guild,
+    channel: discord.TextChannel,
+    stream_code: str,
+) -> bool:
+    """Keep students readable in subject channels but read-only in their threads.
+
+    Threads inherit their parent channel's thread permissions, so the stream-role
+    overwrite must explicitly deny thread creation and posting. Ordinary messages
+    in the parent subject channel remain unaffected.
+    """
+    student_stream_role = get_managed_role(guild, f"{STUDENT_STREAM_ROLE_PREFIX}{stream_code}")
+    if student_stream_role is None:
+        # Some legacy/test guilds do not have the optional managed stream role.
+        # In that case, the general student overwrite already denies thread posts.
+        return False
+
+    overwrite = channel.overwrites_for(student_stream_role)
+    if (
+        overwrite.create_public_threads is False
+        and overwrite.create_private_threads is False
+        and overwrite.send_messages_in_threads is False
+    ):
+        return False
+
+    overwrite.create_public_threads = False
+    overwrite.create_private_threads = False
+    overwrite.send_messages_in_threads = False
+    merged_overwrites = dict(channel.overwrites)
+    merged_overwrites[student_stream_role] = overwrite
+    await channel.edit(
+        overwrites=merged_overwrites,
+        reason="School Manager: make students read-only in teacher assignment threads",
+    )
+    return True
+
+
 async def _ensure_teacher_is_thread_member(
     guild: discord.Guild,
     thread: discord.Thread,
@@ -254,6 +292,7 @@ async def ensure_teacher_threads(guild: discord.Guild, teacher_id: int) -> dict[
                     "n'a pas pu être enregistrée; relancez la synchronisation après vérification du stockage."
                 )
             await _ensure_bot_thread_channel_access(guild, channel)
+            await _ensure_students_cannot_write_threads(guild, channel, code)
             existing_threads = await all_public_threads(channel)
         except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError) as exc:
             message = f"{code} / {get_subject_display_name(subject)}: {_error_text(exc)}"

@@ -33,6 +33,7 @@ from services.permissions import (
     administrator_overwrite,
     hidden_overwrite,
     student_overwrite,
+    student_subject_channel_overwrite,
     teacher_professor_check,
 )
 from services.server_builder import _subject_channel_name, _subject_role_name, _stream_role_name
@@ -224,7 +225,7 @@ class TeacherCommands(commands.Cog):
             if prof_f_role is not None:
                 overwrites[prof_f_role] = professor_subject_view_overwrite()
             if student_stream_role is not None:
-                overwrites[student_stream_role] = student_overwrite(can_send=True)
+                overwrites[student_stream_role] = student_subject_channel_overwrite()
             overwrites[subject_role] = professor_subject_member_overwrite()
 
             await channel.edit(overwrites=overwrites, reason="School manager subject teacher access")
