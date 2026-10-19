@@ -89,6 +89,80 @@ def _class_role_name(stream_code: str, section: int) -> str:
     return STUDENT_STREAM_ROLE_PREFIX + _class_key(stream_code, section)
 
 
+def _audit_class_section(
+    guild: discord.Guild,
+    config: dict[str, Any],
+    *,
+    level: str,
+    stream: str,
+    code: str,
+    section: int,
+) -> str:
+    """Explain why a section is or is not eligible for teacher onboarding.
+
+    This helper is deliberately read-only: it never adopts roles or changes the
+    class-role registry because an unregistered same-named role may be manual.
+    """
+    key = _class_key(code, section)
+    expected_name = _class_role_name(code, section)
+    registry = config.get("class_roles", {}) if isinstance(config, dict) else {}
+    if not isinstance(registry, dict):
+        return f"❌ Section {section}: le registre `class_roles` est invalide."
+
+    entry = registry.get(key)
+    if entry is None:
+        alternate_key = next(
+            (str(candidate) for candidate in registry if str(candidate).casefold() == key.casefold()),
+            None,
+        )
+        if alternate_key is not None:
+            return (
+                f"⚠️ Section {section}: clé `class_roles` non canonique `{alternate_key}`; "
+                f"la clé attendue est `{key}`."
+            )
+        matching_roles = [
+            role for role in getattr(guild, "roles", [])
+            if not getattr(role, "managed", False)
+            and str(getattr(role, "name", "")).casefold() == expected_name.casefold()
+        ]
+        if matching_roles:
+            names = ", ".join(
+                f"`{getattr(role, 'name', expected_name)}` (ID `{getattr(role, 'id', '?')}`)"
+                for role in matching_roles[:3]
+            )
+            return (
+                f"⚠️ Section {section}: rôle présent ({names}), mais aucune entrée `{key}` dans `class_roles`. "
+                "Il n'a pas été adopté automatiquement."
+            )
+        return (
+            f"❌ Section {section}: aucune entrée `{key}` dans `class_roles` "
+            f"et aucun rôle `{expected_name}` trouvé."
+        )
+
+    if not isinstance(entry, dict):
+        return f"❌ Section {section}: l'entrée `{key}` du registre n'est pas un objet valide."
+    if entry.get("level_name") != level or entry.get("stream_name") != stream:
+        return f"❌ Section {section}: niveau ou filière enregistré incorrect dans `{key}`."
+    if type(entry.get("section")) is not int or entry.get("section") != section:
+        return f"❌ Section {section}: numéro de section enregistré incorrect dans `{key}`."
+    if entry.get("stream_code") != code:
+        return f"❌ Section {section}: code de filière enregistré incorrect dans `{key}`."
+    role_id = entry.get("role_id")
+    if type(role_id) is not int or role_id <= 0:
+        return f"❌ Section {section}: `role_id` invalide dans `{key}`."
+    role = guild.get_role(role_id)
+    if role is None:
+        return f"❌ Section {section}: rôle ID `{role_id}` enregistré mais absent du cache Discord."
+    if getattr(role, "managed", False):
+        return f"❌ Section {section}: le rôle ID `{role_id}` est un rôle géré par une intégration."
+    if role.name != expected_name:
+        return (
+            f"❌ Section {section}: le rôle ID `{role_id}` porte le nom `{role.name}`, "
+            f"au lieu de `{expected_name}`."
+        )
+    return f"✅ Section {section}: valide — `{expected_name}` (ID `{role_id}`)."
+
+
 def _class_role_registry(config: dict[str, Any]) -> dict[str, Any]:
     registry = config.get("class_roles")
     if registry is None:
@@ -354,6 +428,47 @@ class ClassQROnboarding(commands.Cog):
                     + str(row["id"]) + ": " + str(exc),
                     flush=True,
                 )
+
+    @app_commands.command(
+        name="auditclasssections",
+        description="Diagnostiquer les sections disponibles pour l'inscription des professeurs.",
+    )
+    @app_commands.describe(
+        level="Niveau scolaire",
+        stream="Filière scolaire",
+    )
+    @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete)
+    @app_commands.default_permissions(manage_roles=True)
+    @management_check(lock=False)
+    async def audit_class_sections(
+        self,
+        interaction: discord.Interaction,
+        level: str,
+        stream: str,
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
+        if level not in get_levels() or stream not in get_streams(level):
+            await interaction.response.send_message("❌ Niveau ou filière invalide.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        config = get_guild_config(guild.id) or {}
+        code = get_stream_abbreviation(level, stream)
+        lines = [
+            _audit_class_section(
+                guild, config, level=level, stream=stream, code=code, section=section
+            )
+            for section in range(1, 9)
+        ]
+        await interaction.followup.send(
+            f"## Audit des sections — {code}\n"
+            "**Lecture seule :** aucun rôle, QR ou réglage n'a été modifié.\n\n"
+            + "\n".join(lines),
+            ephemeral=True,
+        )
 
     @app_commands.command(
         name="createclassqr",

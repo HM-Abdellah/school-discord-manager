@@ -6,6 +6,7 @@ import pytest
 from services import storage
 
 from cogs.qr_onboarding import (
+    _audit_class_section,
     _class_key,
     _class_role_name,
     _get_or_create_class_role,
@@ -20,6 +21,49 @@ from services.qr_invites import (
 def test_class_identity_is_stream_plus_section():
     assert _class_key("2BACPC", 2) == "2BACPC-2"
     assert _class_role_name("2BACPC", 2) == "Élèves - 2BACPC-2"
+
+
+def test_class_section_audit_reports_valid_registered_role():
+    role = SimpleNamespace(id=900, name="Élèves - 2BACPC-2", managed=False)
+    guild = SimpleNamespace(roles=[role], get_role=lambda role_id: role if role_id == 900 else None)
+    level = "2ème Année Bac"
+    stream = "2ème Année Bac Sciences Physiques"
+    config = {
+        "class_roles": {
+            "2BACPC-2": {
+                "role_id": 900,
+                "level_name": level,
+                "stream_name": stream,
+                "stream_code": "2BACPC",
+                "section": 2,
+            }
+        }
+    }
+
+    result = _audit_class_section(
+        guild, config, level=level, stream=stream, code="2BACPC", section=2
+    )
+
+    assert result.startswith("✅ Section 2: valide")
+    assert "900" in result
+
+
+def test_class_section_audit_reports_role_missing_from_registry_without_adopting_it():
+    role = SimpleNamespace(id=901, name="Élèves - 2BACPC-1", managed=False)
+    guild = SimpleNamespace(roles=[role], get_role=lambda _role_id: None)
+
+    result = _audit_class_section(
+        guild,
+        {"class_roles": {}},
+        level="2ème Année Bac",
+        stream="2ème Année Bac Sciences Physiques",
+        code="2BACPC",
+        section=1,
+    )
+
+    assert "Section 1" in result
+    assert "mais aucune entrée `2BACPC-1` dans `class_roles`" in result
+    assert "Il n'a pas été adopté automatiquement" in result
 
 
 def test_qr_capacity_policy_is_capped_at_42():

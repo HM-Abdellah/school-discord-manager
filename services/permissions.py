@@ -24,7 +24,7 @@ SUBJECT_ROLE_PREFIX = "Matière - "
 CHANNEL_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream", "createclassqr"}
 ROLE_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream", "assignstudent", "assignteacher", "assignteacherfull", "assignsubjectteachers", "createclassqr", "createteacherqr", "startteacherregistration", "revoketeacherqr", "listteacherqr"}
 RESET_COMMANDS = {"resetserver"}
-READONLY_DURING_PENDING_REMOVAL = {"status", "years", "studenthistory", "adminpanel", "serverhealth"}
+READONLY_DURING_PENDING_REMOVAL = {"status", "years", "studenthistory", "adminpanel", "serverhealth", "auditclasssections"}
 PENDING_REMOVAL_KEY = "pending_removal"
 
 
