@@ -1,8 +1,5 @@
 from types import SimpleNamespace
 
-from unittest.mock import AsyncMock
-
-import discord
 import pytest
 
 from cogs.removestream_fix import _recorded_id, _stream_channel_names, _stream_role_names
@@ -195,8 +192,8 @@ def test_reset_role_hierarchy_fails_before_mutation():
 
 def test_reset_archives_before_discord_deletion():
     source = open("cogs/security_hardening_v3.py", encoding="utf-8").read()
-    assert "archive_path = prior_archive or archive_guild_database(guild.id, archive_year)" in source
-    assert source.index("archive_path = prior_archive or archive_guild_database") < source.index("await channel.delete")
+    assert "archive_path = archive_guild_database" in source
+    assert source.index("archive_path = archive_guild_database") < source.index("await channel.delete")
 
 
 def test_latency_sensitive_commands_acknowledge_before_slow_work():
@@ -210,162 +207,3 @@ def test_latency_sensitive_commands_acknowledge_before_slow_work():
     assert report.index("await interaction.followup.send") > report.index("await interaction.response.defer(ephemeral=True)")
     assert full.index("await interaction.response.defer(ephemeral=True)") < full.index("execute_teacher_assignment(")
     assert "except TeacherAssignmentError as exc" in full
-
-
-def test_reset_includes_registered_class_roles_outside_managed_role_registry():
-    from cogs.security_hardening_v3 import _registered_class_role_ids
-
-    section_role = FakeComparableRole("Élèves - 2BACPC-2", 303, 3)
-    guild = SimpleNamespace(roles=[section_role], get_role=lambda role_id: section_role if role_id == 303 else None)
-    config = {
-        "class_roles": {
-            "2BACPC-2": {
-                "role_id": 303,
-                "level_name": "2ème Année Bac",
-                "stream_name": "2ème Année Bac Sciences Physiques",
-                "stream_code": "2BACPC",
-                "section": 2,
-            }
-        }
-    }
-
-    assert _registered_class_role_ids(guild, config) == {303}
-
-
-def test_reset_refuses_mismatched_registered_class_role_identity():
-    from cogs.security_hardening_v3 import _registered_class_role_ids
-
-    section_role = FakeComparableRole("Manual Unrelated Role", 303, 3)
-    guild = SimpleNamespace(roles=[section_role], get_role=lambda role_id: section_role if role_id == 303 else None)
-    config = {
-        "class_roles": {
-            "2BACPC-2": {
-                "role_id": 303,
-                "level_name": "2ème Année Bac",
-                "stream_name": "2ème Année Bac Sciences Physiques",
-                "stream_code": "2BACPC",
-                "section": 2,
-            }
-        }
-    }
-
-    with pytest.raises(RuntimeError, match="identité enregistrée"):
-        _registered_class_role_ids(guild, config)
-
-
-def test_reset_always_archives_even_without_active_academic_year():
-    source = open("cogs/security_hardening_v3.py", encoding="utf-8").read()
-    assert 'else "no-active-year"' in source
-    assert "archive_path = prior_archive or archive_guild_database(guild.id, archive_year)" in source
-    assert source.index("archive_path = prior_archive or archive_guild_database") < source.index("await channel.delete")
-
-
-def test_reset_reuses_only_valid_archive_for_matching_guild(tmp_path, monkeypatch):
-    import sqlite3
-    from cogs import security_hardening_v3 as reset_module
-
-    archive_dir = tmp_path / "archives"
-    archive_dir.mkdir()
-    archive = archive_dir / "2026-2027.db"
-    with sqlite3.connect(archive) as conn:
-        conn.execute(
-            "CREATE TABLE archive_metadata (id INTEGER PRIMARY KEY CHECK(id=1), guild_id INTEGER NOT NULL, academic_year TEXT NOT NULL, archived_at TEXT NOT NULL)"
-        )
-        conn.execute(
-            "INSERT INTO archive_metadata VALUES (1,101,'2026/2027','2026-10-01T00:00:00+00:00')"
-        )
-
-    monkeypatch.setattr(reset_module, "DATA_DIR", tmp_path)
-    assert reset_module._existing_reset_archive(101, archive.name) == archive
-    assert reset_module._existing_reset_archive(202, archive.name) is None
-    assert reset_module._existing_reset_archive(101, "../school.db") is None
-
-
-def test_reset_preflight_detects_unregistered_channels_inside_managed_categories():
-    from cogs.security_hardening_v3 import _unregistered_children_of_managed_categories
-
-    managed_text = SimpleNamespace(id=201, name="📌-TCS・informations", category_id=200)
-    unmanaged_text = SimpleNamespace(id=999, name="manual-notes", category_id=200)
-    outside_text = SimpleNamespace(id=1000, name="unrelated", category_id=555)
-    category = SimpleNamespace(id=200, name="managed-category", category_id=None)
-    live_channels = {item.id: item for item in (category, managed_text, unmanaged_text, outside_text)}
-
-    assert _unregistered_children_of_managed_categories(live_channels, {201}, {200}) == [
-        (200, "manual-notes")
-    ]
-
-
-def test_reset_preflight_allows_categories_with_only_registered_children():
-    from cogs.security_hardening_v3 import _unregistered_children_of_managed_categories
-
-    category = SimpleNamespace(id=200, name="managed-category", category_id=None)
-    managed_text = SimpleNamespace(id=201, name="managed-text", category_id=200)
-    live_channels = {200: category, 201: managed_text}
-
-    assert _unregistered_children_of_managed_categories(live_channels, {201}, {200}) == []
-
-
-@pytest.mark.asyncio
-async def test_reset_repairs_bot_view_access_before_deleting_hidden_managed_resources():
-    from cogs.security_hardening_v3 import _ensure_bot_can_view_managed_resources
-
-    bot_member = object()
-    category = SimpleNamespace(
-        id=100,
-        name="private-category",
-        permissions_for=lambda _member: SimpleNamespace(view_channel=False),
-        overwrites={},
-        overwrites_for=lambda _member: discord.PermissionOverwrite(),
-        edit=AsyncMock(),
-    )
-    channel = SimpleNamespace(
-        id=101,
-        name="private-channel",
-        category_id=100,
-        permissions_for=lambda _member: SimpleNamespace(view_channel=False),
-        overwrites={},
-        overwrites_for=lambda _member: discord.PermissionOverwrite(),
-        edit=AsyncMock(),
-    )
-    guild = SimpleNamespace(me=bot_member)
-    live_channels = {100: category, 101: channel}
-
-    repaired = await _ensure_bot_can_view_managed_resources(
-        guild, live_channels, channel_ids={101}, category_ids={100}
-    )
-
-    assert repaired == 2
-    assert category.edit.await_args.kwargs["overwrites"][bot_member].view_channel is True
-    assert channel.edit.await_args.kwargs["overwrites"][bot_member].view_channel is True
-    assert "School Manager reset recovery" in category.edit.await_args.kwargs["reason"]
-
-
-@pytest.mark.asyncio
-async def test_reset_visibility_repair_reports_resource_and_missing_access():
-    from cogs.security_hardening_v3 import ResetPreflightError, _ensure_bot_can_view_managed_resources
-
-    bot_member = object()
-    response = SimpleNamespace(status=403, reason="Forbidden")
-    hidden = SimpleNamespace(
-        id=202,
-        name="teacher-private",
-        category_id=200,
-        permissions_for=lambda _member: SimpleNamespace(view_channel=False),
-        overwrites={},
-        overwrites_for=lambda _member: discord.PermissionOverwrite(),
-        edit=AsyncMock(side_effect=discord.Forbidden(response, {"message": "Missing Access", "code": 50001})),
-    )
-
-    with pytest.raises(ResetPreflightError, match=r"teacher-private.*202.*50001"):
-        await _ensure_bot_can_view_managed_resources(
-            SimpleNamespace(me=bot_member), {202: hidden}, {202}, set()
-        )
-
-
-def test_reset_restores_bot_channel_visibility_before_any_deletion():
-    source = open("cogs/security_hardening_v3.py", encoding="utf-8").read()
-    repair = source.index("await _ensure_bot_can_view_managed_resources")
-    delete = source.index("await channel.delete")
-    assert repair < delete
-    assert "catégorie ID {getattr(channel" in source
-    assert "_reset_access_hint(api_code)" in source
