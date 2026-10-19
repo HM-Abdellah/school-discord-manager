@@ -30,6 +30,7 @@ from services.permissions import (
     ROLE_TEACHER_PENDING,
     SUBJECT_ROLE_PREFIX,
     STREAM_ROLE_PREFIX,
+    STUDENT_STREAM_ROLE_PREFIX,
     get_managed_role,
     management_check,
     owner_only_check,
@@ -41,7 +42,6 @@ from services.role_conflicts import teacher_target_conflict
 from services.storage import (
     delete_teacher_registration,
     get_guild_config,
-    get_active_sections_for_stream,
     get_teacher_assignments,
     get_teacher_qr_invites,
     get_teacher_registration,
@@ -49,6 +49,47 @@ from services.storage import (
     record_teacher_qr_invite,
     save_guild_config,
 )
+
+
+def _get_existing_class_sections(
+    guild: discord.Guild,
+    level_name: str,
+    stream_name: str,
+) -> list[int]:
+    """Return only class sections whose registered Discord roles still exist.
+
+    The persisted class-role registry, checked against live Discord roles, is
+    authoritative. Do not infer whether a class exists from student enrollments:
+    a real class can exist before its first student joins.
+    """
+    config = get_guild_config(guild.id) or {}
+    registry = config.get("class_roles", {}) if isinstance(config, dict) else {}
+    if not isinstance(registry, dict):
+        return []
+
+    stream_code = get_stream_abbreviation(level_name, stream_name)
+    available: set[int] = set()
+    for class_key, entry in registry.items():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("level_name") != level_name or entry.get("stream_name") != stream_name:
+            continue
+        section = entry.get("section")
+        role_id = entry.get("role_id")
+        if type(section) is not int or not 1 <= section <= 8:
+            continue
+        if type(role_id) is not int or role_id <= 0:
+            continue
+        if entry.get("stream_code") != stream_code or str(class_key) != f"{stream_code}-{section}":
+            continue
+
+        role = guild.get_role(role_id)
+        expected_role_name = f"{STUDENT_STREAM_ROLE_PREFIX}{stream_code}-{section}"
+        if role is None or role.managed or role.name != expected_role_name:
+            continue
+        available.add(section)
+
+    return sorted(available)
 
 async def _get_or_create_pending_role(guild: discord.Guild, config: dict) -> tuple[discord.Role, bool]:
     managed = config.setdefault("managed", {}).setdefault("roles", {})
@@ -381,6 +422,7 @@ class TeacherOnboardingView(discord.ui.View):
             self.add_assignment_button.disabled = not bool(self.selected_subjects)
             self.confirm_button.disabled = not bool(self.selected_subjects)
             self.continue_button.disabled = True
+        self.reset_button.disabled = self.submitting
 
     def _assigned_subject_keys(self, assignments: list[dict[str, object]] | None = None) -> set[str]:
         source = self.assignments if assignments is None else assignments
@@ -501,6 +543,20 @@ class TeacherOnboardingView(discord.ui.View):
             await interaction.response.send_message("❌ Type de professeur invalide.")
             return
         self.selected_gender = value
+        self.gender_select.options = [
+            discord.SelectOption(
+                label="Prof",
+                value="male",
+                description="Rôle professeur",
+                default=value == "male",
+            ),
+            discord.SelectOption(
+                label="Prof (F)",
+                value="female",
+                description="Rôle professeur féminin",
+                default=value == "female",
+            ),
+        ]
         self._refresh_control_state()
         await self._edit_form(interaction)
 
@@ -540,7 +596,8 @@ class TeacherOnboardingView(discord.ui.View):
         await self._edit_form(interaction)
 
     async def _stream_selected(self, interaction: discord.Interaction) -> None:
-        if await self._ensure_eligible(interaction) is None:
+        member = await self._ensure_eligible(interaction)
+        if member is None:
             return
         if self.selected_level is None:
             await interaction.response.send_message("❌ Choisissez d'abord un niveau.")
@@ -561,17 +618,17 @@ class TeacherOnboardingView(discord.ui.View):
         self.section_select.disabled = True
         self._refresh_control_state()
         try:
-            self.available_sections = get_active_sections_for_stream(
-                self.guild_id, self.selected_level, self.selected_stream
+            self.available_sections = _get_existing_class_sections(
+                member.guild, self.selected_level, self.selected_stream
             )
-        except (OSError, sqlite3.Error, ValueError) as exc:
+        except (OSError, sqlite3.Error, RuntimeError, ValueError):
             logging.getLogger(__name__).exception(
-                "Unable to load active sections for teacher onboarding (guild=%s level=%s stream=%s)",
+                "Unable to load existing class sections for teacher onboarding (guild=%s level=%s stream=%s)",
                 self.guild_id, self.selected_level, self.selected_stream,
             )
             await interaction.response.edit_message(
                 content=(
-                    "❌ Impossible de lire les sections issues de l'import scolaire. Réessayez ou contactez l'administration.\n\n"
+                    "❌ Impossible de vérifier les rôles de classe enregistrés. Réessayez ou contactez l'administration.\n\n"
                     + self._summary_text()
                 ),
                 view=self,
@@ -587,7 +644,7 @@ class TeacherOnboardingView(discord.ui.View):
             self.section_select.disabled = False
         else:
             self.section_select.options = [
-                discord.SelectOption(label="Aucune section active importée", value="__disabled__")
+                discord.SelectOption(label="Aucun rôle de classe disponible", value="__disabled__")
             ]
             self.section_select.min_values = 1
             self.section_select.max_values = 1
@@ -621,7 +678,7 @@ class TeacherOnboardingView(discord.ui.View):
         ):
             await interaction.response.send_message(
                 "❌ Sélectionnez uniquement les sections réellement disponibles dans la liste. "
-                "Les sections non importées ne peuvent pas être affectées."
+                "Une section sans rôle de classe valide sur le serveur ne peut pas être affectée."
             )
             return
         self.selected_sections = sections
@@ -637,7 +694,8 @@ class TeacherOnboardingView(discord.ui.View):
         await self._edit_form(interaction)
 
     async def _continue_to_subjects(self, interaction: discord.Interaction) -> None:
-        if await self._ensure_eligible(interaction) is None:
+        member = await self._ensure_eligible(interaction)
+        if member is None:
             return
         if not (
             self.selected_gender in {"male", "female"}
@@ -647,12 +705,25 @@ class TeacherOnboardingView(discord.ui.View):
         ):
             await interaction.response.send_message("❌ Choisissez le type, le niveau, la filière et au moins une section.")
             return
+        try:
+            self.available_sections = _get_existing_class_sections(
+                member.guild, self.selected_level, self.selected_stream
+            )
+        except (OSError, sqlite3.Error, ValueError, RuntimeError):
+            logging.getLogger(__name__).exception(
+                "Unable to revalidate registered class roles (guild=%s member=%s)",
+                self.guild_id, self.user_id,
+            )
+            await interaction.response.send_message(
+                "❌ Impossible de vérifier les rôles des sections. Réessayez ou contactez l'administration."
+            )
+            return
         if not self.available_sections or any(
             section not in self.available_sections for section in self.selected_sections
         ):
             await interaction.response.send_message(
-                "❌ Cette filière ne contient aucune section active issue de l'import scolaire. "
-                "Changez de filière ou demandez à l'administration de vérifier l'import XLSX."
+                "❌ Une section choisie ne possède plus de rôle de classe valide dans le serveur. "
+                "Changez de filière/section ou demandez à l'administration de vérifier les rôles de classe."
             )
             return
         subjects = get_stream_subjects(self.selected_level, self.selected_stream)
@@ -740,6 +811,9 @@ class TeacherOnboardingView(discord.ui.View):
         self.selected_sections = []
         self.available_sections = []
         self.selected_subjects = []
+        self.level_select.options = [
+            discord.SelectOption(label=level, value=level) for level in get_levels()
+        ]
         self.stream_select.options = [
             discord.SelectOption(label="Choisissez un niveau d'abord", value="__disabled__")
         ]
@@ -833,6 +907,10 @@ class TeacherOnboardingView(discord.ui.View):
             await interaction.response.send_message("❌ Complétez la classe et sélectionnez au moins une matière avant de valider.")
             return
 
+        validation_member = await self._ensure_eligible(interaction)
+        if validation_member is None:
+            return
+
         assignment_payload = self._merged_assignments(
             self.assignments,
             self.selected_sections,
@@ -858,12 +936,12 @@ class TeacherOnboardingView(discord.ui.View):
             for item in assignment_payload:
                 pair = (str(item["level"]), str(item["stream"]))
                 if pair not in available_by_stream:
-                    available_by_stream[pair] = get_active_sections_for_stream(
-                        self.guild_id, pair[0], pair[1]
+                    available_by_stream[pair] = _get_existing_class_sections(
+                        validation_member.guild, pair[0], pair[1]
                     )
                 if int(item["section"]) not in available_by_stream[pair]:
                     await interaction.response.send_message(
-                        "❌ Une des sections choisies n'existe plus dans l'import scolaire actif "
+                        "❌ Une des sections choisies n'a plus de rôle de classe valide dans le serveur "
                         f"({get_stream_abbreviation(str(item['level']), str(item['stream']))}-S{item['section']}). "
                         "Utilisez **Retour à la classe** ou **Recommencer** pour corriger les choix."
                     )
@@ -874,7 +952,7 @@ class TeacherOnboardingView(discord.ui.View):
                 self.guild_id, self.user_id,
             )
             await interaction.response.send_message(
-                "❌ Impossible de revérifier les sections de l'import scolaire. Aucune inscription n'a été enregistrée; réessayez plus tard."
+                "❌ Impossible de revérifier les rôles de classe. Aucune inscription n'a été enregistrée; réessayez plus tard."
             )
             return
 
@@ -1127,8 +1205,7 @@ async def _send_teacher_onboarding_prompt(
         view.message = await user.send(
             "## 👨‍🏫 Inscription professeur\n\n"
             "Bienvenue ! Sélectionnez tous les niveaux, filières, sections et matières que vous enseignez.\n\n"
-            "Vous pouvez choisir au maximum deux matières distinctes pour toute l'inscription, même si vous enseignez plusieurs classes. Les sections proposées viennent des élèves "
-            "importés pour l'année scolaire active. Utilisez **Retour à la classe** pour corriger un choix ou "
+            "Vous pouvez choisir au maximum deux matières distinctes pour toute l'inscription, même si vous enseignez plusieurs classes. Les sections proposées correspondent aux rôles de classe qui existent déjà sur le serveur. Utilisez **Retour à la classe** pour corriger un choix ou "
             "**Recommencer** pour effacer vos choix non validés. Tous les contrôles de correction sont directement dans ce message.\n\n"
             "Les choix proviennent du programme scolaire configuré. Après validation, le bot attribuera vos rôles "
             "et préparera automatiquement les threads publics de vos sections dans les salons des matières.",

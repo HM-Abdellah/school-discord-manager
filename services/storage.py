@@ -1307,36 +1307,6 @@ def list_academic_years(guild_id: int) -> list[sqlite3.Row]:
         return conn.execute("SELECT * FROM academic_years WHERE guild_id=? ORDER BY name DESC", (guild_id,)).fetchall()
 
 
-def get_active_sections_for_stream(guild_id: int, level_name: str, stream_name: str) -> list[int]:
-    """Return sections with active student enrollments in the active academic year.
-
-    Teacher onboarding must not offer a made-up section merely because its number
-    is within the schema's allowed 1..8 range. The student import/enrollment data
-    is the source of truth for which sections actually exist.
-    """
-    initialize_database()
-    with _connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT e.section
-            FROM enrollments AS e
-            JOIN students AS st ON st.id=e.student_id
-            JOIN streams AS s ON s.id=e.stream_id
-            JOIN academic_years AS ay ON ay.id=s.academic_year_id
-            WHERE st.guild_id=?
-              AND st.status='active'
-              AND e.status='active'
-              AND e.section IS NOT NULL
-              AND s.level_name=?
-              AND s.stream_name=?
-              AND ay.is_active=1
-            ORDER BY e.section
-            """,
-            (guild_id, level_name, stream_name),
-        ).fetchall()
-    return [int(row["section"]) for row in rows]
-
-
 def _sync_configuration_to_database_conn(conn: sqlite3.Connection, guild_id: int, config: dict[str, Any]) -> None:
     """Snapshot configured streams into the active academic year without switching years."""
     active = conn.execute(

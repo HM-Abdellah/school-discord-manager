@@ -17,24 +17,39 @@ def _configure_storage(tmp_path, monkeypatch):
 
 
 
-def test_active_sections_follow_active_academic_year_student_import(tmp_path, monkeypatch):
-    _configure_storage(tmp_path, monkeypatch)
+def test_teacher_sections_use_registered_live_class_roles_not_student_counts(monkeypatch):
+    from cogs.teacher_qr_onboarding import _get_existing_class_sections
+    from config.curriculum import get_stream_abbreviation
+
     level = "2ème Année Bac"
     stream = "2ème Année Bac Sciences Physiques"
-    config = {"levels": [{"name": level, "streams": [{"name": stream, "abbreviation": "2BACPC"}]}]}
+    code = get_stream_abbreviation(level, stream)
 
-    storage.create_and_activate_academic_year(1, "2025/2026", config)
-    old_year = storage.get_active_academic_year(1)
-    storage.enroll_student_record(1, 1001, "Old year student", int(old_year["id"]), level, stream, section=1)
+    class Role:
+        def __init__(self, role_id, name, managed=False):
+            self.id = role_id
+            self.name = name
+            self.managed = managed
 
-    storage.create_and_activate_academic_year(1, "2026/2027", config)
-    current_year = storage.get_active_academic_year(1)
-    storage.enroll_student_record(1, 1002, "Section three student", int(current_year["id"]), level, stream, section=3)
-    storage.enroll_student_record(1, 1003, "Section four student", int(current_year["id"]), level, stream, section=4)
-    storage.enroll_student_record(1, 1004, "Second section four student", int(current_year["id"]), level, stream, section=4)
+    roles = {
+        3003: Role(3003, f"Élèves - {code}-3"),
+        3004: Role(3004, f"Élèves - {code}-4"),
+        3005: Role(3005, f"Wrong name for {code}-5"),
+        3006: Role(3006, f"Élèves - {code}-6", managed=True),
+    }
+    guild = SimpleNamespace(id=1, get_role=lambda role_id: roles.get(role_id))
+    config = {"class_roles": {
+        f"{code}-3": {"role_id": 3003, "level_name": level, "stream_name": stream, "stream_code": code, "section": 3},
+        f"{code}-4": {"role_id": 3004, "level_name": level, "stream_name": stream, "stream_code": code, "section": 4},
+        f"{code}-5": {"role_id": 3005, "level_name": level, "stream_name": stream, "stream_code": code, "section": 5},
+        f"{code}-6": {"role_id": 3006, "level_name": level, "stream_name": stream, "stream_code": code, "section": 6},
+        f"{code}-7": {"role_id": 3007, "level_name": level, "stream_name": stream, "stream_code": code, "section": 7},
+        f"{code}-8": {"role_id": 3008, "level_name": "1ère Année Bac", "stream_name": stream, "stream_code": code, "section": 8},
+    }}
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_guild_config", lambda _guild_id: config)
 
-    assert storage.get_active_sections_for_stream(1, level, stream) == [3, 4]
-    assert storage.get_active_sections_for_stream(1, level, "1ère Année Bac Sciences Expérimentales") == []
+    # No student count or enrollment data is supplied: existing class roles define the choices.
+    assert _get_existing_class_sections(guild, level, stream) == [3, 4]
 
 
 def test_teacher_registration_is_one_time(tmp_path, monkeypatch):
@@ -601,7 +616,7 @@ async def test_teacher_onboarding_confirm_success(monkeypatch):
 
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_managed_role", lambda _guild, name: role_map.get(name))
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda _guild_id, _discord_id: None)
-    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_active_sections_for_stream", lambda *_args: [3])
+    monkeypatch.setattr("cogs.teacher_qr_onboarding._get_existing_class_sections", lambda *_args: [3])
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
     monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
     monkeypatch.setattr(
@@ -665,7 +680,7 @@ async def test_teacher_onboarding_confirm_business_error_is_visible(monkeypatch)
 
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_managed_role", lambda _guild, name: role_map.get(name))
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda _guild_id, _discord_id: None)
-    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_active_sections_for_stream", lambda *_args: [3])
+    monkeypatch.setattr("cogs.teacher_qr_onboarding._get_existing_class_sections", lambda *_args: [3])
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
     monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
 
@@ -684,6 +699,7 @@ async def test_teacher_onboarding_confirm_business_error_is_visible(monkeypatch)
     assert "Filière ou matière invalide" in message
     assert view.submitting is False
     assert view.confirm_button.disabled is False
+    assert view.reset_button.disabled is False
 
 
 @pytest.mark.asyncio
@@ -724,7 +740,7 @@ async def test_teacher_onboarding_confirm_unexpected_error_is_visible(monkeypatc
 
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_managed_role", lambda _guild, name: role_map.get(name))
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda _guild_id, _discord_id: None)
-    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_active_sections_for_stream", lambda *_args: [3])
+    monkeypatch.setattr("cogs.teacher_qr_onboarding._get_existing_class_sections", lambda *_args: [3])
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
     monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
 
@@ -1028,7 +1044,7 @@ async def test_teacher_onboarding_collects_multiple_levels_and_sections(monkeypa
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_managed_role", lambda _guild, name: pending if name == ROLE_TEACHER_PENDING else None)
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda *_args: None)
     monkeypatch.setattr(
-        "cogs.teacher_qr_onboarding.get_active_sections_for_stream",
+        "cogs.teacher_qr_onboarding._get_existing_class_sections",
         lambda _guild_id, _level, stream: [3, 4] if stream == "2ème Année Bac Sciences Physiques" else [2],
     )
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
