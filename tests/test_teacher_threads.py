@@ -32,11 +32,13 @@ def _channel(active=(), archived=(), archive_error=None):
         for thread in archived:
             yield thread
 
+    starter_message = SimpleNamespace(id=8000, delete=AsyncMock())
     return SimpleNamespace(
         id=500,
         name="subject-channel",
         threads=list(active),
         archived_threads=archived_threads,
+        send=AsyncMock(return_value=starter_message),
         create_thread=AsyncMock(),
     )
 
@@ -65,10 +67,20 @@ async def test_ensure_teacher_threads_creates_public_thread_and_persists_id(monk
     assert result["created"] == 1
     assert result["existing"] == 0
     assert result["failed"] == 0
+    channel.send.assert_awaited_once()
+    starter_message = channel.send.return_value
+    send_kwargs = channel.send.await_args.kwargs
+    assert send_kwargs["allowed_mentions"].everyone is False
+    assert send_kwargs["allowed_mentions"].users is False
+    assert send_kwargs["allowed_mentions"].roles is False
+    assert "Prof Test" in send_kwargs["content"]
+    assert "section 3" in send_kwargs["content"]
     channel.create_thread.assert_awaited_once()
     kwargs = channel.create_thread.await_args.kwargs
     assert kwargs["name"] == "Prof Test • 3"
-    assert kwargs["type"] == discord.ChannelType.public_thread
+    assert kwargs["message"] is starter_message
+    assert kwargs["auto_archive_duration"] == 10080
+    assert "type" not in kwargs
     assert updates == [(1, 1, {"status": "created", "thread_id": 9001, "error": None})]
 
 
@@ -215,6 +227,7 @@ async def test_ensure_teacher_threads_records_discord_creation_failure_for_retry
     assert result["failed"] == 1
     assert updates[0]["status"] == "failed"
     assert "Forbidden" in updates[0]["error"]
+    channel.send.return_value.delete.assert_awaited_once()
 
 
 @pytest.mark.asyncio
