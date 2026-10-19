@@ -49,11 +49,11 @@ async def test_ensure_teacher_threads_creates_public_thread_and_persists_id(monk
     updates = []
 
     async def resolve(*_args, **_kwargs):
-        return channel
+        return channel, False
 
     monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: [_row()])
     monkeypatch.setattr(teacher_threads, "get_guild_config", lambda *_args: {})
-    monkeypatch.setattr(teacher_threads, "resolve_registered_text_channel", resolve)
+    monkeypatch.setattr(teacher_threads, "resolve_managed_text_channel", resolve)
     monkeypatch.setattr(
         teacher_threads,
         "update_teacher_assignment_thread",
@@ -75,6 +75,35 @@ async def test_ensure_teacher_threads_creates_public_thread_and_persists_id(monk
 
 
 @pytest.mark.asyncio
+async def test_ensure_teacher_threads_persists_managed_channel_registry_repair(monkeypatch):
+    channel = _channel()
+    channel.create_thread.return_value = SimpleNamespace(
+        id=9101, name="Prof Test • 3", type=discord.ChannelType.public_thread
+    )
+    config = {"managed": {"channels": {"stale-entry": 999}}}
+    repairs = []
+
+    async def resolve(*_args, **_kwargs):
+        return channel, True
+
+    def persist(guild_id, passed_config, changed):
+        repairs.append((guild_id, passed_config, changed))
+        return True
+
+    monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: [_row()])
+    monkeypatch.setattr(teacher_threads, "get_guild_config", lambda *_args: config)
+    monkeypatch.setattr(teacher_threads, "resolve_managed_text_channel", resolve)
+    monkeypatch.setattr(teacher_threads, "persist_registry_repair", persist)
+    monkeypatch.setattr(teacher_threads, "update_teacher_assignment_thread", lambda *_args, **_kwargs: None)
+
+    result = await teacher_threads.ensure_teacher_threads(SimpleNamespace(id=1), 101)
+
+    assert result["created"] == 1
+    assert result["failed"] == 0
+    assert repairs == [(1, config, True)]
+
+
+@pytest.mark.asyncio
 async def test_same_teacher_and_subject_get_one_thread_per_assigned_section(monkeypatch):
     channel = _channel()
     threads = [
@@ -89,11 +118,11 @@ async def test_same_teacher_and_subject_get_one_thread_per_assigned_section(monk
     updates = []
 
     async def resolve(*_args, **_kwargs):
-        return channel
+        return channel, False
 
     monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: rows)
     monkeypatch.setattr(teacher_threads, "get_guild_config", lambda *_args: {})
-    monkeypatch.setattr(teacher_threads, "resolve_registered_text_channel", resolve)
+    monkeypatch.setattr(teacher_threads, "resolve_managed_text_channel", resolve)
     monkeypatch.setattr(
         teacher_threads,
         "update_teacher_assignment_thread",
@@ -126,11 +155,11 @@ async def test_ensure_teacher_threads_reuses_exact_existing_thread(monkeypatch):
     updates = []
 
     async def resolve(*_args, **_kwargs):
-        return channel
+        return channel, False
 
     monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: [_row()])
     monkeypatch.setattr(teacher_threads, "get_guild_config", lambda *_args: {})
-    monkeypatch.setattr(teacher_threads, "resolve_registered_text_channel", resolve)
+    monkeypatch.setattr(teacher_threads, "resolve_managed_text_channel", resolve)
     monkeypatch.setattr(
         teacher_threads,
         "update_teacher_assignment_thread",
@@ -159,11 +188,11 @@ async def test_ensure_teacher_threads_reactivates_matching_archived_thread(monke
     updates = []
 
     async def resolve(*_args, **_kwargs):
-        return channel
+        return channel, False
 
     monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: [_row()])
     monkeypatch.setattr(teacher_threads, "get_guild_config", lambda *_args: {})
-    monkeypatch.setattr(teacher_threads, "resolve_registered_text_channel", resolve)
+    monkeypatch.setattr(teacher_threads, "resolve_managed_text_channel", resolve)
     monkeypatch.setattr(
         teacher_threads,
         "update_teacher_assignment_thread",
@@ -191,11 +220,11 @@ async def test_ensure_teacher_threads_fails_closed_when_archives_unavailable(mon
     updates = []
 
     async def resolve(*_args, **_kwargs):
-        return channel
+        return channel, False
 
     monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: [_row()])
     monkeypatch.setattr(teacher_threads, "get_guild_config", lambda *_args: {})
-    monkeypatch.setattr(teacher_threads, "resolve_registered_text_channel", resolve)
+    monkeypatch.setattr(teacher_threads, "resolve_managed_text_channel", resolve)
     monkeypatch.setattr(
         teacher_threads,
         "update_teacher_assignment_thread",
@@ -218,11 +247,11 @@ async def test_ensure_teacher_threads_adopts_thread_after_creation_before_db_upd
     updates = []
 
     async def resolve(*_args, **_kwargs):
-        return channel
+        return channel, False
 
     monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: [_row()])
     monkeypatch.setattr(teacher_threads, "get_guild_config", lambda *_args: {})
-    monkeypatch.setattr(teacher_threads, "resolve_registered_text_channel", resolve)
+    monkeypatch.setattr(teacher_threads, "resolve_managed_text_channel", resolve)
     monkeypatch.setattr(
         teacher_threads,
         "update_teacher_assignment_thread",
@@ -245,11 +274,11 @@ async def test_ensure_teacher_threads_records_discord_creation_failure_for_retry
     updates = []
 
     async def resolve(*_args, **_kwargs):
-        return channel
+        return channel, False
 
     monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: [_row()])
     monkeypatch.setattr(teacher_threads, "get_guild_config", lambda *_args: {})
-    monkeypatch.setattr(teacher_threads, "resolve_registered_text_channel", resolve)
+    monkeypatch.setattr(teacher_threads, "resolve_managed_text_channel", resolve)
     monkeypatch.setattr(
         teacher_threads,
         "update_teacher_assignment_thread",
@@ -275,11 +304,11 @@ async def test_ensure_teacher_threads_does_not_adopt_same_named_thread_owned_by_
     updates = []
 
     async def resolve(*_args, **_kwargs):
-        return channel
+        return channel, False
 
     monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: [current, other_teacher])
     monkeypatch.setattr(teacher_threads, "get_guild_config", lambda *_args: {})
-    monkeypatch.setattr(teacher_threads, "resolve_registered_text_channel", resolve)
+    monkeypatch.setattr(teacher_threads, "resolve_managed_text_channel", resolve)
     monkeypatch.setattr(
         teacher_threads,
         "update_teacher_assignment_thread",

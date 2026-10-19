@@ -5,7 +5,7 @@ from __future__ import annotations
 import discord
 
 from config.curriculum import get_stream_abbreviation, get_subject_display_name
-from services.discord_registry import resolve_registered_text_channel
+from services.discord_registry import persist_registry_repair, resolve_managed_text_channel
 from services.server_builder import _stream_category_name, _subject_channel_name
 from services.storage import (
     get_guild_config,
@@ -78,14 +78,22 @@ async def ensure_teacher_threads(guild: discord.Guild, teacher_id: int) -> dict[
         category_name = _stream_category_name(level, stream, code)
         channel_name = _subject_channel_name(code, subject)
         try:
-            channel = await resolve_registered_text_channel(
+            channel, registry_repaired = await resolve_managed_text_channel(
                 guild,
                 config,
                 channel_name=channel_name,
                 category_name=category_name,
             )
             if channel is None:
-                raise RuntimeError(f"Salon de matière géré introuvable : {channel_name}")
+                raise RuntimeError(
+                    f"Salon de matière géré introuvable : {channel_name} "
+                    f"dans la catégorie {category_name} (aucune correspondance unique dans Discord)."
+                )
+            if not persist_registry_repair(guild.id, config, registry_repaired):
+                raise RuntimeError(
+                    f"Le salon {channel_name} existe, mais la réparation de son registre géré "
+                    "n'a pas pu être enregistrée; relancez la synchronisation après vérification du stockage."
+                )
             existing_threads = await all_public_threads(channel)
         except (discord.Forbidden, discord.HTTPException, OSError, RuntimeError) as exc:
             message = f"{code} / {get_subject_display_name(subject)}: {_error_text(exc)}"
