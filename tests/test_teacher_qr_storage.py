@@ -1113,3 +1113,74 @@ async def test_teacher_onboarding_collects_multiple_levels_and_sections(monkeypa
     ]
     assert captured["self_registration"] is True
     assert "Inscription terminée" in edit_original_response.await_args.kwargs["content"]
+
+
+@pytest.mark.asyncio
+async def test_registered_teacher_thread_sync_includes_exact_failure_details(monkeypatch):
+    from contextlib import asynccontextmanager
+    from cogs.teacher_qr_onboarding import _sync_registered_teacher_threads
+
+    @asynccontextmanager
+    async def no_lock(_guild_id):
+        yield
+
+    failure = "2BACPC / Math: RuntimeError: Salon de matière géré introuvable : 📚-2BACPC・math"
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", no_lock)
+    monkeypatch.setattr(
+        "cogs.teacher_qr_onboarding.ensure_teacher_threads",
+        AsyncMock(return_value={"created": 0, "existing": 0, "failed": 1, "errors": [failure]}),
+    )
+
+    message = await _sync_registered_teacher_threads(SimpleNamespace(id=1), 203)
+
+    assert "1 thread(s) n'ont pas pu être préparés" in message
+    assert "Détails techniques" in message
+    assert "2BACPC" in message
+    assert "introuvable" in message
+
+
+@pytest.mark.asyncio
+async def test_existing_teacher_repair_dm_warns_when_threads_failed(monkeypatch):
+    from cogs.teacher_qr_onboarding import TeacherQROnboarding
+
+    guild = SimpleNamespace(id=1)
+    registration = {
+        "profile_type": "male",
+        "level_name": "2BAC",
+        "stream_name": "2BACPC",
+        "subjects_text": "Mathématiques",
+    }
+    teacher = SimpleNamespace(
+        id=203,
+        display_name="Already registered",
+        mention="<@203>",
+        bot=False,
+        guild=guild,
+        roles=[],
+        send=AsyncMock(),
+    )
+    interaction = SimpleNamespace(
+        guild=guild,
+        user=SimpleNamespace(id=900, display_name="School admin"),
+        response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock(), is_done=lambda: False),
+        followup=SimpleNamespace(send=AsyncMock()),
+        command=SimpleNamespace(name="startteacherregistration"),
+    )
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda *_args: registration)
+    monkeypatch.setattr(
+        "cogs.teacher_qr_onboarding._restore_registered_teacher_access",
+        AsyncMock(return_value=(True, "Les rôles professeur ont été rétablis.")),
+    )
+    detail = "⚠️ 1 thread(s) n'ont pas pu être préparés.\n**Détails techniques :**\n• Math: canal introuvable"
+    monkeypatch.setattr("cogs.teacher_qr_onboarding._sync_registered_teacher_threads", AsyncMock(return_value=detail))
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.record_event", lambda *_args, **_kwargs: None)
+
+    cog = TeacherQROnboarding(SimpleNamespace())
+    await cog.start_teacher_registration.callback(cog, interaction, teacher)
+
+    dm_message = teacher.send.await_args.args[0]
+    admin_message = interaction.followup.send.await_args.args[0]
+    assert "l'administration a été informée" in dm_message
+    assert "préparation de votre espace de matière" in dm_message
+    assert "Détails techniques" in admin_message
+    assert "canal introuvable" in admin_message

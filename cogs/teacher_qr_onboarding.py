@@ -1390,7 +1390,7 @@ async def _prepare_teacher_reenrollment(
 
 
 async def _sync_registered_teacher_threads(guild: discord.Guild, teacher_id: int) -> str:
-    """Ensure the current persisted assignments have usable public threads."""
+    """Ensure current assignments have usable public threads and report exact failures to admins."""
     try:
         async with get_build_lock(guild.id):
             result = await ensure_teacher_threads(guild, teacher_id)
@@ -1400,24 +1400,38 @@ async def _sync_registered_teacher_threads(guild: discord.Guild, teacher_id: int
             guild.id,
             teacher_id,
         )
+        detail = discord.utils.escape_mentions(
+            discord.utils.escape_markdown(f"{type(exc).__name__}: {exc}", as_needed=False)
+        )
         return (
             "⚠️ La synchronisation des threads n'a pas pu être terminée. "
-            "L'administration peut vérifier puis relancer /sync-teacher-threads. "
-            f"Détail : {type(exc).__name__}."
+            "L'administration peut relancer /sync-teacher-threads.\n"
+            f"**Détail :** {detail[:500]}"
         )
 
     created = int(result.get("created", 0))
     existing = int(result.get("existing", 0))
     failed = int(result.get("failed", 0))
+    errors = result.get("errors", [])
     if failed:
-        return (
+        message = (
             f"⚠️ {failed} thread(s) n'ont pas pu être préparés. "
-            "L'administration peut vérifier puis relancer /sync-teacher-threads."
+            "L'administration peut relancer /sync-teacher-threads."
         )
+        if isinstance(errors, list) and errors:
+            details = []
+            for error in errors[:3]:
+                safe_error = discord.utils.escape_mentions(
+                    discord.utils.escape_markdown(str(error), as_needed=False)
+                )
+                details.append(f"• {safe_error[:300]}")
+            message += "\n**Détails techniques :**\n" + "\n".join(details)
+            if len(errors) > 3:
+                message += f"\n• … et {len(errors) - 3} autre(s) erreur(s)."
+        return message[:1500]
     if created + existing == 0:
         return "ℹ️ Aucun thread à synchroniser : aucune affectation de section/matière n'est enregistrée."
     return f"✅ Threads professeur prêts : {created + existing} (nouveaux : {created}, existants : {existing})."
-
 
 async def _archive_teacher_assignment_threads(
     bot: discord.Client,
@@ -1571,10 +1585,19 @@ class TeacherQROnboarding(commands.Cog):
             if restored:
                 dm_sent = True
                 try:
-                    await teacher.send(
+                    teacher_confirmation = (
                         "✅ Votre inscription professeur existante a été retrouvée. "
                         "Les accès de votre compte ont été vérifiés et rétablis par l'administration."
                     )
+                    if thread_detail.startswith("⚠️"):
+                        teacher_confirmation += (
+                            "\n\n⚠️ La préparation de votre espace de matière n'est pas encore terminée. "
+                            "Votre inscription et vos rôles sont conservés; l'administration a été informée "
+                            "et doit terminer la synchronisation des threads publics."
+                        )
+                    elif thread_detail.startswith("✅ Threads professeur prêts"):
+                        teacher_confirmation += "\n\n" + thread_detail
+                    await teacher.send(teacher_confirmation)
                 except discord.HTTPException:
                     dm_sent = False
                 message = "✅ L'inscription existe déjà et les rôles professeur ont été rétablis."

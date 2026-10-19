@@ -107,3 +107,43 @@ async def test_managed_resolution_repairs_case_only_channel_name_and_stale_id():
     assert resolved is channel
     assert registry_repaired is True
     assert config["managed"]["channels"] == {actual_channel_name: 20}
+
+
+@pytest.mark.asyncio
+async def test_managed_resolution_recovers_lowercase_channel_when_managed_category_was_renamed():
+    expected_category_name = "2️⃣・2BAC・🔬 2BACPC"
+    actual_category_name = "Renamed managed 2BACPC category"
+    expected_channel_name = "📚-2BACPC・math"
+    actual_channel_name = "📚-2bacpc・math"
+
+    category = Mock(spec=discord.CategoryChannel)
+    category.id = 10
+    category.name = actual_category_name
+
+    channel = Mock(spec=discord.TextChannel)
+    channel.id = 20
+    channel.name = actual_channel_name
+    channel.category_id = 10
+
+    guild = SimpleNamespace(
+        get_channel=lambda channel_id: {10: category}.get(channel_id),
+        fetch_channels=AsyncMock(return_value=[category, channel]),
+    )
+    config = {
+        "managed": {
+            "categories": {"old category registry key": 10},
+            "channels": {expected_channel_name: 999},
+        }
+    }
+
+    resolved, registry_repaired = await resolve_managed_text_channel(
+        guild,
+        config,
+        channel_name=expected_channel_name,
+        category_name=expected_category_name,
+    )
+
+    assert resolved is channel
+    assert registry_repaired is True
+    assert config["managed"]["channels"] == {actual_channel_name: 20}
+    assert config["managed"]["categories"][actual_category_name] == 10
