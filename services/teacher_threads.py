@@ -42,12 +42,14 @@ def _error_text(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"[:500]
 
 
+# Permissions needed to discover public threads and create a new public thread.
+# MANAGE_THREADS is deliberately excluded: Discord requires it for moderation and
+# some locked-thread operations, not for ordinary public-thread creation.
 _THREAD_CHANNEL_REQUIRED_PERMISSIONS = (
     "view_channel",
     "read_message_history",
     "send_messages",
     "create_public_threads",
-    "manage_threads",
 )
 
 
@@ -56,11 +58,11 @@ async def _ensure_bot_thread_channel_access(
 ) -> bool:
     """Repair only the bot member's access to a trusted managed subject channel.
 
-    Managed subject channels intentionally deny @everyone visibility. Without a
-    bot-specific overwrite, the bot can resolve the channel from guild state but
-    Discord rejects thread operations with 50001 Missing Access. A member-level
-    overwrite is narrowly scoped to this bot and leaves all student/teacher
-    visibility rules intact.
+    Managed subject channels intentionally deny @everyone visibility. The bot needs
+    visibility/history and Create Public Threads to reconcile these resources. Do not
+    require MANAGE_THREADS for ordinary creation: Discord reserves it for moderation
+    and certain locked-thread actions. A member-level overwrite is narrowly scoped
+    to this bot and leaves all student/teacher visibility rules intact.
     """
     bot_member = getattr(guild, "me", None)
     if bot_member is None:

@@ -232,6 +232,7 @@ def test_subject_channel_overwrites_grant_bot_scoped_thread_access_without_expos
     assert overwrites[bot_member].read_message_history is True
     assert overwrites[bot_member].send_messages is True
     assert overwrites[bot_member].create_public_threads is True
-    assert overwrites[bot_member].manage_threads is True
+    # Routine public-thread creation must not require the moderator permission.
+    assert overwrites[bot_member].manage_threads is None
     assert overwrites[student].view_channel is True
     assert overwrites[student].send_messages is False
