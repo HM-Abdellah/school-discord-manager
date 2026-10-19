@@ -392,13 +392,32 @@ async def test_teacher_onboarding_refreshes_cached_roles_before_rejecting_reenro
 
 
 @pytest.mark.asyncio
+async def test_teacher_full_name_modal_normalizes_and_saves_submitted_name():
+    from cogs.teacher_qr_onboarding import TeacherFullNameModal, TeacherOnboardingView
+
+    view = TeacherOnboardingView(SimpleNamespace(), 1, 101)
+    response = SimpleNamespace(send_message=AsyncMock())
+    interaction = SimpleNamespace(user=SimpleNamespace(id=101), response=response)
+    modal = TeacherFullNameModal(view)
+    modal.name_input._value = "  Abdellah   Hamdan  "
+
+    await modal.on_submit(interaction)
+
+    assert view.full_name == "Abdellah Hamdan"
+    assert response.send_message.await_args.kwargs["ephemeral"] is True
+    assert "Abdellah Hamdan" in response.send_message.await_args.args[0]
+    assert view.continue_button.disabled is True  # Class selections are still required.
+
+
+@pytest.mark.asyncio
 async def test_teacher_onboarding_view_uses_fixed_choices():
     from cogs.teacher_qr_onboarding import TeacherOnboardingView
     from config.curriculum import get_levels
 
     view = TeacherOnboardingView(SimpleNamespace(), 1, 101)
 
-    assert len(view.children) == 6
+    assert len(view.children) == 7
+    assert view.name_button.label == "Saisir mon nom complet"
     assert view.reset_button.label == "Recommencer"
     assert view.back_button.label == "Retour à la classe"
     assert [option.value for option in view.gender_select.options] == ["male", "female"]
@@ -625,6 +644,7 @@ async def test_teacher_onboarding_confirm_success(monkeypatch):
     )
 
     view = TeacherOnboardingView(bot, 1, 101)
+    view.full_name = "Nom Test"
     view.selected_gender = "male"
     view.selected_level = "2ème Année Bac"
     view.selected_stream = "2ème Année Bac Sciences Physiques"
@@ -685,6 +705,7 @@ async def test_teacher_onboarding_confirm_business_error_is_visible(monkeypatch)
     monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
 
     view = TeacherOnboardingView(bot, 1, 101)
+    view.full_name = "Nom Test"
     view.selected_gender = "male"
     view.selected_level = "2ème Année Bac"
     view.selected_stream = "2ème Année Bac Sciences Physiques"
@@ -745,6 +766,7 @@ async def test_teacher_onboarding_confirm_unexpected_error_is_visible(monkeypatc
     monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
 
     view = TeacherOnboardingView(bot, 1, 101)
+    view.full_name = "Nom Test"
     view.selected_gender = "male"
     view.selected_level = "2ème Année Bac"
     view.selected_stream = "2ème Année Bac Sciences Physiques"
@@ -1056,6 +1078,7 @@ async def test_teacher_onboarding_collects_multiple_levels_and_sections(monkeypa
 
     view = TeacherOnboardingView(bot, 1, 101)
     view._ensure_eligible = AsyncMock(return_value=member)
+    view.full_name = "Nom Complet Test"
 
     view.gender_select._values = ["male"]
     await view.gender_select.callback(interaction)
@@ -1112,6 +1135,7 @@ async def test_teacher_onboarding_collects_multiple_levels_and_sections(monkeypa
         },
     ]
     assert captured["self_registration"] is True
+    assert captured["full_name"] == "Nom Complet Test"
     assert "Inscription terminée" in edit_original_response.await_args.kwargs["content"]
 
 

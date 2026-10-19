@@ -132,6 +132,51 @@ async def _revoke_teacher_qrs(bot: discord.Client, guild_id: int) -> int:
     return revoked
 
 
+class TeacherFullNameModal(discord.ui.Modal):
+    """Collect the teacher's real name instead of trusting their Discord nickname."""
+
+    def __init__(self, onboarding_view: "TeacherOnboardingView") -> None:
+        super().__init__(title="Nom et prénom du professeur", timeout=300)
+        self.onboarding_view = onboarding_view
+        self.name_input = discord.ui.TextInput(
+            label="Votre nom complet",
+            placeholder="Ex. : Abdellah Hamdan",
+            min_length=2,
+            max_length=100,
+            required=True,
+            default=onboarding_view.full_name or None,
+        )
+        self.add_item(self.name_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        view = self.onboarding_view
+        if interaction.user.id != view.user_id:
+            await interaction.response.send_message("❌ Ce formulaire est réservé au professeur concerné.", ephemeral=True)
+            return
+        if view.submitting:
+            await interaction.response.send_message("⏳ L'inscription est en cours; attendez sa fin.", ephemeral=True)
+            return
+        full_name = " ".join(str(self.name_input.value).split())
+        if len(full_name) < 2:
+            await interaction.response.send_message("❌ Saisissez votre nom et prénom (au moins 2 caractères).", ephemeral=True)
+            return
+        view.full_name = full_name
+        view._refresh_control_state()
+        await interaction.response.send_message(
+            f"✅ Nom enregistré : **{discord.utils.escape_markdown(full_name)}**. Vous pouvez continuer le formulaire.",
+            ephemeral=True,
+        )
+        if view.message is not None:
+            try:
+                await view.message.edit(content=view._summary_text(), view=view)
+            except discord.HTTPException:
+                logging.getLogger(__name__).warning(
+                    "Could not refresh teacher onboarding message after name entry (guild=%s member=%s)",
+                    view.guild_id, view.user_id,
+                    exc_info=True,
+                )
+
+
 class TeacherOnboardingView(discord.ui.View):
     """Guided teacher self-registration using Discord select menus."""
 
@@ -141,6 +186,7 @@ class TeacherOnboardingView(discord.ui.View):
         self.guild_id = guild_id
         self.user_id = user_id
         self.message: discord.Message | None = None
+        self.full_name = ""
 
         self.selected_gender: str | None = None
         self.selected_level: str | None = None
@@ -196,6 +242,14 @@ class TeacherOnboardingView(discord.ui.View):
             row=3,
         )
         self.section_select.callback = self._sections_selected
+
+        self.name_button = discord.ui.Button(
+            label="Saisir mon nom complet",
+            style=discord.ButtonStyle.secondary,
+            emoji="🪪",
+            row=4,
+        )
+        self.name_button.callback = self._open_name_modal
 
         self.continue_button = discord.ui.Button(
             label="Choisir les matières",
@@ -366,7 +420,13 @@ class TeacherOnboardingView(discord.ui.View):
             self.message = getattr(interaction, "message", None)
         await interaction.response.edit_message(content=self._summary_text(), view=self)
 
+    async def _open_name_modal(self, interaction: discord.Interaction) -> None:
+        if await self._ensure_eligible(interaction) is None:
+            return
+        await interaction.response.send_modal(TeacherFullNameModal(self))
+
     def _show_class_stage(self) -> None:
+        self.name_button.row = 4
         for item in list(self.children):
             self.remove_item(item)
         self.stage = "class"
@@ -376,6 +436,7 @@ class TeacherOnboardingView(discord.ui.View):
             self.stream_select,
             self.section_select,
             self.continue_button,
+            self.name_button,
             self.reset_button,
         ):
             if item is self.reset_button:
@@ -389,11 +450,13 @@ class TeacherOnboardingView(discord.ui.View):
         self.stage = "subjects"
         self.back_button.row = 1
         self.reset_button.row = 2
+        self.name_button.row = 3
         for item in (
             self.subject_select,
             self.back_button,
             self.add_assignment_button,
             self.confirm_button,
+            self.name_button,
             self.reset_button,
         ):
             self.add_item(item)
@@ -406,7 +469,8 @@ class TeacherOnboardingView(discord.ui.View):
             self.stream_select.disabled = self.selected_level is None
             self.section_select.disabled = not self.available_sections
             self.continue_button.disabled = not (
-                self.selected_gender
+                self.full_name
+                and self.selected_gender
                 and self.selected_level
                 and self.selected_stream
                 and self.selected_sections
@@ -420,7 +484,7 @@ class TeacherOnboardingView(discord.ui.View):
             self.subject_select.disabled = self.selected_stream is None
             self.back_button.disabled = False
             self.add_assignment_button.disabled = not bool(self.selected_subjects)
-            self.confirm_button.disabled = not bool(self.selected_subjects)
+            self.confirm_button.disabled = not bool(self.full_name and self.selected_subjects)
             self.continue_button.disabled = True
         self.reset_button.disabled = self.submitting
 
@@ -460,6 +524,7 @@ class TeacherOnboardingView(discord.ui.View):
             "",
             "Choisissez toutes les classes et matières que vous enseignez. Vous pouvez ajouter plusieurs niveaux.",
             "",
+            f"**Nom complet :** {self.full_name or '⚠️ à renseigner'}",
             f"**Type :** {gender}",
         ]
         if self.assignments:
@@ -697,6 +762,9 @@ class TeacherOnboardingView(discord.ui.View):
         member = await self._ensure_eligible(interaction)
         if member is None:
             return
+        if not self.full_name:
+            await interaction.response.send_message("❌ Saisissez d'abord votre nom complet avec le bouton **Saisir mon nom complet**.")
+            return
         if not (
             self.selected_gender in {"male", "female"}
             and self.selected_level in get_levels()
@@ -897,6 +965,9 @@ class TeacherOnboardingView(discord.ui.View):
         if self.submitting:
             await interaction.response.send_message("⏳ Une inscription est déjà en cours.")
             return
+        if not self.full_name:
+            await interaction.response.send_message("❌ Saisissez d'abord votre nom complet avec le bouton **Saisir mon nom complet**.")
+            return
         if self.stage != "subjects" or not (
             self.selected_gender in {"male", "female"}
             and self.selected_level
@@ -1021,6 +1092,7 @@ class TeacherOnboardingView(discord.ui.View):
                         actor_display_name=member.display_name,
                         self_registration=True,
                         assignments=assignment_payload,
+                        full_name=self.full_name,
                     )
                     registration_completed = True
                 except TeacherAssignmentError as exc:
@@ -1204,7 +1276,7 @@ async def _send_teacher_onboarding_prompt(
     try:
         view.message = await user.send(
             "## 👨‍🏫 Inscription professeur\n\n"
-            "Bienvenue ! Sélectionnez tous les niveaux, filières, sections et matières que vous enseignez.\n\n"
+            "Bienvenue ! Commencez par saisir votre nom et prénom officiels, puis sélectionnez tous les niveaux, filières, sections et matières que vous enseignez.\n\n"
             "Vous pouvez choisir au maximum deux matières distinctes pour toute l'inscription, même si vous enseignez plusieurs classes. Les sections proposées correspondent aux rôles de classe enregistrés par l'administration avec /createclassqr et toujours présents sur le serveur. Utilisez **Retour à la classe** pour corriger un choix ou "
             "**Recommencer** pour effacer vos choix non validés. Tous les contrôles de correction sont directement dans ce message.\n\n"
             "Les choix proviennent du programme scolaire configuré. Après validation, le bot attribuera vos rôles "

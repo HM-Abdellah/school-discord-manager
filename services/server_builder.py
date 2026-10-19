@@ -126,6 +126,7 @@ def _subject_channel_overwrites(everyone, admin_role, professor_role, female_pro
             read_message_history=True,
             send_messages=True,
             create_public_threads=True,
+            send_messages_in_threads=True,
         )
     return overwrites
 

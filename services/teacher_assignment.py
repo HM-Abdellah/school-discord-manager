@@ -204,6 +204,7 @@ async def execute_teacher_assignment(
     actor_display_name: str,
     self_registration: bool,
     assignments: list[dict] | None = None,
+    full_name: str | None = None,
     event_action: str | None = "assignteacherfull",
 ) -> dict:
     conflict = teacher_target_conflict(teacher, guild)
@@ -211,6 +212,9 @@ async def execute_teacher_assignment(
         raise TeacherAssignmentError(conflict)
     if gender_value not in {"male", "female"}:
         raise TeacherAssignmentError("❌ Type de professeur invalide.")
+    registration_name = " ".join(
+        str(full_name or getattr(teacher, "display_name", actor_display_name)).split()
+    )
 
     # Keep the admin command's existing single-assignment contract while allowing
     # QR onboarding to submit several explicitly selected section/subject pairs.
@@ -347,7 +351,7 @@ async def execute_teacher_assignment(
             record_teacher_registration(
                 guild.id,
                 teacher.id,
-                teacher.display_name,
+                registration_name,
                 gender_value,
                 level,
                 stream,

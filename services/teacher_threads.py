@@ -50,6 +50,7 @@ _THREAD_CHANNEL_REQUIRED_PERMISSIONS = (
     "read_message_history",
     "send_messages",
     "create_public_threads",
+    "send_messages_in_threads",
 )
 
 
@@ -180,6 +181,30 @@ async def _activate_thread(thread: discord.Thread) -> None:
         )
 
 
+async def _ensure_teacher_is_thread_member(
+    guild: discord.Guild,
+    thread: discord.Thread,
+    teacher_id: int,
+) -> None:
+    """Add the registered teacher to an active thread so they need not click Join."""
+    get_member = getattr(guild, "get_member", None)
+    fetch_member = getattr(guild, "fetch_member", None)
+    # Minimal guild doubles in unit tests may not model member lookup. Real
+    # discord.Guild always exposes these APIs, and never silently skips joining.
+    if not callable(get_member) and not callable(fetch_member):
+        return
+    member = get_member(teacher_id) if callable(get_member) else None
+    if member is None:
+        if not callable(fetch_member):
+            raise RuntimeError(
+                f"Le membre professeur {teacher_id} n'est pas présent dans le cache du serveur."
+            )
+        member = await fetch_member(teacher_id)
+    if member is None:
+        raise RuntimeError(f"Impossible de retrouver le membre professeur {teacher_id} pour l'ajouter au thread.")
+    await thread.add_user(member)
+
+
 async def ensure_teacher_threads(guild: discord.Guild, teacher_id: int) -> dict[str, object]:
     """Ensure one public thread exists per registered section/subject assignment.
 
@@ -258,7 +283,8 @@ async def ensure_teacher_threads(guild: discord.Guild, teacher_id: int) -> dict[
                 if saved_thread is not None:
                     try:
                         await _activate_thread(saved_thread)
-                    except (discord.Forbidden, discord.HTTPException) as exc:
+                        await _ensure_teacher_is_thread_member(guild, saved_thread, teacher_id)
+                    except (discord.Forbidden, discord.HTTPException, RuntimeError) as exc:
                         message = f"{code} / {get_subject_display_name(subject)} / section {section}: {_error_text(exc)}"
                         errors.append(message)
                         update_teacher_assignment_thread(
@@ -296,7 +322,8 @@ async def ensure_teacher_threads(guild: discord.Guild, teacher_id: int) -> dict[
                 match = candidates[0]
                 try:
                     await _activate_thread(match)
-                except (discord.Forbidden, discord.HTTPException) as exc:
+                    await _ensure_teacher_is_thread_member(guild, match, teacher_id)
+                except (discord.Forbidden, discord.HTTPException, RuntimeError) as exc:
                     message = f"{code} / {get_subject_display_name(subject)} / section {section}: {_error_text(exc)}"
                     errors.append(message)
                     update_teacher_assignment_thread(
@@ -328,7 +355,8 @@ async def ensure_teacher_threads(guild: discord.Guild, teacher_id: int) -> dict[
                         f"{level}/{stream}/section={section}/subject={subject}"
                     ),
                 )
-            except (discord.Forbidden, discord.HTTPException) as exc:
+                await _ensure_teacher_is_thread_member(guild, thread, teacher_id)
+            except (discord.Forbidden, discord.HTTPException, RuntimeError) as exc:
                 message = f"{code} / {get_subject_display_name(subject)} / section {section}: {_error_text(exc)}"
                 errors.append(message)
                 update_teacher_assignment_thread(

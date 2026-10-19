@@ -81,6 +81,60 @@ async def test_ensure_teacher_threads_creates_public_thread_and_persists_id(monk
 
 
 @pytest.mark.asyncio
+async def test_ensure_teacher_threads_automatically_adds_teacher_to_new_thread(monkeypatch):
+    teacher = SimpleNamespace(id=101)
+    created = SimpleNamespace(
+        id=9002,
+        name="Prof Test • 3",
+        type=discord.ChannelType.public_thread,
+        add_user=AsyncMock(),
+    )
+    channel = _channel()
+    channel.create_thread.return_value = created
+    async def resolve(*_args, **_kwargs):
+        return channel, False
+    guild = SimpleNamespace(id=1, get_member=lambda member_id: teacher if member_id == teacher.id else None)
+    monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: [_row()])
+    monkeypatch.setattr(teacher_threads, "get_guild_config", lambda *_args: {})
+    monkeypatch.setattr(teacher_threads, "resolve_managed_text_channel", resolve)
+    monkeypatch.setattr(teacher_threads, "update_teacher_assignment_thread", lambda *_args, **_kwargs: None)
+
+    result = await teacher_threads.ensure_teacher_threads(guild, 101)
+
+    assert result == {"created": 1, "existing": 0, "failed": 0, "errors": []}
+    created.add_user.assert_awaited_once_with(teacher)
+
+
+@pytest.mark.asyncio
+async def test_ensure_teacher_threads_automatically_adds_teacher_to_existing_thread(monkeypatch):
+    teacher = SimpleNamespace(id=101)
+    existing = SimpleNamespace(
+        id=9003,
+        name="Prof Test • 3",
+        type=discord.ChannelType.public_thread,
+        archived=False,
+        locked=False,
+        add_user=AsyncMock(),
+        edit=AsyncMock(),
+    )
+    channel = _channel(active=[existing])
+    row = _row(thread_id=9003, status="created")
+    async def resolve(*_args, **_kwargs):
+        return channel, False
+    guild = SimpleNamespace(id=1, get_member=lambda member_id: teacher if member_id == teacher.id else None)
+    monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: [row])
+    monkeypatch.setattr(teacher_threads, "get_guild_config", lambda *_args: {})
+    monkeypatch.setattr(teacher_threads, "resolve_managed_text_channel", resolve)
+    monkeypatch.setattr(teacher_threads, "update_teacher_assignment_thread", lambda *_args, **_kwargs: None)
+
+    result = await teacher_threads.ensure_teacher_threads(guild, 101)
+
+    assert result == {"created": 0, "existing": 1, "failed": 0, "errors": []}
+    existing.add_user.assert_awaited_once_with(teacher)
+    channel.create_thread.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_ensure_teacher_threads_persists_managed_channel_registry_repair(monkeypatch):
     channel = _channel()
     channel.create_thread.return_value = SimpleNamespace(
@@ -333,7 +387,7 @@ async def test_ensure_teacher_threads_does_not_adopt_same_named_thread_owned_by_
 async def test_bot_thread_channel_access_repairs_missing_access_with_member_overwrite():
     bot_member = _HashableNamespace(
         id=777,
-        guild_permissions=discord.Permissions(manage_roles=True, manage_channels=True, view_channel=True, read_message_history=True, send_messages=True, create_public_threads=True),
+        guild_permissions=discord.Permissions(manage_roles=True, manage_channels=True, view_channel=True, read_message_history=True, send_messages=True, create_public_threads=True, send_messages_in_threads=True),
     )
     effective = discord.Permissions.none()
     channel = SimpleNamespace(
@@ -358,6 +412,7 @@ async def test_bot_thread_channel_access_repairs_missing_access_with_member_over
     assert overwrite.read_message_history is True
     assert overwrite.send_messages is True
     assert overwrite.create_public_threads is True
+    assert overwrite.send_messages_in_threads is True
     assert overwrite.manage_threads is None
     assert overwrite.embed_links is False
 
@@ -369,12 +424,13 @@ async def test_missing_manage_threads_does_not_block_public_thread_creation(monk
     channel.create_thread.return_value = created
     base = discord.Permissions(
         view_channel=True, read_message_history=True, send_messages=True,
-        create_public_threads=True, manage_roles=True,
+        create_public_threads=True, send_messages_in_threads=True, manage_roles=True,
     )
     bot_member = SimpleNamespace(id=777, guild_permissions=base)
     effective = discord.Permissions(
         view_channel=True, read_message_history=True, send_messages=True,
         create_public_threads=True,
+        send_messages_in_threads=True,
     )
     channel.permissions_for = MagicMock(return_value=effective)
     channel.edit = AsyncMock()
@@ -404,6 +460,7 @@ async def test_bot_thread_channel_access_does_not_change_correct_permissions():
         read_message_history=True,
         send_messages=True,
         create_public_threads=True,
+        send_messages_in_threads=True,
         manage_threads=True,
     )
     channel = SimpleNamespace(
@@ -485,7 +542,7 @@ async def test_ensure_teacher_threads_repairs_bot_channel_access_before_listing_
         return SimpleNamespace(id=9099, name=kwargs["name"], type=discord.ChannelType.public_thread)
     channel.create_thread = AsyncMock(side_effect=create_thread)
     bot_member = _HashableNamespace(
-        id=777, guild_permissions=discord.Permissions(manage_roles=True, manage_channels=True, view_channel=True, read_message_history=True, send_messages=True, create_public_threads=True)
+        id=777, guild_permissions=discord.Permissions(manage_roles=True, manage_channels=True, view_channel=True, read_message_history=True, send_messages=True, create_public_threads=True, send_messages_in_threads=True)
     )
     guild = SimpleNamespace(id=1, me=bot_member)
     monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: [_row()])
@@ -524,7 +581,7 @@ async def test_bot_thread_channel_access_reports_missing_cached_bot_member():
 @pytest.mark.asyncio
 async def test_bot_thread_channel_access_reports_discord_permission_rejection():
     bot_member = _HashableNamespace(
-        id=777, guild_permissions=discord.Permissions(manage_roles=True, manage_channels=True, view_channel=True, read_message_history=True, send_messages=True, create_public_threads=True)
+        id=777, guild_permissions=discord.Permissions(manage_roles=True, manage_channels=True, view_channel=True, read_message_history=True, send_messages=True, create_public_threads=True, send_messages_in_threads=True)
     )
     response = SimpleNamespace(status=403, reason="Forbidden")
     channel = SimpleNamespace(
@@ -559,7 +616,7 @@ async def test_teacher_thread_sync_stops_before_archive_scan_if_permission_repai
     channel.archived_threads = AsyncMock(side_effect=AssertionError("archive scan must not run"))
     updates = []
     bot_member = _HashableNamespace(
-        id=777, guild_permissions=discord.Permissions(manage_roles=True, manage_channels=True, view_channel=True, read_message_history=True, send_messages=True, create_public_threads=True)
+        id=777, guild_permissions=discord.Permissions(manage_roles=True, manage_channels=True, view_channel=True, read_message_history=True, send_messages=True, create_public_threads=True, send_messages_in_threads=True)
     )
 
     monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: [_row()])
