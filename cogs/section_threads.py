@@ -204,13 +204,16 @@ class SectionThreads(commands.Cog):
             details += "\n\nCertains threads nécessitent encore une vérification des permissions ou des salons gérés."
         if sync_errors:
             details += "\n\n**Détails des erreurs :**"
-            for error in sync_errors[:4]:
+            # Keep the Discord API status/code near the front of each diagnostic
+            # (and preserve enough text to show the actual failure instead of
+            # cutting the line immediately before "50001 Missing Access").
+            for error in sync_errors[:3]:
                 safe_error = discord.utils.escape_mentions(
                     discord.utils.escape_markdown(str(error), as_needed=False)
                 )
-                details += f"\n• {safe_error[:280]}"
-            if len(sync_errors) > 4:
-                details += f"\n• … et {len(sync_errors) - 4} autre(s) erreur(s)."
+                details += f"\n• {safe_error[:450]}"
+            if len(sync_errors) > 3:
+                details += f"\n• … et {len(sync_errors) - 3} autre(s) erreur(s)."
         await interaction.followup.send(details[:1900], ephemeral=True)
 
 

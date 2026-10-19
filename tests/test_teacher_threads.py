@@ -328,7 +328,7 @@ async def test_ensure_teacher_threads_does_not_adopt_same_named_thread_owned_by_
 async def test_bot_thread_channel_access_repairs_missing_access_with_member_overwrite():
     bot_member = SimpleNamespace(
         id=777,
-        guild_permissions=discord.Permissions(manage_roles=True),
+        guild_permissions=discord.Permissions.all(),
     )
     effective = discord.Permissions.none()
     channel = SimpleNamespace(
@@ -404,6 +404,28 @@ async def test_bot_thread_channel_access_fails_closed_without_manage_roles():
 
 
 @pytest.mark.asyncio
+async def test_bot_thread_channel_access_does_not_try_to_grant_permissions_absent_from_guild_and_category():
+    bot_member = SimpleNamespace(
+        id=777,
+        guild_permissions=discord.Permissions(manage_roles=True),
+    )
+    channel = SimpleNamespace(
+        name="📚-2BACPC・math",
+        category=None,
+        permissions_for=lambda member: discord.Permissions.none(),
+        overwrites_for=lambda member: discord.PermissionOverwrite(),
+        set_permissions=AsyncMock(),
+    )
+
+    with pytest.raises(RuntimeError, match="Auto-réparation impossible : permissions absentes") as error:
+        await _ensure_bot_thread_channel_access(SimpleNamespace(me=bot_member), channel)
+
+    assert "view_channel" in str(error.value)
+    assert "Aucune inscription ni affectation n'a été supprimée" in str(error.value)
+    channel.set_permissions.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_ensure_teacher_threads_repairs_bot_channel_access_before_listing_or_creating(monkeypatch):
     events = []
     channel = _channel()
@@ -422,7 +444,7 @@ async def test_ensure_teacher_threads_repairs_bot_channel_access_before_listing_
         return SimpleNamespace(id=9099, name=kwargs["name"], type=discord.ChannelType.public_thread)
     channel.create_thread = AsyncMock(side_effect=create_thread)
     bot_member = SimpleNamespace(
-        id=777, guild_permissions=discord.Permissions(manage_roles=True)
+        id=777, guild_permissions=discord.Permissions.all()
     )
     guild = SimpleNamespace(id=1, me=bot_member)
     monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: [_row()])
@@ -459,7 +481,7 @@ async def test_bot_thread_channel_access_reports_missing_cached_bot_member():
 @pytest.mark.asyncio
 async def test_bot_thread_channel_access_reports_discord_permission_rejection():
     bot_member = SimpleNamespace(
-        id=777, guild_permissions=discord.Permissions(manage_roles=True)
+        id=777, guild_permissions=discord.Permissions.all()
     )
     response = SimpleNamespace(status=403, reason="Forbidden")
     channel = SimpleNamespace(
@@ -467,14 +489,17 @@ async def test_bot_thread_channel_access_reports_discord_permission_rejection():
         permissions_for=MagicMock(return_value=discord.Permissions.none()),
         overwrites_for=MagicMock(return_value=discord.PermissionOverwrite()),
         set_permissions=AsyncMock(
-            side_effect=discord.Forbidden(response, "Missing Manage Roles")
+            side_effect=discord.Forbidden(response, {"message": "Missing Access", "code": 50001})
         ),
     )
 
-    with pytest.raises(RuntimeError, match="réparation ciblée.*Forbidden"):
+    with pytest.raises(RuntimeError, match="Forbidden.*Réparation refusée") as error:
         await _ensure_bot_thread_channel_access(
             SimpleNamespace(me=bot_member), channel
         )
+    assert "Discord code 50001" in str(error.value)
+    assert "Missing Access" in str(error.value)
+    assert "un administrateur du serveur doit d'abord accorder" in str(error.value)
 
 
 @pytest.mark.asyncio
@@ -489,7 +514,7 @@ async def test_teacher_thread_sync_stops_before_archive_scan_if_permission_repai
     channel.archived_threads = AsyncMock(side_effect=AssertionError("archive scan must not run"))
     updates = []
     bot_member = SimpleNamespace(
-        id=777, guild_permissions=discord.Permissions(manage_roles=True)
+        id=777, guild_permissions=discord.Permissions.all()
     )
 
     monkeypatch.setattr(teacher_threads, "get_teacher_assignments", lambda *_args: [_row()])
@@ -509,7 +534,7 @@ async def test_teacher_thread_sync_stops_before_archive_scan_if_permission_repai
 
     assert result["failed"] == 1
     assert result["created"] == 0
-    assert "refusé la réparation ciblée" in result["errors"][0]
+    assert "Réparation refusée" in result["errors"][0]
     assert updates[0]["status"] == "failed"
     assert updates[0]["error"] == result["errors"][0]
     channel.archived_threads.assert_not_awaited()

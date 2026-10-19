@@ -269,9 +269,9 @@ The Phase 3 gate in `e2e/matrix/index.json` requires all matrix files to be vali
 
 Set `DISCORD_GUILD_ID` during development and restart the bot. Guild synchronization is much faster than global command propagation.
 
-### Build fails with permissions errors
+### Build or teacher-thread sync fails with permissions errors
 
-Verify that the bot has `Manage Channels` and `Manage Roles`, and that the bot role is above the School Manager managed roles.
+The bot role needs `Manage Channels` and `Manage Roles`, and must be above School Manager managed roles. For teacher subject channels, its server/category-level permissions must also include `View Channel`, `Read Message History`, `Send Messages`, `Create Public Threads`, and `Manage Threads`; the bot's channel overwrite can only allow permissions Discord already makes available to the bot at the server or parent-category level. If Discord returns `50001 Missing Access` while the bot is trying to repair a hidden channel, a server administrator must first grant the bot member access to that channel/category. Then rerun `/sync-teacher-threads`. Do not reset or re-register the teacher; assignments are retained for retry.
 
 ### A managed resource was deleted manually
 

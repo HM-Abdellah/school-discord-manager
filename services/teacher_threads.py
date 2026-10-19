@@ -33,6 +33,12 @@ def _thread_name(full_name: str, section: int) -> str:
 
 
 def _error_text(exc: Exception) -> str:
+    """Keep Discord's HTTP status and API error code visible in admin diagnostics."""
+    if isinstance(exc, discord.HTTPException):
+        status = getattr(exc, "status", None)
+        code = getattr(exc, "code", None)
+        detail = getattr(exc, "text", None) or str(exc)
+        return f"{type(exc).__name__}: HTTP {status}; Discord code {code}: {detail}"[:500]
     return f"{type(exc).__name__}: {exc}"[:500]
 
 
@@ -85,8 +91,35 @@ async def _ensure_bot_thread_channel_access(
             f"{channel.name!r} et ne peut pas corriger les overwrites sans la permission serveur Manage Roles."
         )
 
+    # Discord does not let a bot grant an overwrite for permissions it does not
+    # already possess in the guild or parent category, unless it already has a
+    # Manage Roles overwrite on the target channel. Avoid a doomed API call and
+    # report the exact server/category permissions an administrator must grant.
+    parent_category = getattr(channel, "category", None)
+    parent_permissions = None
+    parent_permission_check = getattr(parent_category, "permissions_for", None)
+    if callable(parent_permission_check):
+        try:
+            parent_permissions = parent_permission_check(bot_member)
+        except (AttributeError, TypeError, ValueError):
+            parent_permissions = None
+    overwrite = channel.overwrites_for(bot_member)
+    has_manage_roles_overwrite = getattr(overwrite, "manage_roles", None) is True
+    ungrantable = [
+        permission
+        for permission in missing
+        if not getattr(guild_permissions, permission, False)
+        and not getattr(parent_permissions, permission, False)
+    ]
+    if ungrantable and not has_manage_roles_overwrite:
+        raise RuntimeError(
+            f"Auto-réparation impossible : permissions absentes au niveau serveur/catégorie : "
+            f"{', '.join(ungrantable)}. Un administrateur doit les accorder au rôle du bot dans "
+            "Paramètres du serveur > Rôles (ou dans la catégorie), puis relancer /sync-teacher-threads. "
+            "Aucune inscription ni affectation n'a été supprimée."
+        )
+
     try:
-        overwrite = channel.overwrites_for(bot_member)
         for permission in _THREAD_CHANNEL_REQUIRED_PERMISSIONS:
             setattr(overwrite, permission, True)
         await channel.set_permissions(
@@ -95,10 +128,27 @@ async def _ensure_bot_thread_channel_access(
             reason="School Manager: restore bot access to managed subject channel for teacher threads",
         )
     except (discord.Forbidden, discord.HTTPException) as exc:
+        api_code = getattr(exc, "code", None)
+        if api_code == 50001:
+            next_step = (
+                "Discord renvoie Missing Access : un administrateur du serveur doit d'abord accorder "
+                "au membre du bot l'accès à cette catégorie/ce salon (View Channel), car le bot ne peut "
+                "pas se rétablir lui-même l'accès depuis un salon qui lui est inaccessible."
+            )
+        elif api_code == 50013:
+            next_step = (
+                "Discord renvoie Missing Permissions : vérifiez Manage Roles ainsi que les permissions "
+                "que le bot tente d'accorder au niveau du serveur ou de la catégorie parente."
+            )
+        else:
+            next_step = (
+                "Vérifiez les permissions du rôle du bot et les overwrites de la catégorie parente; "
+                "une réparation refusée par Discord nécessite une correction par un administrateur."
+            )
         raise RuntimeError(
-            f"Le bot ne possède pas les permissions {', '.join(missing)} dans le salon géré "
-            f"{channel.name!r}; Discord a refusé la réparation ciblée de ses permissions: "
-            f"{_error_text(exc)}"
+            f"Réponse API : {_error_text(exc)}. Réparation refusée pour le salon géré "
+            f"{channel.name!r} (permissions effectives manquantes : {', '.join(missing)}). "
+            f"{next_step}"
         ) from exc
 
     return True
