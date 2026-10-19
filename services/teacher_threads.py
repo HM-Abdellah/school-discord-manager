@@ -92,6 +92,13 @@ async def _ensure_bot_thread_channel_access(
             f"Le bot n'a pas les permissions effectives {', '.join(missing)} dans le salon géré "
             f"{channel.name!r} et ne peut pas corriger les overwrites sans la permission serveur Manage Roles."
         )
+    if not getattr(guild_permissions, "manage_channels", False):
+        raise RuntimeError(
+            f"Le bot n'a pas les permissions effectives {', '.join(missing)} dans le salon géré "
+            f"{channel.name!r}. La réparation automatique des overwrites nécessite Manage Channels "
+            "et Manage Roles au niveau du serveur. Un administrateur doit accorder ces permissions "
+            "ou ajouter manuellement le bot dans les permissions du salon."
+        )
 
     # Discord does not let a bot grant an overwrite for permissions it does not
     # already possess in the guild or parent category, unless it already has a
@@ -124,9 +131,16 @@ async def _ensure_bot_thread_channel_access(
     try:
         for permission in _THREAD_CHANNEL_REQUIRED_PERMISSIONS:
             setattr(overwrite, permission, True)
-        await channel.set_permissions(
-            bot_member,
-            overwrite=overwrite,
+        # Use Modify Channel rather than PUT /channels/{id}/permissions/{id}.
+        # Discord documents Manage Channels + Manage Roles for channel edits,
+        # while the dedicated overwrite endpoint can itself return 50001 when
+        # the bot is hidden by the channel's @everyone deny. Replace overwrites
+        # with the cached full set plus only the bot-member repair; never drop
+        # the teacher, student, admin, or @everyone entries.
+        merged_overwrites = dict(channel.overwrites)
+        merged_overwrites[bot_member] = overwrite
+        await channel.edit(
+            overwrites=merged_overwrites,
             reason="School Manager: restore bot access to managed subject channel for teacher threads",
         )
     except (discord.Forbidden, discord.HTTPException) as exc:
