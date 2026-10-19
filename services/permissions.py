@@ -22,10 +22,27 @@ STUDENT_STREAM_ROLE_PREFIX = "Élèves - "
 SUBJECT_ROLE_PREFIX = "Matière - "
 
 CHANNEL_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream", "createclassqr"}
-ROLE_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream", "assignstudent", "assignteacher", "assignteacherfull", "assignsubjectteachers", "createclassqr", "createteacherqr", "revoketeacherqr", "listteacherqr"}
+ROLE_MANAGEMENT_COMMANDS = {"setup", "build", "addstream", "removestream", "assignstudent", "assignteacher", "assignteacherfull", "assignsubjectteachers", "createclassqr", "createteacherqr", "startteacherregistration", "revoketeacherqr", "listteacherqr"}
 RESET_COMMANDS = {"resetserver"}
-READONLY_DURING_PENDING_REMOVAL = {"status", "years", "studenthistory", "adminpanel", "serverhealth"}
+READONLY_DURING_PENDING_REMOVAL = {"status", "years", "studenthistory", "adminpanel", "serverhealth", "auditclasssections"}
 PENDING_REMOVAL_KEY = "pending_removal"
+PENDING_RESET_KEY = "pending_reset"
+READONLY_DURING_PENDING_RESET = {
+    "resetserver", "status", "years", "studenthistory", "adminpanel",
+    "serverhealth", "usagereport", "auditclasssections",
+}
+
+
+def _pending_reset_message(guild: discord.Guild, command_name: str) -> str | None:
+    config = get_guild_config(guild.id) or {}
+    if not isinstance(config, dict) or config.get(PENDING_RESET_KEY) is None:
+        return None
+    if command_name in READONLY_DURING_PENDING_RESET:
+        return None
+    return (
+        "❌ Reset du serveur interrompu. Relance d'abord `/resetserver` après avoir "
+        "corrigé le problème; toute autre modification reste bloquée pour éviter un état incohérent."
+    )
 
 
 def _pending_removal_message(guild: discord.Guild, command_name: str) -> str | None:
@@ -158,7 +175,22 @@ def _wrap_with_mutation_lock(function):
         guild = getattr(interaction, "guild", None)
         if guild is None:
             return await original(*args, **kwargs)
-        async with get_build_lock(guild.id):
+        lock = get_build_lock(guild.id)
+        # Never leave a slash-command interaction waiting on a potentially long
+        # Discord mutation. Its initial response expires after a few seconds;
+        # reject concurrent mutations explicitly instead of queueing silently.
+        if lock.locked():
+            message = "⏳ Une opération est déjà en cours sur ce serveur. Réessaie dès qu'elle est terminée."
+            response = getattr(interaction, "response", None)
+            is_done = getattr(response, "is_done", None)
+            if response is not None and callable(is_done) and not is_done():
+                await response.send_message(message, ephemeral=True)
+            else:
+                followup = getattr(interaction, "followup", None)
+                if followup is not None:
+                    await followup.send(message, ephemeral=True)
+            return None
+        async with lock:
             return await original(*args, **kwargs)
 
     # discord.py resolves annotations against callback.__globals__. A normal
@@ -197,6 +229,12 @@ def teacher_assignment_check(*, lock: bool = True) -> app_commands.check:
     async def predicate(interaction: discord.Interaction) -> bool:
         guild = interaction.guild
         if guild is None:
+            return False
+        command_name = getattr(getattr(interaction, "command", None), "name", "")
+        pending_reset = _pending_reset_message(guild, command_name)
+        if pending_reset:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(pending_reset, ephemeral=True)
             return False
         if management_authorized(interaction):
             message = _preflight_message(interaction, needs_roles=True)
@@ -270,6 +308,12 @@ def teacher_professor_check(*, lock: bool = True) -> app_commands.check:
         guild = interaction.guild
         if guild is None:
             return False
+        command_name = getattr(getattr(interaction, "command", None), "name", "")
+        pending_reset = _pending_reset_message(guild, command_name)
+        if pending_reset:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(pending_reset, ephemeral=True)
+            return False
         if management_authorized(interaction):
             message = _preflight_message(interaction, needs_roles=True)
             if message and not interaction.response.is_done():
@@ -299,8 +343,10 @@ def teacher_professor_check(*, lock: bool = True) -> app_commands.check:
     check_decorator = app_commands.check(predicate)
 
     def decorator(function):
+        # Teacher access is enforced by this runtime role check. MANAGE_ROLES is
+        # an administrator permission, not a permission held by normal teachers,
+        # so publishing it as the command default would hide teacher commands.
         function = check_decorator(function)
-        function = _apply_default_permission(function, manage_roles=True)
         return _wrap_with_mutation_lock(function) if lock else function
 
     return decorator
@@ -315,11 +361,16 @@ def management_check(*, lock: bool = True) -> app_commands.check:
             if not interaction.response.is_done():
                 await interaction.response.send_message("❌ Outil réservé au propriétaire du serveur ou au rôle Administration configuré.", ephemeral=True)
             return False
-        command_name = interaction.command.name if interaction.command else ""
+        command_name = getattr(getattr(interaction, "command", None), "name", "")
         pending_message = _pending_removal_message(guild, command_name)
         if pending_message:
             if not interaction.response.is_done():
                 await interaction.response.send_message(pending_message, ephemeral=True)
+            return False
+        pending_reset = _pending_reset_message(guild, command_name)
+        if pending_reset:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(pending_reset, ephemeral=True)
             return False
         if command_name in RESET_COMMANDS or command_name in CHANNEL_MANAGEMENT_COMMANDS:
             message = _preflight_message(interaction, needs_channels=True, needs_roles=True)
@@ -353,11 +404,16 @@ def owner_only_check(*, lock: bool = True) -> app_commands.check:
             if not interaction.response.is_done():
                 await interaction.response.send_message("❌ Cette commande est réservée au propriétaire du serveur.", ephemeral=True)
             return False
-        command_name = interaction.command.name if interaction.command else ""
+        command_name = getattr(getattr(interaction, "command", None), "name", "")
         pending_message = _pending_removal_message(guild, command_name)
         if pending_message:
             if not interaction.response.is_done():
                 await interaction.response.send_message(pending_message, ephemeral=True)
+            return False
+        pending_reset = _pending_reset_message(guild, command_name)
+        if pending_reset:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(pending_reset, ephemeral=True)
             return False
         message = _preflight_message(interaction, needs_channels=True, needs_roles=True)
         if message:
@@ -401,6 +457,18 @@ def student_view_overwrite() -> discord.PermissionOverwrite:
     return discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True, create_public_threads=False, create_private_threads=False, send_messages_in_threads=False, connect=True)
 
 
+def student_subject_channel_overwrite() -> discord.PermissionOverwrite:
+    """Allow students to read/post in subject channels, but not create or post in threads."""
+    return discord.PermissionOverwrite(
+        view_channel=True,
+        send_messages=True,
+        read_message_history=True,
+        create_public_threads=False,
+        create_private_threads=False,
+        send_messages_in_threads=False,
+    )
+
+
 def hidden_overwrite() -> discord.PermissionOverwrite:
     return discord.PermissionOverwrite(view_channel=False)
 
@@ -427,7 +495,7 @@ def teacher_area_overwrites(everyone, admin_role, professor_role, female_profess
 
 
 def subject_channel_overwrites(everyone, admin_role, professor_role, female_professor_role, teacher_stream_role, student_stream_role, subject_role=None, student_role=None):
-    overwrites = {everyone: hidden_overwrite(), admin_role: administrator_overwrite(), professor_role: professor_subject_view_overwrite(), female_professor_role: professor_subject_view_overwrite(), teacher_stream_role: professor_subject_view_overwrite(), student_stream_role: student_overwrite(can_send=True)}
+    overwrites = {everyone: hidden_overwrite(), admin_role: administrator_overwrite(), professor_role: professor_subject_view_overwrite(), female_professor_role: professor_subject_view_overwrite(), teacher_stream_role: professor_subject_view_overwrite(), student_stream_role: student_subject_channel_overwrite()}
     if subject_role is not None:
         overwrites[subject_role] = professor_subject_member_overwrite()
     return overwrites

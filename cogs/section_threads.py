@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -12,8 +14,11 @@ from config.curriculum import (
     get_stream_subjects,
     get_streams,
 )
+from services.build_guard import get_build_lock
 from services.permissions import management_check
 from services.server_builder import _stream_category_name, _subject_channel_name
+from services.storage import get_teacher_assignments
+from services.teacher_threads import all_public_threads as _all_public_threads, ensure_teacher_threads
 
 MAX_SECTIONS = 20
 
@@ -32,28 +37,6 @@ def _resolve_subject_channel(channel: discord.abc.GuildChannel) -> tuple[str, st
                 if channel.name == _subject_channel_name(code, subject):
                     return level, stream, subject
     return None
-
-
-async def _all_public_threads(channel: discord.TextChannel) -> list[discord.Thread]:
-    """Return active and archived public threads.
-
-    The archived-thread query is part of the idempotency check. If Discord does
-    not let us inspect the archive, fail closed instead of risking duplicates.
-    """
-    threads: dict[int, discord.Thread] = {
-        thread.id: thread
-        for thread in channel.threads
-        if thread.type == discord.ChannelType.public_thread
-    }
-
-    try:
-        async for thread in channel.archived_threads(limit=None):
-            if thread.type == discord.ChannelType.public_thread:
-                threads[thread.id] = thread
-    except (discord.Forbidden, discord.HTTPException):
-        raise
-
-    return list(threads.values())
 
 
 class SectionThreads(commands.Cog):
@@ -142,6 +125,109 @@ class SectionThreads(commands.Cog):
             f"✅ **{subject} — {stream}** : {len(created)} thread(s) créé(s) sur {sections} demandé(s). Les threads existants et les threads non gérés n’ont pas été modifiés.",
             ephemeral=True,
         )
+
+
+    @app_commands.command(
+        name="sync-teacher-threads",
+        description="Réessayer la création des threads des professeurs inscrits.",
+    )
+    @app_commands.default_permissions(manage_roles=True)
+    # Acknowledge the interaction before waiting for this guild's mutation lock.
+    # Otherwise a competing long-running mutation can hold the lock beyond
+    # Discord's initial response window, producing "The application did not respond".
+    # The callback locks each teacher's sync operation explicitly below.
+    @management_check(lock=False)
+    async def sync_teacher_threads(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
+
+        print(
+            f"[TEACHER THREAD SYNC] Command received; acknowledging interaction (guild={guild.id}).",
+            flush=True,
+        )
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            rows = get_teacher_assignments(guild.id)
+        except (OSError, sqlite3.Error) as exc:
+            print(
+                f"[TEACHER THREAD SYNC STORAGE ERROR] guild={guild.id} "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            await interaction.followup.send(
+                "❌ Impossible de lire les affectations des professeurs dans SQLite. Aucun thread n'a été créé. "
+                "Vérifiez le stockage puis réessayez.",
+                ephemeral=True,
+            )
+            return
+
+        # Recheck every registered teacher, not only pending/failed rows.
+        # A thread can be deleted or moved after SQLite marked it as created;
+        # its saved ID must be verified against Discord before declaring it synced.
+        teacher_ids = list(dict.fromkeys(int(row["discord_id"]) for row in rows))
+        print(
+            f"[TEACHER THREAD SYNC] Loaded {len(rows)} assignment row(s) / "
+            f"{len(teacher_ids)} teacher(s); waiting for the guild mutation lock.",
+            flush=True,
+        )
+        if not teacher_ids:
+            await interaction.followup.send(
+                "ℹ️ Aucune affectation professeur n'est enregistrée.",
+                ephemeral=True,
+            )
+            return
+
+        totals = {"created": 0, "existing": 0, "failed": 0}
+        failed_teachers: list[int] = []
+        sync_errors: list[str] = []
+        for teacher_id in teacher_ids:
+            try:
+                async with get_build_lock(guild.id):
+                    outcome = await ensure_teacher_threads(guild, teacher_id)
+            except Exception as exc:
+                # Keep processing other teachers; the failed rows remain available
+                # for a later retry because assignment state is persisted in SQLite.
+                totals["failed"] += 1
+                failed_teachers.append(teacher_id)
+                print(
+                    f"[TEACHER THREAD SYNC ERROR] guild={guild.id} teacher={teacher_id} "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                sync_errors.append(
+                    f"Erreur interne de synchronisation: {type(exc).__name__}: {exc}"
+                )
+                continue
+            for key in totals:
+                totals[key] += int(outcome.get(key, 0))
+            outcome_errors = outcome.get("errors", [])
+            if isinstance(outcome_errors, list):
+                sync_errors.extend(str(error) for error in outcome_errors)
+            if int(outcome.get("failed", 0)):
+                failed_teachers.append(teacher_id)
+
+        details = (
+            f"✅ Threads créés : **{totals['created']}**\n"
+            f"♻️ Threads existants réutilisés : **{totals['existing']}**\n"
+            f"⚠️ Affectations à réparer : **{totals['failed']}**"
+        )
+        if failed_teachers:
+            details += "\n\nCertains threads nécessitent encore une vérification des permissions ou des salons gérés."
+        if sync_errors:
+            details += "\n\n**Détails des erreurs :**"
+            # Keep the Discord API status/code near the front of each diagnostic
+            # (and preserve enough text to show the actual failure instead of
+            # cutting the line immediately before "50001 Missing Access").
+            for error in sync_errors[:3]:
+                safe_error = discord.utils.escape_mentions(
+                    discord.utils.escape_markdown(str(error), as_needed=False)
+                )
+                details += f"\n• {safe_error[:450]}"
+            if len(sync_errors) > 3:
+                details += f"\n• … et {len(sync_errors) - 3} autre(s) erreur(s)."
+        await interaction.followup.send(details[:1900], ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

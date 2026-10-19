@@ -222,6 +222,24 @@ def initialize_database() -> None:
         CREATE TABLE IF NOT EXISTS class_qr_invites (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, invite_code TEXT NOT NULL UNIQUE, class_key TEXT NOT NULL, level_name TEXT NOT NULL, stream_name TEXT NOT NULL, stream_code TEXT NOT NULL, section INTEGER NOT NULL CHECK(section BETWEEN 1 AND 8), class_role_id INTEGER NOT NULL, created_by INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, max_uses INTEGER NOT NULL, revoked_at TEXT);
         CREATE TABLE IF NOT EXISTS teacher_qr_invites (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, invite_code TEXT NOT NULL UNIQUE, pending_role_id INTEGER NOT NULL, created_by INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, max_uses INTEGER NOT NULL, revoked_at TEXT);
         CREATE TABLE IF NOT EXISTS teacher_registrations (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, discord_id INTEGER NOT NULL, full_name TEXT NOT NULL, profile_type TEXT NOT NULL CHECK(profile_type IN ('male','female')), level_name TEXT NOT NULL, stream_name TEXT NOT NULL, subjects_text TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(guild_id, discord_id));
+        CREATE TABLE IF NOT EXISTS teacher_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            discord_id INTEGER NOT NULL,
+            level_name TEXT NOT NULL,
+            stream_name TEXT NOT NULL,
+            stream_code TEXT NOT NULL,
+            section INTEGER NOT NULL CHECK(section BETWEEN 1 AND 8),
+            subject_name TEXT NOT NULL,
+            thread_id INTEGER,
+            thread_status TEXT NOT NULL DEFAULT 'pending' CHECK(thread_status IN ('pending','created','failed')),
+            thread_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(guild_id, discord_id, level_name, stream_name, section, subject_name),
+            FOREIGN KEY(guild_id, discord_id) REFERENCES teacher_registrations(guild_id, discord_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_teacher_assignments_thread_sync ON teacher_assignments(guild_id, thread_status, discord_id);
         CREATE UNIQUE INDEX IF NOT EXISTS uq_one_active_teacher_qr_per_guild ON teacher_qr_invites(guild_id) WHERE revoked_at IS NULL;
         """)
         conn.executescript("""
@@ -926,8 +944,135 @@ def get_teacher_registration(guild_id: int, discord_id: int) -> sqlite3.Row | No
         ).fetchone()
 
 
+def record_teacher_assignments(
+    guild_id: int,
+    discord_id: int,
+    assignments: list[dict[str, Any]],
+) -> int:
+    """Persist section/subject assignments independently of the one-time teacher identity row.
+
+    Each item describes one section within a level/stream and the subjects taught
+    in that section. Repeated inserts are safe and do not reset thread sync state.
+    """
+    initialize_database()
+    now = datetime.now(timezone.utc).isoformat()
+    rows: set[tuple[str, str, str, int, str]] = set()
+    for item in assignments:
+        if not isinstance(item, dict):
+            raise ValueError("Affectation professeur invalide.")
+        level_name = str(item.get("level", "")).strip()
+        stream_name = str(item.get("stream", "")).strip()
+        try:
+            section = int(item.get("section"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Numéro de section invalide.") from exc
+        subjects = item.get("subjects", [])
+        if isinstance(subjects, str):
+            subjects = [value.strip() for value in subjects.split(",") if value.strip()]
+        if not level_name or not stream_name or not 1 <= section <= 8:
+            raise ValueError("Le niveau, la filière et la section sont obligatoires.")
+        if not isinstance(subjects, (list, tuple, set)) or not subjects:
+            raise ValueError("Chaque section doit avoir au moins une matière.")
+        stream_code = get_stream_abbreviation(level_name, stream_name)
+        for subject_value in subjects:
+            subject_name = str(subject_value).strip()
+            if not subject_name:
+                continue
+            rows.add((level_name, stream_name, stream_code, section, subject_name))
+
+    if not rows:
+        raise ValueError("Aucune affectation professeur valide.")
+    inserted = 0
+    with _connect() as conn:
+        try:
+            for level_name, stream_name, stream_code, section, subject_name in sorted(rows):
+                cursor = conn.execute(
+                    """
+                    INSERT INTO teacher_assignments(
+                        guild_id, discord_id, level_name, stream_name, stream_code,
+                        section, subject_name, thread_status, created_at, updated_at
+                    ) VALUES(?,?,?,?,?,?,?,'pending',?,?)
+                    ON CONFLICT(guild_id, discord_id, level_name, stream_name, section, subject_name)
+                    DO NOTHING
+                    """,
+                    (
+                        guild_id, discord_id, level_name, stream_name, stream_code,
+                        section, subject_name, now, now,
+                    ),
+                )
+                inserted += max(cursor.rowcount, 0)
+            conn.commit()
+        except sqlite3.Error:
+            conn.rollback()
+            raise
+    return inserted
+
+
+def get_teacher_assignments(
+    guild_id: int,
+    discord_id: int | None = None,
+) -> list[sqlite3.Row]:
+    """Return teacher assignment rows together with the registered display name."""
+    initialize_database()
+    query = """
+        SELECT a.*, r.full_name
+        FROM teacher_assignments AS a
+        JOIN teacher_registrations AS r
+          ON r.guild_id=a.guild_id AND r.discord_id=a.discord_id
+        WHERE a.guild_id=?
+    """
+    params: tuple[int, ...] = (guild_id,)
+    if discord_id is not None:
+        query += " AND a.discord_id=?"
+        params = (guild_id, discord_id)
+    query += " ORDER BY a.discord_id, a.level_name, a.stream_name, a.section, a.subject_name"
+    with _connect() as conn:
+        return conn.execute(query, params).fetchall()
+
+
+def update_teacher_assignment_thread(
+    guild_id: int,
+    assignment_id: int,
+    *,
+    status: str,
+    thread_id: int | None = None,
+    error: str | None = None,
+) -> None:
+    """Persist thread synchronization state for one teacher assignment.
+
+    Callers first load assignments, which initializes the schema. Avoid rerunning
+    the full database migration path for every thread in a multi-section sync.
+    """
+    if status not in {"pending", "created", "failed"}:
+        raise ValueError("Statut de synchronisation du thread invalide.")
+    if status == "created" and (not isinstance(thread_id, int) or thread_id <= 0):
+        raise ValueError("Un thread créé doit avoir un identifiant Discord valide.")
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE teacher_assignments
+            SET thread_id=COALESCE(?, thread_id),
+                thread_status=?,
+                thread_error=?,
+                updated_at=?
+            WHERE guild_id=? AND id=?
+            """,
+            (
+                thread_id, status, error, datetime.now(timezone.utc).isoformat(),
+                guild_id, assignment_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("Affectation professeur introuvable pendant la synchronisation du thread.")
+        conn.commit()
+
+
 def delete_teacher_registration(guild_id: int, discord_id: int) -> None:
     with _connect() as conn:
+        conn.execute(
+            "DELETE FROM teacher_assignments WHERE guild_id=? AND discord_id=?",
+            (guild_id, discord_id),
+        )
         conn.execute(
             "DELETE FROM teacher_registrations WHERE guild_id=? AND discord_id=?",
             (guild_id, discord_id),
@@ -992,6 +1137,46 @@ def archive_guild_database(guild_id: int, academic_year_name: str) -> Path:
         target = sqlite3.connect(temp_name)
         source.backup(target)
 
+        # Archives may be created by a bot installed in more than one school
+        # server. A reset for one guild must not export other schools' student,
+        # teacher, invite, audit, or usage records into that guild's archive.
+        # Filter tables with guild_id directly and join-only tables by their
+        # owning student/stream IDs, all inside the private temporary snapshot.
+        table_names = [
+            str(row[0])
+            for row in target.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+            if str(row[0]) != "archive_metadata"
+        ]
+        table_columns = {
+            name: {str(row[1]) for row in target.execute(f'PRAGMA table_info("{name}")').fetchall()}
+            for name in table_names
+        }
+        target.execute("PRAGMA foreign_keys=OFF")
+        target.execute("BEGIN")
+        # Handle join-only/legacy tables before deleting non-target students.
+        for table_name in table_names:
+            columns = table_columns[table_name]
+            clauses = []
+            params: list[Any] = []
+            if "student_id" in columns:
+                clauses.append('"student_id" NOT IN (SELECT id FROM students WHERE guild_id=?)')
+                params.append(int(guild_id))
+            if "stream_id" in columns:
+                clauses.append('"stream_id" NOT IN (SELECT id FROM streams WHERE guild_id=?)')
+                params.append(int(guild_id))
+            if "guild_id" in columns:
+                clauses.append('("guild_id" != ? OR "guild_id" IS NULL)')
+                params.append(int(guild_id))
+            if clauses:
+                quoted_table = '"' + table_name.replace('"', '""') + '"'
+                target.execute(
+                    f"DELETE FROM {quoted_table} WHERE " + " OR ".join(clauses),
+                    tuple(params),
+                )
+        target.commit()
+
         # The live database uses WAL. Convert the archive to DELETE journal mode
         # so the archived .db is self-contained and needs no sidecar -wal/-shm files.
         journal_mode = target.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
@@ -1052,7 +1237,9 @@ def reset_guild_data(guild_id: int) -> None:
             conn.execute("DELETE FROM streams WHERE guild_id=?", (guild_id,))
             conn.execute("DELETE FROM class_qr_invites WHERE guild_id=?", (guild_id,))
             conn.execute("DELETE FROM teacher_qr_invites WHERE guild_id=?", (guild_id,))
+            conn.execute("DELETE FROM teacher_assignments WHERE guild_id=?", (guild_id,))
             conn.execute("DELETE FROM teacher_registrations WHERE guild_id=?", (guild_id,))
+            conn.execute("DELETE FROM class_transfer_requests WHERE guild_id=?", (guild_id,))
             conn.execute("DELETE FROM academic_years WHERE guild_id=?", (guild_id,))
             if _table_exists(conn, "audit_events"):
                 conn.execute("DELETE FROM audit_events WHERE guild_id=?", (guild_id,))
@@ -1196,12 +1383,6 @@ def _sync_configuration_to_database_conn(conn: sqlite3.Connection, guild_id: int
                 (role_name, guild_id, year_id, level["name"], stream_name),
             )
 
-
-def sync_configuration_to_database(guild_id: int, config: dict[str, Any]) -> None:
-    initialize_database()
-    with _connect() as conn:
-        _sync_configuration_to_database_conn(conn, guild_id, config)
-        conn.commit()
 
 def sync_configuration_to_database(guild_id: int, config: dict[str, Any]) -> None:
     initialize_database()

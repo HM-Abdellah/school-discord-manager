@@ -94,7 +94,6 @@ class SectionAwareExamCommands(commands.Cog):
             for m in (0, 30)
         ][:25],
     )
-    @app_commands.default_permissions(manage_roles=True)
     @teacher_professor_check()
     async def set_exam(
         self,

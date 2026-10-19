@@ -102,7 +102,7 @@ class SchoolBot(commands.Bot):
         print(f"Bot      : {self.user}")
         print(f"Bot ID   : {self.user.id}")
         print(f"Servers  : {len(self.guilds)}")
-        print("Commands : /setup /build /addstream /removestream /status /newyear /rollbackyear /years /assignstudent /assignteacher /assignsubjectteachers /assignteacherfull /set_timetable /setexam /absenceteacher /adminpanel /serverhealth /reportabsence /create-section-threads /createclassqr /createclasstransferqr /cancelclasstransferqr /usagereport /createteacherqr /revoketeacherqr /listteacherqr /createadminqr(owner) /resetserver(owner)")
+        print("Commands : /setup /build /addstream /removestream /status /newyear /rollbackyear /years /assignstudent /assignteacher /assignsubjectteachers /assignteacherfull /set_timetable /setexam /absenceteacher /adminpanel /serverhealth /reportabsence /create-section-threads /sync-teacher-threads /createclassqr /createclasstransferqr /cancelclasstransferqr /usagereport /createteacherqr /startteacherregistration /revoketeacherqr /listteacherqr /createadminqr(owner) /resetserver(owner)")
         print("=" * 72)
 
 

@@ -65,3 +65,132 @@ def test_all_public_threads_fails_closed_when_archive_fetch_fails():
 
     with pytest.raises(discord.HTTPException):
         asyncio.run(_all_public_threads(channel))
+
+
+@pytest.mark.asyncio
+async def test_sync_teacher_threads_rechecks_rows_already_marked_created(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from cogs.section_threads import SectionThreads
+
+    guild = SimpleNamespace(id=1)
+    response = SimpleNamespace(defer=AsyncMock())
+    followup = SimpleNamespace(send=AsyncMock())
+    interaction = SimpleNamespace(guild=guild, response=response, followup=followup)
+    rows = [
+        {"discord_id": 101, "thread_status": "created", "thread_id": 9001},
+        {"discord_id": 101, "thread_status": "failed", "thread_id": 9002},
+        {"discord_id": 202, "thread_status": "created", "thread_id": 9010},
+    ]
+    processed = []
+
+    class FakeLock:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    async def fake_sync(_guild, teacher_id):
+        processed.append(teacher_id)
+        return {"created": 0, "existing": 1, "failed": 0}
+
+    monkeypatch.setattr("cogs.section_threads.get_teacher_assignments", lambda _guild_id: rows)
+    monkeypatch.setattr("cogs.section_threads.get_build_lock", lambda _guild_id: FakeLock())
+    monkeypatch.setattr("cogs.section_threads.ensure_teacher_threads", fake_sync)
+
+    cog = SectionThreads(SimpleNamespace())
+    await SectionThreads.sync_teacher_threads.callback(cog, interaction)
+
+    assert processed == [101, 202]
+    response.defer.assert_awaited_once()
+    followup.send.assert_awaited_once()
+    assert "Threads existants réutilisés : **2**" in followup.send.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_sync_teacher_threads_exposes_failure_reason_to_admin(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from cogs.section_threads import SectionThreads
+
+    guild = SimpleNamespace(id=1)
+    response = SimpleNamespace(defer=AsyncMock())
+    followup = SimpleNamespace(send=AsyncMock())
+    interaction = SimpleNamespace(guild=guild, response=response, followup=followup)
+
+    class FakeLock:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    async def fake_sync(_guild, _teacher_id):
+        return {
+            "created": 0,
+            "existing": 0,
+            "failed": 1,
+            "errors": [
+                "2BACPC / Mathématiques: RuntimeError: Salon de matière géré introuvable : 📚-2BACPC・mathématiques"
+            ],
+        }
+
+    monkeypatch.setattr(
+        "cogs.section_threads.get_teacher_assignments",
+        lambda _guild_id: [{"discord_id": 101}],
+    )
+    monkeypatch.setattr("cogs.section_threads.get_build_lock", lambda _guild_id: FakeLock())
+    monkeypatch.setattr("cogs.section_threads.ensure_teacher_threads", fake_sync)
+
+    cog = SectionThreads(SimpleNamespace())
+    await SectionThreads.sync_teacher_threads.callback(cog, interaction)
+
+    content = followup.send.await_args.args[0]
+    assert "Affectations à réparer : **1**" in content
+    assert "Détails des erreurs" in content
+    assert "Salon de matière géré introuvable" in content
+
+
+@pytest.mark.asyncio
+async def test_sync_teacher_threads_acknowledges_before_waiting_for_guild_lock(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from cogs.section_threads import SectionThreads
+
+    lock_waiting = asyncio.Event()
+    release_lock = asyncio.Event()
+    deferred = asyncio.Event()
+    response = SimpleNamespace(defer=AsyncMock(side_effect=lambda **_kwargs: deferred.set()))
+    followup = SimpleNamespace(send=AsyncMock())
+    interaction = SimpleNamespace(guild=SimpleNamespace(id=1), response=response, followup=followup)
+
+    class BlockingLock:
+        async def __aenter__(self):
+            lock_waiting.set()
+            await release_lock.wait()
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    async def fake_sync(_guild, _teacher_id):
+        return {"created": 1, "existing": 0, "failed": 0, "errors": []}
+
+    monkeypatch.setattr("cogs.section_threads.get_teacher_assignments", lambda _guild_id: [{"discord_id": 101}])
+    monkeypatch.setattr("cogs.section_threads.get_build_lock", lambda _guild_id: BlockingLock())
+    monkeypatch.setattr("cogs.section_threads.ensure_teacher_threads", fake_sync)
+
+    # The command callback must not be wrapped in a lock-taking decorator: Discord
+    # requires an initial response before waiting for any other mutation to finish.
+    assert not hasattr(SectionThreads.sync_teacher_threads.callback, "__wrapped__")
+
+    task = asyncio.create_task(SectionThreads.sync_teacher_threads.callback(SectionThreads(SimpleNamespace()), interaction))
+    try:
+        await asyncio.wait_for(lock_waiting.wait(), timeout=1)
+        assert deferred.is_set()
+        response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+    finally:
+        release_lock.set()
+    await asyncio.wait_for(task, timeout=1)
+    followup.send.assert_awaited_once()

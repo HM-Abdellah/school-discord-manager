@@ -147,7 +147,48 @@ async def resolve_managed_text_channel(
     elif len(live_categories) == 1:
         category = live_categories[0]
     else:
-        return None, False
+        # The channel may still be valid even if its managed category was
+        # renamed or the category registry key/ID drifted. Recover only from
+        # an exact case-insensitive channel-name match whose parent ID is
+        # already present in the trusted managed-category registry.
+        managed_category_ids = {
+            value
+            for value in _managed_mapping(config, "categories").values()
+            if isinstance(value, int) and value > 0
+        }
+        categories_by_id = {
+            item.id: item
+            for item in channels
+            if isinstance(item, discord.CategoryChannel) and item.id in managed_category_ids
+        }
+        managed_parent_matches = [
+            item
+            for item in channels
+            if isinstance(item, discord.TextChannel)
+            and _name_key(item.name) == _name_key(channel_name)
+            and item.category_id in categories_by_id
+        ]
+        preferred_channel = next(
+            (item for item in managed_parent_matches if item.id == channel_id),
+            None,
+        )
+        if preferred_channel is not None:
+            live_channel = preferred_channel
+        elif len(managed_parent_matches) == 1:
+            live_channel = managed_parent_matches[0]
+        else:
+            return None, False
+
+        category = categories_by_id[live_channel.category_id]
+        current_category_id = _find_registered_id(config, "categories", category_name)[1]
+        current_channel_id = _find_registered_id(config, "channels", channel_name)[1]
+        if current_category_id != category.id or category_key != category.name:
+            _set_managed_id(config, "categories", category.name, category.id)
+            registry_changed = True
+        if current_channel_id != live_channel.id or channel_key != live_channel.name:
+            _set_managed_id(config, "channels", live_channel.name, live_channel.id)
+            registry_changed = True
+        return live_channel, registry_changed
 
     live_channels = [item for item in channels if _is_expected_text_channel(item, channel_name, category.id)]
     matching_registered_channel = next((item for item in live_channels if item.id == channel_id), None)

@@ -321,3 +321,66 @@ def test_configuration_save_preserves_existing_class_role_registry(tmp_path, mon
     restored = storage.get_guild_config(1)
     assert restored is not None
     assert restored["class_roles"]["2BACPC-2"]["role_id"] == 900
+
+
+def test_archive_contains_only_requested_guild_and_its_enrollments(tmp_path, monkeypatch):
+    data_dir = _configure_storage(tmp_path, monkeypatch)
+    storage.initialize_database()
+    year_ids = {
+        guild_id: storage.ensure_academic_year(guild_id, "2026/2027", active=True)
+        for guild_id in (101, 202)
+    }
+    student_ids = {}
+    with storage._connect() as conn:
+        stream_ids = {}
+        for guild_id in (101, 202):
+            stream_ids[guild_id] = conn.execute(
+                "INSERT INTO streams(guild_id,academic_year_id,level_name,stream_name,role_name) VALUES(?,?,?,?,?)",
+                (guild_id, year_ids[guild_id], "Tronc Commun", "TCS", f"Filière - TCS-{guild_id}"),
+            ).lastrowid
+            student_ids[guild_id] = conn.execute(
+                "INSERT INTO students(guild_id,discord_id,display_name,created_at) VALUES(?,?,?,?)",
+                (guild_id, guild_id * 10, f"Student {guild_id}", "2026-09-01"),
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO enrollments(student_id,stream_id,start_date,status) VALUES(?,?,?,'active')",
+                (student_ids[guild_id], stream_ids[guild_id], "2026-09-01"),
+            )
+        conn.execute(
+            "CREATE TABLE command_usage_events (id INTEGER PRIMARY KEY, guild_id INTEGER, command_name TEXT, outcome TEXT, created_at TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO command_usage_events VALUES(?,?,?,?,?)",
+            [(1, 101, "status", "completed", "2026-10-01"), (2, 202, "build", "completed", "2026-10-01")],
+        )
+        conn.commit()
+
+    archive_path = storage.archive_guild_database(101, "2026/2027")
+    assert archive_path.parent == data_dir / "archives"
+    with sqlite3.connect(archive_path) as archived:
+        assert archived.execute("SELECT DISTINCT guild_id FROM academic_years").fetchall() == [(101,)]
+        assert archived.execute("SELECT DISTINCT guild_id FROM students").fetchall() == [(101,)]
+        assert archived.execute("SELECT student_id,stream_id FROM enrollments").fetchall() == [(student_ids[101], stream_ids[101])]
+        assert archived.execute("SELECT guild_id,command_name FROM command_usage_events").fetchall() == [(101, "status")]
+        assert archived.execute("SELECT guild_id FROM archive_metadata").fetchall() == [(101,)]
+
+
+def test_reset_guild_data_clears_only_that_guild_transfer_requests(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
+    storage.initialize_database()
+    with storage._connect() as conn:
+        conn.executemany(
+            """INSERT INTO class_transfer_requests(
+                guild_id,student_discord_id,created_by,academic_year_id,level_name,stream_name,
+                stream_code,section,class_key,class_role_id,student_stream_role_id,created_at,expires_at,status
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')""",
+            [
+                (101, 1001, 9001, 1, "TC", "TCS", "TCS", 1, "TCS-1", 20, 30, "2026-10-01", "2026-10-02"),
+                (202, 2002, 9002, 2, "TC", "TCS", "TCS", 1, "TCS-1", 40, 50, "2026-10-01", "2026-10-02"),
+            ],
+        )
+        conn.commit()
+
+    storage.reset_guild_data(101)
+    with storage._connect() as conn:
+        assert [tuple(row) for row in conn.execute("SELECT guild_id FROM class_transfer_requests ORDER BY guild_id").fetchall()] == [(202,)]
