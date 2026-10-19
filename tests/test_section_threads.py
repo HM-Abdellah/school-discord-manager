@@ -106,3 +106,47 @@ async def test_sync_teacher_threads_rechecks_rows_already_marked_created(monkeyp
     response.defer.assert_awaited_once()
     followup.send.assert_awaited_once()
     assert "Threads existants réutilisés : **2**" in followup.send.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_sync_teacher_threads_exposes_failure_reason_to_admin(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from cogs.section_threads import SectionThreads
+
+    guild = SimpleNamespace(id=1)
+    response = SimpleNamespace(defer=AsyncMock())
+    followup = SimpleNamespace(send=AsyncMock())
+    interaction = SimpleNamespace(guild=guild, response=response, followup=followup)
+
+    class FakeLock:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    async def fake_sync(_guild, _teacher_id):
+        return {
+            "created": 0,
+            "existing": 0,
+            "failed": 1,
+            "errors": [
+                "2BACPC / Mathématiques: RuntimeError: Salon de matière géré introuvable : 📚-2BACPC・mathématiques"
+            ],
+        }
+
+    monkeypatch.setattr(
+        "cogs.section_threads.get_teacher_assignments",
+        lambda _guild_id: [{"discord_id": 101}],
+    )
+    monkeypatch.setattr("cogs.section_threads.get_build_lock", lambda _guild_id: FakeLock())
+    monkeypatch.setattr("cogs.section_threads.ensure_teacher_threads", fake_sync)
+
+    cog = SectionThreads(SimpleNamespace())
+    await SectionThreads.sync_teacher_threads.callback(cog, interaction)
+
+    content = followup.send.await_args.args[0]
+    assert "Affectations à réparer : **1**" in content
+    assert "Détails des erreurs" in content
+    assert "Salon de matière géré introuvable" in content

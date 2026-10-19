@@ -183,6 +183,9 @@ class SectionThreads(commands.Cog):
                     f"{type(exc).__name__}: {exc}",
                     flush=True,
                 )
+                sync_errors.append(
+                    f"Erreur interne de synchronisation: {type(exc).__name__}: {exc}"
+                )
                 continue
             for key in totals:
                 totals[key] += int(outcome.get(key, 0))
@@ -199,7 +202,16 @@ class SectionThreads(commands.Cog):
         )
         if failed_teachers:
             details += "\n\nCertains threads nécessitent encore une vérification des permissions ou des salons gérés."
-        await interaction.followup.send(details, ephemeral=True)
+        if sync_errors:
+            details += "\n\n**Détails des erreurs :**"
+            for error in sync_errors[:4]:
+                safe_error = discord.utils.escape_mentions(
+                    discord.utils.escape_markdown(str(error), as_needed=False)
+                )
+                details += f"\n• {safe_error[:280]}"
+            if len(sync_errors) > 4:
+                details += f"\n• … et {len(sync_errors) - 4} autre(s) erreur(s)."
+        await interaction.followup.send(details[:1900], ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

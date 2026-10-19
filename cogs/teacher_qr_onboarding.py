@@ -185,7 +185,7 @@ class TeacherOnboardingView(discord.ui.View):
         self.stream_select.callback = self._stream_selected
 
         self.section_select = discord.ui.Select(
-            placeholder="4️⃣ Choisissez vos sections (1 à 8)",
+            placeholder="4️⃣ Choisissez vos sections disponibles",
             min_values=1,
             max_values=8,
             options=[
@@ -1205,7 +1205,7 @@ async def _send_teacher_onboarding_prompt(
         view.message = await user.send(
             "## 👨‍🏫 Inscription professeur\n\n"
             "Bienvenue ! Sélectionnez tous les niveaux, filières, sections et matières que vous enseignez.\n\n"
-            "Vous pouvez choisir au maximum deux matières distinctes pour toute l'inscription, même si vous enseignez plusieurs classes. Les sections proposées correspondent aux rôles de classe qui existent déjà sur le serveur. Utilisez **Retour à la classe** pour corriger un choix ou "
+            "Vous pouvez choisir au maximum deux matières distinctes pour toute l'inscription, même si vous enseignez plusieurs classes. Les sections proposées correspondent aux rôles de classe enregistrés par l'administration avec /createclassqr et toujours présents sur le serveur. Utilisez **Retour à la classe** pour corriger un choix ou "
             "**Recommencer** pour effacer vos choix non validés. Tous les contrôles de correction sont directement dans ce message.\n\n"
             "Les choix proviennent du programme scolaire configuré. Après validation, le bot attribuera vos rôles "
             "et préparera automatiquement les threads publics de vos sections dans les salons des matières.",
