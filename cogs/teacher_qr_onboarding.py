@@ -1129,8 +1129,7 @@ async def _send_teacher_onboarding_prompt(
             "Bienvenue ! Sélectionnez tous les niveaux, filières, sections et matières que vous enseignez.\n\n"
             "Vous pouvez choisir au maximum deux matières distinctes pour toute l'inscription, même si vous enseignez plusieurs classes. Les sections proposées viennent des élèves "
             "importés pour l'année scolaire active. Utilisez **Retour à la classe** pour corriger un choix ou "
-            "**Recommencer** pour effacer vos choix non validés. Vous pouvez aussi lancer `/restartteacherregistration` "
-            "dans le serveur pour recevoir un nouveau formulaire.\n\n"
+            "**Recommencer** pour effacer vos choix non validés. Tous les contrôles de correction sont directement dans ce message.\n\n"
             "Les choix proviennent du programme scolaire configuré. Après validation, le bot attribuera vos rôles "
             "et préparera automatiquement les threads publics de vos sections dans les salons des matières.",
             view=view,
@@ -1404,88 +1403,6 @@ class TeacherQROnboarding(commands.Cog):
         self.bot = bot
 
     @app_commands.command(
-        name="restartteacherregistration",
-        description="Renvoyer votre formulaire professeur si vous avez fait une erreur avant de valider.",
-    )
-    @app_commands.guild_only()
-    async def restart_teacher_registration(self, interaction: discord.Interaction) -> None:
-        """Resend onboarding only for the invoking member's incomplete registration."""
-        guild = interaction.guild
-        member = interaction.user
-        if guild is None or getattr(member, "guild", None) is None:
-            await interaction.response.send_message(
-                "❌ Utilisez cette commande dans le serveur, pas dans les messages privés.",
-                ephemeral=True,
-            )
-            return
-        if member.bot:
-            await interaction.response.send_message("❌ Un bot ne peut pas démarrer une inscription professeur.", ephemeral=True)
-            return
-        try:
-            registration = get_teacher_registration(guild.id, member.id)
-        except (OSError, sqlite3.Error):
-            logging.getLogger(__name__).exception(
-                "Unable to check teacher registration before self-restart (guild=%s member=%s)",
-                guild.id, member.id,
-            )
-            await interaction.response.send_message(
-                "❌ Impossible de vérifier votre dossier. Contactez l'administration avant de réessayer.",
-                ephemeral=True,
-            )
-            return
-        if registration is not None:
-            await interaction.response.send_message(
-                "ℹ️ Votre inscription est déjà enregistrée. Pour protéger vos affectations et threads, "
-                "seule l'administration peut réinitialiser un dossier terminé avec "
-                "/startteacherregistration en activant `restart`.",
-                ephemeral=True,
-            )
-            return
-
-        pending_role = get_managed_role(guild, ROLE_TEACHER_PENDING)
-        professor_roles = {
-            role
-            for role in (
-                get_managed_role(guild, ROLE_PROFESSOR),
-                get_managed_role(guild, ROLE_PROFESSOR_FEMALE),
-            )
-            if role is not None
-        }
-        if pending_role is None or pending_role not in member.roles or any(
-            role in member.roles for role in professor_roles
-        ):
-            await interaction.response.send_message(
-                "❌ Votre compte n'est pas dans un état d'inscription incomplète. "
-                "Demandez à l'administration de vérifier le rôle `Professeur - En attente`.",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        dm_sent = await _send_teacher_onboarding_prompt(self.bot, member)
-        record_event(
-            guild.id,
-            member.id,
-            member.display_name,
-            "selfrestartteacherregistration",
-            member.display_name,
-            "dm_sent=" + str(dm_sent).lower(),
-        )
-        if dm_sent:
-            await interaction.followup.send(
-                "✅ Je vous ai renvoyé un formulaire propre en message privé. Vous pouvez aussi utiliser "
-                "les boutons **Retour à la classe** et **Recommencer** dans le formulaire. "
-                "Vos choix n'avaient pas été enregistrés; aucun départ du serveur n'est nécessaire.",
-                ephemeral=True,
-            )
-        else:
-            await interaction.followup.send(
-                "⚠️ Je n'ai pas pu vous envoyer le formulaire en privé. Autorisez les messages privés du serveur "
-                "puis relancez `/restartteacherregistration`. Votre inscription reste en attente.",
-                ephemeral=True,
-            )
-
-    @app_commands.command(
         name="startteacherregistration",
         description="Envoyer le formulaire professeur à un membre déjà présent dans le serveur.",
     )
@@ -1541,7 +1458,7 @@ class TeacherQROnboarding(commands.Cog):
                 guild.id,
                 interaction.user.id,
                 interaction.user.display_name,
-                "restartteacherregistration",
+                "adminrestartteacherregistration",
                 teacher.display_name,
                 "had_registration=" + str(bool(summary["had_registration"])).lower()
                 + ";assignments=" + str(summary["assignments"])

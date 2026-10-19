@@ -934,68 +934,6 @@ async def test_new_teacher_form_replaces_and_disables_previous_form():
     assert "remplacé" in first_message.edit.await_args.kwargs["content"]
 
 
-@pytest.mark.asyncio
-async def test_teacher_can_restart_own_incomplete_registration(monkeypatch):
-    from cogs.teacher_qr_onboarding import TeacherQROnboarding
-    from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_TEACHER_PENDING
-
-    guild = SimpleNamespace(id=1)
-    pending = SimpleNamespace(id=10, name=ROLE_TEACHER_PENDING)
-    member = SimpleNamespace(
-        id=202, display_name="Teacher awaiting registration", guild=guild,
-        roles=[pending], bot=False,
-    )
-    actor = member
-    interaction = SimpleNamespace(
-        guild=guild,
-        user=actor,
-        response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
-        followup=SimpleNamespace(send=AsyncMock()),
-    )
-    prompt = AsyncMock(return_value=True)
-    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda *_args: None)
-    monkeypatch.setattr(
-        "cogs.teacher_qr_onboarding.get_managed_role",
-        lambda _guild, name: {
-            ROLE_TEACHER_PENDING: pending,
-            ROLE_PROFESSOR: None,
-            ROLE_PROFESSOR_FEMALE: None,
-        }.get(name),
-    )
-    monkeypatch.setattr("cogs.teacher_qr_onboarding._send_teacher_onboarding_prompt", prompt)
-    monkeypatch.setattr("cogs.teacher_qr_onboarding.record_event", lambda *_args, **_kwargs: None)
-
-    bot = SimpleNamespace()
-    cog = TeacherQROnboarding(bot)
-    await cog.restart_teacher_registration.callback(cog, interaction)
-
-    prompt.assert_awaited_once_with(bot, member)
-    interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
-    assert "formulaire propre" in interaction.followup.send.await_args.args[0]
-
-
-@pytest.mark.asyncio
-async def test_teacher_cannot_self_restart_completed_registration(monkeypatch):
-    from cogs.teacher_qr_onboarding import TeacherQROnboarding
-
-    guild = SimpleNamespace(id=1)
-    member = SimpleNamespace(id=202, display_name="Registered teacher", guild=guild, roles=[], bot=False)
-    interaction = SimpleNamespace(
-        guild=guild, user=member,
-        response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
-        followup=SimpleNamespace(send=AsyncMock()),
-    )
-    prompt = AsyncMock()
-    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda *_args: {"discord_id": 202})
-    monkeypatch.setattr("cogs.teacher_qr_onboarding._send_teacher_onboarding_prompt", prompt)
-
-    cog = TeacherQROnboarding(SimpleNamespace())
-    await cog.restart_teacher_registration.callback(cog, interaction)
-
-    prompt.assert_not_awaited()
-    assert "déjà enregistrée" in interaction.response.send_message.await_args.args[0]
-
-
 def test_teacher_assignments_store_multiple_sections_and_preserve_thread_state(tmp_path, monkeypatch):
     _configure_storage(tmp_path, monkeypatch)
     storage.initialize_database()
