@@ -6,10 +6,12 @@ import pytest
 
 from services import server_builder as server_builder_module
 from services.server_builder import (
+    BuildPermissionError,
     ServerBuilder,
+    _required_setup_permissions,
     _stream_category_name,
-    _prepare_channel_overwrites,
     _subject_channel_overwrites,
+    _with_bot_view_access,
 )
 
 
