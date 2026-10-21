@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
+from services import server_builder as server_builder_module
 from services.server_builder import (
     ServerBuilder,
     _stream_category_name,
@@ -267,3 +268,86 @@ def test_fresh_channel_snapshot_does_not_reuse_deleted_cached_text_channel():
     builder._channel_snapshot_refreshed = True
 
     assert builder._find_text(category, "stale-channel") is None
+
+
+@pytest.mark.asyncio
+async def test_create_role_retries_50013_with_only_bot_grantable_permissions(monkeypatch, capsys):
+    bot_permissions = discord.Permissions(
+        manage_roles=True,
+        manage_channels=True,
+        view_channel=True,
+    )
+    guild = SimpleNamespace(
+        id=1,
+        me=SimpleNamespace(guild_permissions=bot_permissions),
+    )
+    response = SimpleNamespace(status=403, reason="Forbidden")
+    forbidden = discord.Forbidden(
+        response,
+        {"message": "Missing Permissions", "code": 50013},
+    )
+    created_role = SimpleNamespace(id=700, name="Administration")
+    guild.create_role = AsyncMock(side_effect=[forbidden, created_role])
+    monkeypatch.setattr(server_builder_module, "ROLE_CREATE_DELAY", 0)
+
+    builder = ServerBuilder(guild)
+    requested = discord.Permissions(
+        manage_roles=True,
+        manage_channels=True,
+        manage_messages=True,
+        manage_threads=True,
+        view_channel=True,
+    )
+    result = await builder._create_role(
+        "Administration",
+        permissions=requested,
+        colour=discord.Colour.red(),
+        hoist=True,
+        mentionable=True,
+        reason="test",
+    )
+
+    assert result is created_role
+    assert guild.create_role.await_count == 2
+    retry_permissions = guild.create_role.await_args_list[1].kwargs["permissions"]
+    assert retry_permissions.manage_roles is True
+    assert retry_permissions.manage_channels is True
+    assert retry_permissions.view_channel is True
+    assert retry_permissions.manage_messages is False
+    assert retry_permissions.manage_threads is False
+    assert builder.stats.roles_created == 1
+    output = capsys.readouterr().out
+    assert "Retrying with only bot-grantable permissions" in output
+    assert "manage_messages" in output
+    assert "manage_threads" in output
+
+
+@pytest.mark.asyncio
+async def test_create_role_does_not_retry_when_bot_lacks_manage_roles(monkeypatch):
+    guild_permissions = discord.Permissions(manage_channels=True)
+    guild = SimpleNamespace(
+        id=1,
+        me=SimpleNamespace(guild_permissions=guild_permissions),
+    )
+    response = SimpleNamespace(status=403, reason="Forbidden")
+    forbidden = discord.Forbidden(
+        response,
+        {"message": "Missing Permissions", "code": 50013},
+    )
+    guild.create_role = AsyncMock(side_effect=forbidden)
+    monkeypatch.setattr(server_builder_module, "ROLE_CREATE_DELAY", 0)
+
+    builder = ServerBuilder(guild)
+    with pytest.raises(discord.Forbidden):
+        await builder._create_role(
+            "Administration",
+            permissions=discord.Permissions(
+                manage_roles=True,
+                manage_messages=True,
+            ),
+            colour=discord.Colour.red(),
+            reason="test",
+        )
+
+    guild.create_role.assert_awaited_once()
+
