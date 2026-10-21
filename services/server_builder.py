@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import re
 import unicodedata
+from collections.abc import Awaitable, Callable
+from copy import copy
+from typing import Any
 
 import discord
 
@@ -62,6 +65,70 @@ STREAM_EMOJIS = {
 
 ROLE_CREATE_DELAY = 1.0
 RESOURCE_CREATE_DELAY = 0.2
+
+
+class BuildPermissionError(RuntimeError):
+    """A Discord permission rejection annotated with the attempted build operation."""
+
+
+def _missing_requested_permissions(
+    guild: discord.Guild,
+    requested: discord.Permissions,
+) -> list[str] | None:
+    """Report requested role permissions absent from the bot's effective guild permissions."""
+    bot_member = getattr(guild, "me", None)
+    current = getattr(bot_member, "guild_permissions", None)
+    if current is None:
+        return None
+    if getattr(current, "administrator", False):
+        return []
+
+    missing_bits = int(getattr(requested, "value", 0)) & ~int(
+        getattr(current, "value", 0)
+    )
+    if not missing_bits:
+        return []
+
+    flags = getattr(discord.Permissions, "VALID_FLAGS", {})
+    names = {
+        name
+        for name, bit in flags.items()
+        if int(bit) & missing_bits
+    }
+    # Discord.py may expose aliases for the same permission bit.
+    return sorted(names)
+
+
+async def _run_build_discord_operation(
+    *,
+    operation: str,
+    resource_name: str,
+    action: Callable[[], Awaitable[Any]],
+    guild: discord.Guild | None = None,
+    requested_permissions: discord.Permissions | None = None,
+) -> Any:
+    """Expose the exact Discord operation and API code instead of hiding Forbidden."""
+    try:
+        return await action()
+    except discord.Forbidden as exc:
+        safe_name = " ".join(str(resource_name).replace("`", "'").split())[:100]
+        api_message = str(getattr(exc, "text", "") or exc).replace("`", "'")[:240]
+        details = (
+            f"operation={operation}; resource_name='{safe_name}'; "
+            f"http_status={getattr(exc, 'status', 'unknown')}; "
+            f"discord_code={getattr(exc, 'code', 'unknown')}; "
+            f"discord_message='{api_message}'"
+        )
+        if guild is not None and requested_permissions is not None:
+            missing = _missing_requested_permissions(guild, requested_permissions)
+            if missing is None:
+                details += "; bot_permission_diagnostic=unavailable"
+            elif missing:
+                details += "; bot_missing_requested_permissions=" + ",".join(missing)
+            else:
+                details += "; bot_missing_requested_permissions=none"
+        print(f"[BUILD PERMISSION ERROR] {details}", flush=True)
+        raise BuildPermissionError(details) from exc
 
 
 def _safe_name(value: str, max_length: int = 80) -> str:
@@ -153,6 +220,21 @@ class ServerBuilder:
         self._channel_snapshot: list[discord.abc.GuildChannel] = []
         self._channel_snapshot_refreshed = False
 
+    def _with_bot_view_access(self, overwrites):
+        """Keep the bot able to manage private resources it creates.
+
+        School channels intentionally deny @everyone visibility. Preserve all
+        configured overwrites while granting View Channel only to the bot member.
+        """
+        bot_member = getattr(self.guild, "me", None)
+        if bot_member is None or overwrites is None:
+            return overwrites
+        result = dict(overwrites)
+        bot_overwrite = copy(result.get(bot_member, discord.PermissionOverwrite()))
+        bot_overwrite.view_channel = True
+        result[bot_member] = bot_overwrite
+        return result
+
     @staticmethod
     def _stream_channel_count(level: dict, stream: dict) -> int:
         return 3 + len(list(stream.get("subjects", [])))
@@ -173,7 +255,11 @@ class ServerBuilder:
 
     async def _refresh_channel_snapshot(self) -> None:
         """Take a fresh API snapshot so idempotency never depends on a stale cache."""
-        self._channel_snapshot = list(await self.guild.fetch_channels())
+        self._channel_snapshot = list(await _run_build_discord_operation(
+            operation="fetch_guild_channels",
+            resource_name="guild channels inventory",
+            action=lambda: self.guild.fetch_channels(),
+        ))
         self._channel_snapshot_refreshed = True
 
     def _find_category(self, name: str) -> discord.CategoryChannel | None:
@@ -346,7 +432,13 @@ class ServerBuilder:
 
     async def _create_role(self, name: str, *, permissions: discord.Permissions, colour: discord.Colour, hoist: bool = False, mentionable: bool = False, reason: str) -> discord.Role:
         print(f"[BUILD] -> create role: {name}", flush=True)
-        role = await self.guild.create_role(name=name, permissions=permissions, colour=colour, hoist=hoist, mentionable=mentionable, reason=reason)
+        role = await _run_build_discord_operation(
+            operation="create_role",
+            resource_name=name,
+            action=lambda: self.guild.create_role(name=name, permissions=permissions, colour=colour, hoist=hoist, mentionable=mentionable, reason=reason),
+            guild=self.guild,
+            requested_permissions=permissions,
+        )
         print(f"[BUILD] <- create role: {name}", flush=True)
         self.stats.roles_created += 1
         await asyncio.sleep(ROLE_CREATE_DELAY)
@@ -400,8 +492,12 @@ class ServerBuilder:
             return category
         kwargs = {"name": name, "reason": "School manager automatic setup"}
         if overwrites is not None:
-            kwargs["overwrites"] = overwrites
-        category = await self.guild.create_category(**kwargs)
+            kwargs["overwrites"] = self._with_bot_view_access(overwrites)
+        category = await _run_build_discord_operation(
+            operation="create_category",
+            resource_name=name,
+            action=lambda: self.guild.create_category(**kwargs),
+        )
         self.stats.categories_created += 1
         self._remember_category(category)
         self._channel_snapshot.append(category)
@@ -413,7 +509,11 @@ class ServerBuilder:
         if channel is not None:
             self._remember_channel(channel)
             return channel
-        channel = await category.create_text_channel(name=name, topic=topic, overwrites=overwrites, reason="School manager automatic setup")
+        channel = await _run_build_discord_operation(
+            operation="create_text_channel",
+            resource_name=name,
+            action=lambda: category.create_text_channel(name=name, topic=topic, overwrites=self._with_bot_view_access(overwrites), reason="School manager automatic setup"),
+        )
         self.stats.text_channels_created += 1
         self._remember_channel(channel)
         self._channel_snapshot.append(channel)
@@ -425,7 +525,11 @@ class ServerBuilder:
         if channel is not None:
             self._remember_channel(channel)
             return channel
-        channel = await category.create_voice_channel(name=name, overwrites=overwrites, reason="School manager automatic setup")
+        channel = await _run_build_discord_operation(
+            operation="create_voice_channel",
+            resource_name=name,
+            action=lambda: category.create_voice_channel(name=name, overwrites=self._with_bot_view_access(overwrites), reason="School manager automatic setup"),
+        )
         self.stats.voice_channels_created += 1
         self._remember_channel(channel)
         self._channel_snapshot.append(channel)

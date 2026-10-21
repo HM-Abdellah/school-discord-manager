@@ -1,5 +1,7 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import discord
 import pytest
 
 from cogs.removestream_fix import _recorded_id, _stream_channel_names, _stream_role_names
@@ -193,7 +195,7 @@ def test_reset_role_hierarchy_fails_before_mutation():
 def test_reset_archives_before_discord_deletion():
     source = open("cogs/security_hardening_v3.py", encoding="utf-8").read()
     assert "archive_path = archive_guild_database" in source
-    assert source.index("archive_path = archive_guild_database") < source.index("await channel.delete")
+    assert source.index("archive_path = archive_guild_database") < source.index('operation="delete_channel"')
 
 
 def test_latency_sensitive_commands_acknowledge_before_slow_work():
@@ -207,3 +209,119 @@ def test_latency_sensitive_commands_acknowledge_before_slow_work():
     assert report.index("await interaction.followup.send") > report.index("await interaction.response.defer(ephemeral=True)")
     assert full.index("await interaction.response.defer(ephemeral=True)") < full.index("execute_teacher_assignment(")
     assert "except TeacherAssignmentError as exc" in full
+
+
+@pytest.mark.asyncio
+async def test_reset_discord_operation_failure_reports_exact_target_and_api_code(caplog):
+    from cogs.security_hardening_v3 import ResetOperationError, _run_reset_discord_operation
+
+    response = SimpleNamespace(status=403, reason="Forbidden")
+    resource = SimpleNamespace(id=987654, name="teacher-private")
+    action = AsyncMock(
+        side_effect=discord.Forbidden(
+            response,
+            {"message": "Missing Access", "code": 50001},
+        )
+    )
+
+    with pytest.raises(ResetOperationError) as caught:
+        await _run_reset_discord_operation(
+            operation="delete_channel",
+            resource_type="channel",
+            resource=resource,
+            action=action,
+        )
+
+    details = str(caught.value)
+    assert "operation=delete_channel" in details
+    assert "resource_type=channel" in details
+    assert "resource_id=987654" in details
+    assert "resource_name='teacher-private'" in details
+    assert "http_status=403" in details
+    assert "discord_code=50001" in details
+    assert "exception_type=Forbidden" in details
+    assert "resetserver API operation failed" in caplog.text
+    action.assert_awaited_once()
+
+
+def test_reset_routes_all_resource_deletions_through_diagnostic_wrapper():
+    source = open("cogs/security_hardening_v3.py", encoding="utf-8").read()
+    reset_body = source[source.index("async def reset_server"):source.index("\n\nasync def setup")]
+
+    assert reset_body.count("await _run_reset_discord_operation(") == 3
+    assert 'operation="delete_channel"' in reset_body
+    assert 'operation="delete_category"' in reset_body
+    assert 'operation="delete_role"' in reset_body
+
+
+@pytest.mark.asyncio
+async def test_reset_repairs_bot_view_access_before_deleting_hidden_managed_resources():
+    from cogs.security_hardening_v3 import _ensure_bot_can_view_managed_resources
+
+    bot_member = object()
+    category = SimpleNamespace(
+        id=100,
+        name="private-category",
+        permissions_for=lambda _member: SimpleNamespace(view_channel=False),
+        overwrites={},
+        overwrites_for=lambda _member: discord.PermissionOverwrite(),
+        edit=AsyncMock(),
+    )
+    channel = SimpleNamespace(
+        id=101,
+        name="private-channel",
+        category_id=100,
+        permissions_for=lambda _member: SimpleNamespace(view_channel=False),
+        overwrites={},
+        overwrites_for=lambda _member: discord.PermissionOverwrite(),
+        edit=AsyncMock(),
+    )
+
+    repaired = await _ensure_bot_can_view_managed_resources(
+        SimpleNamespace(me=bot_member),
+        {100: category, 101: channel},
+        channel_ids={101},
+        category_ids={100},
+    )
+
+    assert repaired == 2
+    assert category.edit.await_args.kwargs["overwrites"][bot_member].view_channel is True
+    assert channel.edit.await_args.kwargs["overwrites"][bot_member].view_channel is True
+    assert "School Manager reset recovery" in category.edit.await_args.kwargs["reason"]
+
+
+@pytest.mark.asyncio
+async def test_reset_visibility_repair_reports_resource_and_missing_access():
+    from cogs.security_hardening_v3 import ResetPreflightError, _ensure_bot_can_view_managed_resources
+
+    bot_member = object()
+    response = SimpleNamespace(status=403, reason="Forbidden")
+    hidden = SimpleNamespace(
+        id=202,
+        name="teacher-private",
+        permissions_for=lambda _member: SimpleNamespace(view_channel=False),
+        overwrites={},
+        overwrites_for=lambda _member: discord.PermissionOverwrite(),
+        edit=AsyncMock(
+            side_effect=discord.Forbidden(response, {"message": "Missing Access", "code": 50001})
+        ),
+    )
+
+    with pytest.raises(ResetPreflightError, match=r"teacher-private.*202.*50001"):
+        await _ensure_bot_can_view_managed_resources(
+            SimpleNamespace(me=bot_member),
+            {202: hidden},
+            channel_ids={202},
+            category_ids=set(),
+        )
+
+
+def test_reset_restores_bot_channel_visibility_before_any_deletion():
+    source = open("cogs/security_hardening_v3.py", encoding="utf-8").read()
+    reset_body = source[source.index("async def reset_server"):source.index("\n\nasync def setup")]
+
+    assert "live_channels = await _fetch_reset_channels(guild)" in reset_body
+    repair = reset_body.index("await _ensure_bot_can_view_managed_resources")
+    delete = reset_body.index('operation="delete_channel"')
+    assert repair < delete
+

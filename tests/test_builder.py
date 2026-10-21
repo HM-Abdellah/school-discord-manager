@@ -5,7 +5,10 @@ import discord
 import pytest
 
 from services.server_builder import (
+    BuildPermissionError,
     ServerBuilder,
+    _missing_requested_permissions,
+    _run_build_discord_operation,
     _stream_category_name,
     _subject_channel_overwrites,
 )
@@ -267,3 +270,122 @@ def test_fresh_channel_snapshot_does_not_reuse_deleted_cached_text_channel():
     builder._channel_snapshot_refreshed = True
 
     assert builder._find_text(category, "stale-channel") is None
+
+
+@pytest.mark.asyncio
+async def test_created_private_category_grants_bot_view_without_exposing_everyone():
+    bot_member = object()
+    everyone = object()
+    category = MagicMock(spec=discord.CategoryChannel)
+    category.name = "private-category"
+    category.id = 910
+    create_category = AsyncMock(return_value=category)
+    guild = SimpleNamespace(me=bot_member, categories=[], create_category=create_category)
+    builder = ServerBuilder(guild)
+    builder._channel_snapshot = []
+    source_overwrites = {everyone: discord.PermissionOverwrite(view_channel=False)}
+
+    await builder._get_or_create_category("private-category", source_overwrites)
+
+    passed = create_category.await_args.kwargs["overwrites"]
+    assert passed[everyone].view_channel is False
+    assert passed[bot_member].view_channel is True
+    assert bot_member not in source_overwrites
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("channel_kind", ["text", "voice"])
+async def test_created_private_managed_channel_grants_bot_view(channel_kind):
+    bot_member = object()
+    everyone = object()
+    category = MagicMock(spec=discord.CategoryChannel)
+    category.id = 911
+    category.name = "private-category"
+    category.text_channels = []
+    category.voice_channels = []
+    channel_type = discord.TextChannel if channel_kind == "text" else discord.VoiceChannel
+    new_channel = MagicMock(spec=channel_type)
+    new_channel.id = 912 if channel_kind == "text" else 913
+    new_channel.name = f"private-{channel_kind}"
+    guild = SimpleNamespace(me=bot_member)
+    builder = ServerBuilder(guild)
+    builder._channel_snapshot = []
+    source_overwrites = {everyone: discord.PermissionOverwrite(view_channel=False)}
+
+    if channel_kind == "text":
+        category.create_text_channel = AsyncMock(return_value=new_channel)
+        await builder._get_or_create_text(
+            category, new_channel.name, topic="test", overwrites=source_overwrites
+        )
+        passed = category.create_text_channel.await_args.kwargs["overwrites"]
+    else:
+        category.create_voice_channel = AsyncMock(return_value=new_channel)
+        await builder._get_or_create_voice(category, new_channel.name, source_overwrites)
+        passed = category.create_voice_channel.await_args.kwargs["overwrites"]
+
+    assert passed[everyone].view_channel is False
+    assert passed[bot_member].view_channel is True
+    assert bot_member not in source_overwrites
+
+
+
+
+@pytest.mark.asyncio
+async def test_build_permission_error_reports_operation_resource_and_discord_code():
+    response = SimpleNamespace(status=403, reason="Forbidden")
+    action = AsyncMock(
+        side_effect=discord.Forbidden(
+            response,
+            {"message": "Missing Permissions", "code": 50013},
+        )
+    )
+
+    with pytest.raises(BuildPermissionError) as caught:
+        await _run_build_discord_operation(
+            operation="create_category",
+            resource_name="private-category",
+            action=action,
+        )
+
+    details = str(caught.value)
+    assert "operation=create_category" in details
+    assert "resource_name='private-category'" in details
+    assert "http_status=403" in details
+    assert "discord_code=50013" in details
+    assert "Missing Permissions" in details
+    action.assert_awaited_once()
+
+
+
+def test_missing_requested_permissions_reports_only_bits_not_granted_to_bot():
+    guild = SimpleNamespace(
+        me=SimpleNamespace(
+            guild_permissions=discord.Permissions(
+                manage_roles=True,
+                manage_channels=True,
+                view_channel=True,
+            )
+        )
+    )
+    requested = discord.Permissions(
+        manage_roles=True,
+        manage_channels=True,
+        manage_messages=True,
+        view_channel=True,
+    )
+
+    missing = _missing_requested_permissions(guild, requested)
+
+    assert missing is not None
+    assert "manage_messages" in missing
+    assert "manage_roles" not in missing
+    assert "manage_channels" not in missing
+
+
+def test_missing_requested_permissions_returns_empty_when_bot_is_admin():
+    guild = SimpleNamespace(
+        me=SimpleNamespace(guild_permissions=discord.Permissions(administrator=True))
+    )
+    requested = discord.Permissions(manage_roles=True, manage_channels=True)
+
+    assert _missing_requested_permissions(guild, requested) == []
