@@ -12,6 +12,7 @@ from discord.ext import commands
 from config.curriculum import get_level, get_levels, get_stream_abbreviation, get_stream_subjects, get_streams
 from services.build_guard import get_build_lock
 from services.build_transaction import build_and_persist
+from services.server_builder import BuildPermissionError
 from services.permissions import _preflight_message, management_authorized, management_check
 from services.storage import get_active_academic_year
 
@@ -177,6 +178,11 @@ class SummaryView(SetupBaseView):
         try:
             async with lock:
                 stats = await build_and_persist(guild, self.config)
+        except BuildPermissionError as exc:
+            await interaction.edit_original_response(
+                content=f"❌ صلاحيات Discord غير مكتملة قبل البناء: {exc}"
+            )
+            return
         except discord.Forbidden:
             await interaction.edit_original_response(content="❌ Permission refusée. Vérifie Manage Channels, Manage Roles et la hiérarchie du bot.")
             return
