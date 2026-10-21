@@ -17,104 +17,6 @@ def _configure_storage(tmp_path, monkeypatch):
 
 
 
-def test_active_sections_follow_active_academic_year_student_import(tmp_path, monkeypatch):
-    _configure_storage(tmp_path, monkeypatch)
-    level = "2ème Année Bac"
-    stream = "2ème Année Bac Sciences Physiques"
-    config = {"levels": [{"name": level, "streams": [{"name": stream, "abbreviation": "2BACPC"}]}]}
-
-    storage.create_and_activate_academic_year(1, "2025/2026", config)
-    old_year = storage.get_active_academic_year(1)
-    storage.enroll_student_record(1, 1001, "Old year student", int(old_year["id"]), level, stream, section=1)
-
-    storage.create_and_activate_academic_year(1, "2026/2027", config)
-    current_year = storage.get_active_academic_year(1)
-    storage.enroll_student_record(1, 1002, "Section three student", int(current_year["id"]), level, stream, section=3)
-    storage.enroll_student_record(1, 1003, "Section four student", int(current_year["id"]), level, stream, section=4)
-    storage.enroll_student_record(1, 1004, "Second section four student", int(current_year["id"]), level, stream, section=4)
-
-    assert storage.get_active_sections_for_stream(1, level, stream) == [3, 4]
-    assert storage.get_active_sections_for_stream(1, level, "1ère Année Bac Sciences Expérimentales") == []
-
-
-
-def test_teacher_sections_use_registered_live_class_roles_not_student_counts(monkeypatch):
-    from cogs.teacher_qr_onboarding import _get_existing_class_sections
-    from config.curriculum import get_stream_abbreviation
-
-    level = "2ème Année Bac"
-    stream = "2ème Année Bac Sciences Physiques"
-    code = get_stream_abbreviation(level, stream)
-
-    class Role:
-        def __init__(self, role_id, name, managed=False):
-            self.id = role_id
-            self.name = name
-            self.managed = managed
-
-    roles = {
-        3003: Role(3003, f"Élèves - {code}-3"),
-        3004: Role(3004, f"Élèves - {code}-4"),
-        3005: Role(3005, f"Wrong name for {code}-5"),
-        3006: Role(3006, f"Élèves - {code}-6", managed=True),
-    }
-    guild = SimpleNamespace(id=1, get_role=lambda role_id: roles.get(role_id))
-    config = {"class_roles": {
-        f"{code}-3": {"role_id": 3003, "level_name": level, "stream_name": stream, "stream_code": code, "section": 3},
-        f"{code}-4": {"role_id": 3004, "level_name": level, "stream_name": stream, "stream_code": code, "section": 4},
-        f"{code}-5": {"role_id": 3005, "level_name": level, "stream_name": stream, "stream_code": code, "section": 5},
-        f"{code}-6": {"role_id": 3006, "level_name": level, "stream_name": stream, "stream_code": code, "section": 6},
-        f"{code}-7": {"role_id": 3007, "level_name": level, "stream_name": stream, "stream_code": code, "section": 7},
-        f"{code}-8": {"role_id": 3008, "level_name": "1ère Année Bac", "stream_name": stream, "stream_code": code, "section": 8},
-    }}
-    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_guild_config", lambda _guild_id: config)
-    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_active_sections_for_stream", lambda *_args: [])
-
-    # With no active enrollments, registered live class roles still define the choices.
-    assert _get_existing_class_sections(guild, level, stream) == [3, 4]
-
-
-def test_teacher_sections_include_active_enrollments_when_class_roles_are_not_registered(monkeypatch):
-    from cogs.teacher_qr_onboarding import _get_existing_class_sections
-
-    guild = SimpleNamespace(id=1, get_role=lambda _role_id: None)
-    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_guild_config", lambda _guild_id: {"class_roles": {}})
-    monkeypatch.setattr(
-        "cogs.teacher_qr_onboarding.get_active_sections_for_stream",
-        lambda _guild_id, _level, _stream: [2, 4, 9, "3"],
-    )
-
-    assert _get_existing_class_sections(
-        guild, "2ème Année Bac", "2ème Année Bac Sciences Physiques"
-    ) == [2, 4]
-
-
-def test_teacher_sections_combine_live_class_roles_and_active_enrollments(monkeypatch):
-    from cogs.teacher_qr_onboarding import _get_existing_class_sections
-    from config.curriculum import get_stream_abbreviation
-
-    level = "2ème Année Bac"
-    stream = "2ème Année Bac Sciences Physiques"
-    code = get_stream_abbreviation(level, stream)
-    role = SimpleNamespace(id=3003, name=f"Élèves - {code}-3", managed=False)
-    guild = SimpleNamespace(id=1, get_role=lambda role_id: role if role_id == role.id else None)
-    monkeypatch.setattr(
-        "cogs.teacher_qr_onboarding.get_guild_config",
-        lambda _guild_id: {"class_roles": {
-            f"{code}-3": {
-                "role_id": role.id, "level_name": level, "stream_name": stream,
-                "stream_code": code, "section": 3,
-            },
-        }},
-    )
-    monkeypatch.setattr(
-        "cogs.teacher_qr_onboarding.get_active_sections_for_stream",
-        lambda *_args: [2, 3, 5],
-    )
-
-    assert _get_existing_class_sections(guild, level, stream) == [2, 3, 5]
-
-
 def test_teacher_registration_is_one_time(tmp_path, monkeypatch):
     _configure_storage(tmp_path, monkeypatch)
     storage.initialize_database()
@@ -698,7 +600,6 @@ async def test_teacher_onboarding_confirm_success(monkeypatch):
 
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_managed_role", lambda _guild, name: role_map.get(name))
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda _guild_id, _discord_id: None)
-    monkeypatch.setattr("cogs.teacher_qr_onboarding._get_existing_class_sections", lambda *_args: [3])
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
     monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
     monkeypatch.setattr(
@@ -763,7 +664,6 @@ async def test_teacher_onboarding_confirm_business_error_is_visible(monkeypatch)
 
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_managed_role", lambda _guild, name: role_map.get(name))
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda _guild_id, _discord_id: None)
-    monkeypatch.setattr("cogs.teacher_qr_onboarding._get_existing_class_sections", lambda *_args: [3])
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
     monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
 
@@ -824,7 +724,6 @@ async def test_teacher_onboarding_confirm_unexpected_error_is_visible(monkeypatc
 
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_managed_role", lambda _guild, name: role_map.get(name))
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda _guild_id, _discord_id: None)
-    monkeypatch.setattr("cogs.teacher_qr_onboarding._get_existing_class_sections", lambda *_args: [3])
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
     monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
 
@@ -1078,22 +977,22 @@ def test_reset_guild_data_clears_teacher_assignments(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_teacher_onboarding_rejects_section_not_in_active_import(monkeypatch):
+async def test_teacher_onboarding_rejects_section_outside_supported_range(monkeypatch):
     from cogs.teacher_qr_onboarding import TeacherOnboardingView
 
     view = TeacherOnboardingView(SimpleNamespace(), 1, 101)
     view._ensure_eligible = AsyncMock(return_value=SimpleNamespace(id=101))
     view.selected_level = "2ème Année Bac"
     view.selected_stream = "2ème Année Bac Sciences Physiques"
-    view.available_sections = [3, 4]
-    view.section_select._values = ["8"]
+    view.available_sections = list(range(1, 9))
+    view.section_select._values = ["9"]
     response = _FakeInteractionResponse()
     interaction = SimpleNamespace(user=SimpleNamespace(id=101), response=response)
 
     await view.section_select.callback(interaction)
 
     assert view.selected_sections == []
-    assert "sections réellement disponibles" in response.send_message.await_args.args[0]
+    assert "entre 1 et 8" in response.send_message.await_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -1115,7 +1014,7 @@ async def test_teacher_onboarding_collects_multiple_levels_and_sections(monkeypa
             "stream_code": "2BACPC",
             "subject_names": "Math",
             "assignments_count": 3,
-            "assignment_summary": "2BACPC-S3: Math; 2BACPC-S4: Math; 1BACSE-S2: SVT",
+            "assignment_summary": "2BACPC-S5: Math; 2BACPC-S6: Math; 1BACSE-S2: SVT",
         }
 
     response = _FakeInteractionResponse()
@@ -1128,10 +1027,6 @@ async def test_teacher_onboarding_collects_multiple_levels_and_sections(monkeypa
 
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_managed_role", lambda _guild, name: pending if name == ROLE_TEACHER_PENDING else None)
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda *_args: None)
-    monkeypatch.setattr(
-        "cogs.teacher_qr_onboarding._get_existing_class_sections",
-        lambda _guild_id, _level, stream: [3, 4] if stream == "2ème Année Bac Sciences Physiques" else [2],
-    )
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_build_lock", lambda _guild_id: _AsyncLock())
     monkeypatch.setattr("cogs.teacher_qr_onboarding.execute_teacher_assignment", fake_assignment)
     monkeypatch.setattr(
@@ -1152,9 +1047,9 @@ async def test_teacher_onboarding_collects_multiple_levels_and_sections(monkeypa
     await view.level_select.callback(interaction)
     view.stream_select._values = [stream_a]
     await view.stream_select.callback(interaction)
-    assert [option.value for option in view.section_select.options] == ["3", "4"]
-    assert view.section_select.max_values == 2
-    view.section_select._values = ["3", "4"]
+    assert [option.value for option in view.section_select.options] == [str(n) for n in range(1, 9)]
+    assert view.section_select.max_values == 8
+    view.section_select._values = ["5", "6"]
     await view.section_select.callback(interaction)
     await view.continue_button.callback(interaction)
     assert "Mathématiques" in get_stream_subjects(level_a, stream_a)
@@ -1181,13 +1076,13 @@ async def test_teacher_onboarding_collects_multiple_levels_and_sections(monkeypa
         {
             "level": level_a,
             "stream": stream_a,
-            "section": 3,
+            "section": 5,
             "subjects": ["Mathématiques"],
         },
         {
             "level": level_a,
             "stream": stream_a,
-            "section": 4,
+            "section": 6,
             "subjects": ["Mathématiques"],
         },
         {
