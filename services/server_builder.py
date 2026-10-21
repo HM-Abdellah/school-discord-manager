@@ -71,11 +71,41 @@ class BuildPermissionError(RuntimeError):
     """A Discord permission rejection annotated with the attempted build operation."""
 
 
+def _missing_requested_permissions(
+    guild: discord.Guild,
+    requested: discord.Permissions,
+) -> list[str] | None:
+    """Report requested role permissions absent from the bot's effective guild permissions."""
+    bot_member = getattr(guild, "me", None)
+    current = getattr(bot_member, "guild_permissions", None)
+    if current is None:
+        return None
+    if getattr(current, "administrator", False):
+        return []
+
+    missing_bits = int(getattr(requested, "value", 0)) & ~int(
+        getattr(current, "value", 0)
+    )
+    if not missing_bits:
+        return []
+
+    flags = getattr(discord.Permissions, "VALID_FLAGS", {})
+    names = {
+        name
+        for name, bit in flags.items()
+        if int(bit) & missing_bits
+    }
+    # Discord.py may expose aliases for the same permission bit.
+    return sorted(names)
+
+
 async def _run_build_discord_operation(
     *,
     operation: str,
     resource_name: str,
     action: Callable[[], Awaitable[Any]],
+    guild: discord.Guild | None = None,
+    requested_permissions: discord.Permissions | None = None,
 ) -> Any:
     """Expose the exact Discord operation and API code instead of hiding Forbidden."""
     try:
@@ -89,6 +119,14 @@ async def _run_build_discord_operation(
             f"discord_code={getattr(exc, 'code', 'unknown')}; "
             f"discord_message='{api_message}'"
         )
+        if guild is not None and requested_permissions is not None:
+            missing = _missing_requested_permissions(guild, requested_permissions)
+            if missing is None:
+                details += "; bot_permission_diagnostic=unavailable"
+            elif missing:
+                details += "; bot_missing_requested_permissions=" + ",".join(missing)
+            else:
+                details += "; bot_missing_requested_permissions=none"
         print(f"[BUILD PERMISSION ERROR] {details}", flush=True)
         raise BuildPermissionError(details) from exc
 
@@ -398,6 +436,8 @@ class ServerBuilder:
             operation="create_role",
             resource_name=name,
             action=lambda: self.guild.create_role(name=name, permissions=permissions, colour=colour, hoist=hoist, mentionable=mentionable, reason=reason),
+            guild=self.guild,
+            requested_permissions=permissions,
         )
         print(f"[BUILD] <- create role: {name}", flush=True)
         self.stats.roles_created += 1
