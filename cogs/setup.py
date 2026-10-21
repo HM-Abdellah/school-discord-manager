@@ -12,7 +12,7 @@ from discord.ext import commands
 from config.curriculum import get_level, get_levels, get_stream_abbreviation, get_stream_subjects, get_streams
 from services.build_guard import get_build_lock
 from services.build_transaction import build_and_persist
-from services.server_builder import BuildPermissionError, permission_omission_notice
+from services.server_builder import BuildPermissionError
 from services.permissions import _preflight_message, management_authorized, management_check
 from services.storage import get_active_academic_year
 
@@ -202,7 +202,7 @@ class SummaryView(SetupBaseView):
             f"• Vocaux créés : **{stats.voice_channels_created}**"
         )
         await interaction.edit_original_response(
-            content=success_message + permission_omission_notice(stats)
+            content=success_message
         )
 
     async def restart_callback(self, interaction: discord.Interaction) -> None:
