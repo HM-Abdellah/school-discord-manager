@@ -88,6 +88,59 @@ def _missing_requested_permissions(
     })
 
 
+def _prepare_channel_overwrites(
+    guild: discord.Guild,
+    overwrites: dict | None,
+) -> tuple[dict | None, list[str]]:
+    """Keep channel allow-overwrites within the bot's effective permission envelope.
+
+    Discord can reject channel creation when its permission overwrites grant bits
+    the bot itself cannot grant. Keep explicit denies, strip only unsupported
+    allow bits, and always include a narrow View Channel overwrite for the bot.
+    """
+    if overwrites is None:
+        return None, []
+
+    bot_member = getattr(guild, "me", None)
+    current = getattr(bot_member, "guild_permissions", None)
+    if bot_member is None or current is None:
+        return dict(overwrites), []
+    if getattr(current, "administrator", False):
+        prepared = dict(overwrites)
+        prepared[bot_member] = discord.PermissionOverwrite(
+            view_channel=True,
+            read_message_history=True,
+            send_messages=True,
+        )
+        return prepared, []
+
+    prepared = {}
+    removed: set[str] = set()
+    flags = getattr(discord.Permissions, "VALID_FLAGS", {})
+    for target, overwrite in overwrites.items():
+        allow, deny = overwrite.pair()
+        unsupported = int(allow.value) & ~int(current.value)
+        if unsupported:
+            removed.update(
+                name
+                for name, bit in flags.items()
+                if int(bit) & unsupported
+            )
+            allow = discord.Permissions(int(allow.value) & int(current.value))
+            overwrite = discord.PermissionOverwrite.from_pair(allow, deny)
+        prepared[target] = overwrite
+
+    bot_overwrite = prepared.get(bot_member, discord.PermissionOverwrite())
+    bot_overwrite.view_channel = True
+    bot_overwrite.read_message_history = True
+    # Sending is needed for normal bot responses, but only request it when the
+    # bot already has the corresponding guild permission.
+    if current.send_messages:
+        bot_overwrite.send_messages = True
+    prepared[bot_member] = bot_overwrite
+    return prepared, sorted(removed)
+
+
 def _permissions_grantable_by_bot(
     guild: discord.Guild,
     requested: discord.Permissions,
@@ -487,9 +540,25 @@ class ServerBuilder:
             self._remember_category(category)
             return category
         kwargs = {"name": name, "reason": "School manager automatic setup"}
-        if overwrites is not None:
-            kwargs["overwrites"] = overwrites
-        category = await self.guild.create_category(**kwargs)
+        prepared, removed = _prepare_channel_overwrites(self.guild, overwrites)
+        if removed:
+            print(
+                f"[BUILD WARNING] category '{name}' overwrite permissions omitted "
+                f"because the bot cannot grant them: {', '.join(removed)}",
+                flush=True,
+            )
+        if prepared is not None:
+            kwargs["overwrites"] = prepared
+        try:
+            category = await self.guild.create_category(**kwargs)
+        except discord.Forbidden as exc:
+            print(
+                f"[BUILD PERMISSION ERROR] operation=create_category; resource_name={name!r}; "
+                f"http_status={getattr(getattr(exc, 'response', None), 'status', None)}; "
+                f"discord_code={getattr(exc, 'code', None)}; discord_message={exc}",
+                flush=True,
+            )
+            raise
         self.stats.categories_created += 1
         self._remember_category(category)
         self._channel_snapshot.append(category)
@@ -501,7 +570,27 @@ class ServerBuilder:
         if channel is not None:
             self._remember_channel(channel)
             return channel
-        channel = await category.create_text_channel(name=name, topic=topic, overwrites=overwrites, reason="School manager automatic setup")
+        prepared, removed = _prepare_channel_overwrites(self.guild, overwrites)
+        if removed:
+            print(
+                f"[BUILD WARNING] text channel '{name}' overwrite permissions omitted "
+                f"because the bot cannot grant them: {', '.join(removed)}",
+                flush=True,
+            )
+        try:
+            channel = await category.create_text_channel(
+                name=name, topic=topic, overwrites=prepared,
+                reason="School manager automatic setup",
+            )
+        except discord.Forbidden as exc:
+            print(
+                f"[BUILD PERMISSION ERROR] operation=create_text_channel; resource_name={name!r}; "
+                f"category={category.name!r}; "
+                f"http_status={getattr(getattr(exc, 'response', None), 'status', None)}; "
+                f"discord_code={getattr(exc, 'code', None)}; discord_message={exc}",
+                flush=True,
+            )
+            raise
         self.stats.text_channels_created += 1
         self._remember_channel(channel)
         self._channel_snapshot.append(channel)
@@ -513,7 +602,27 @@ class ServerBuilder:
         if channel is not None:
             self._remember_channel(channel)
             return channel
-        channel = await category.create_voice_channel(name=name, overwrites=overwrites, reason="School manager automatic setup")
+        prepared, removed = _prepare_channel_overwrites(self.guild, overwrites)
+        if removed:
+            print(
+                f"[BUILD WARNING] voice channel '{name}' overwrite permissions omitted "
+                f"because the bot cannot grant them: {', '.join(removed)}",
+                flush=True,
+            )
+        try:
+            channel = await category.create_voice_channel(
+                name=name, overwrites=prepared,
+                reason="School manager automatic setup",
+            )
+        except discord.Forbidden as exc:
+            print(
+                f"[BUILD PERMISSION ERROR] operation=create_voice_channel; resource_name={name!r}; "
+                f"category={category.name!r}; "
+                f"http_status={getattr(getattr(exc, 'response', None), 'status', None)}; "
+                f"discord_code={getattr(exc, 'code', None)}; discord_message={exc}",
+                flush=True,
+            )
+            raise
         self.stats.voice_channels_created += 1
         self._remember_channel(channel)
         self._channel_snapshot.append(channel)
