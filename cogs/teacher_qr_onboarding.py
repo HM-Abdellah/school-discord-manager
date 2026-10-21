@@ -41,6 +41,7 @@ from services.qr_invites import DEFAULT_QR_MAX_AGE, create_role_invite, delete_i
 from services.role_conflicts import teacher_target_conflict
 from services.storage import (
     delete_teacher_registration,
+    get_active_sections_for_stream,
     get_guild_config,
     get_teacher_assignments,
     get_teacher_qr_invites,
@@ -56,11 +57,12 @@ def _get_existing_class_sections(
     level_name: str,
     stream_name: str,
 ) -> list[int]:
-    """Return only class sections whose registered Discord roles still exist.
+    """Return valid registered sections plus sections with active enrollments.
 
-    The persisted class-role registry, checked against live Discord roles, is
-    authoritative. Do not infer whether a class exists from student enrollments:
-    a real class can exist before its first student joins.
+    The live class-role registry supports real classes before the first student
+    joins. Active enrollments preserve sections from the school's existing
+    active-year import even when that section has not yet been registered through
+    the class-QR flow. Both sources are bounded to real class data, not 1..8 guesses.
     """
     config = get_guild_config(guild.id) or {}
     registry = config.get("class_roles", {}) if isinstance(config, dict) else {}
@@ -88,6 +90,13 @@ def _get_existing_class_sections(
         if role is None or role.managed or role.name != expected_role_name:
             continue
         available.add(section)
+
+    # Keep previously imported, actively enrolled sections selectable even if
+    # their per-class Discord role has not been registered yet. The registry
+    # path above still exposes valid sections that have no enrolled students.
+    for section in get_active_sections_for_stream(guild.id, level_name, stream_name):
+        if type(section) is int and 1 <= section <= 8:
+            available.add(section)
 
     return sorted(available)
 
@@ -709,7 +718,7 @@ class TeacherOnboardingView(discord.ui.View):
             self.section_select.disabled = False
         else:
             self.section_select.options = [
-                discord.SelectOption(label="Aucun rôle de classe disponible", value="__disabled__")
+                discord.SelectOption(label="Aucune section active ou enregistrée", value="__disabled__")
             ]
             self.section_select.min_values = 1
             self.section_select.max_values = 1

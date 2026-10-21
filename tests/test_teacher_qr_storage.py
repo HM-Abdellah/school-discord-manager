@@ -17,6 +17,27 @@ def _configure_storage(tmp_path, monkeypatch):
 
 
 
+def test_active_sections_follow_active_academic_year_student_import(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
+    level = "2ème Année Bac"
+    stream = "2ème Année Bac Sciences Physiques"
+    config = {"levels": [{"name": level, "streams": [{"name": stream, "abbreviation": "2BACPC"}]}]}
+
+    storage.create_and_activate_academic_year(1, "2025/2026", config)
+    old_year = storage.get_active_academic_year(1)
+    storage.enroll_student_record(1, 1001, "Old year student", int(old_year["id"]), level, stream, section=1)
+
+    storage.create_and_activate_academic_year(1, "2026/2027", config)
+    current_year = storage.get_active_academic_year(1)
+    storage.enroll_student_record(1, 1002, "Section three student", int(current_year["id"]), level, stream, section=3)
+    storage.enroll_student_record(1, 1003, "Section four student", int(current_year["id"]), level, stream, section=4)
+    storage.enroll_student_record(1, 1004, "Second section four student", int(current_year["id"]), level, stream, section=4)
+
+    assert storage.get_active_sections_for_stream(1, level, stream) == [3, 4]
+    assert storage.get_active_sections_for_stream(1, level, "1ère Année Bac Sciences Expérimentales") == []
+
+
+
 def test_teacher_sections_use_registered_live_class_roles_not_student_counts(monkeypatch):
     from cogs.teacher_qr_onboarding import _get_existing_class_sections
     from config.curriculum import get_stream_abbreviation
@@ -47,9 +68,51 @@ def test_teacher_sections_use_registered_live_class_roles_not_student_counts(mon
         f"{code}-8": {"role_id": 3008, "level_name": "1ère Année Bac", "stream_name": stream, "stream_code": code, "section": 8},
     }}
     monkeypatch.setattr("cogs.teacher_qr_onboarding.get_guild_config", lambda _guild_id: config)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_active_sections_for_stream", lambda *_args: [])
 
-    # No student count or enrollment data is supplied: existing class roles define the choices.
+    # With no active enrollments, registered live class roles still define the choices.
     assert _get_existing_class_sections(guild, level, stream) == [3, 4]
+
+
+def test_teacher_sections_include_active_enrollments_when_class_roles_are_not_registered(monkeypatch):
+    from cogs.teacher_qr_onboarding import _get_existing_class_sections
+
+    guild = SimpleNamespace(id=1, get_role=lambda _role_id: None)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_guild_config", lambda _guild_id: {"class_roles": {}})
+    monkeypatch.setattr(
+        "cogs.teacher_qr_onboarding.get_active_sections_for_stream",
+        lambda _guild_id, _level, _stream: [2, 4, 9, "3"],
+    )
+
+    assert _get_existing_class_sections(
+        guild, "2ème Année Bac", "2ème Année Bac Sciences Physiques"
+    ) == [2, 4]
+
+
+def test_teacher_sections_combine_live_class_roles_and_active_enrollments(monkeypatch):
+    from cogs.teacher_qr_onboarding import _get_existing_class_sections
+    from config.curriculum import get_stream_abbreviation
+
+    level = "2ème Année Bac"
+    stream = "2ème Année Bac Sciences Physiques"
+    code = get_stream_abbreviation(level, stream)
+    role = SimpleNamespace(id=3003, name=f"Élèves - {code}-3", managed=False)
+    guild = SimpleNamespace(id=1, get_role=lambda role_id: role if role_id == role.id else None)
+    monkeypatch.setattr(
+        "cogs.teacher_qr_onboarding.get_guild_config",
+        lambda _guild_id: {"class_roles": {
+            f"{code}-3": {
+                "role_id": role.id, "level_name": level, "stream_name": stream,
+                "stream_code": code, "section": 3,
+            },
+        }},
+    )
+    monkeypatch.setattr(
+        "cogs.teacher_qr_onboarding.get_active_sections_for_stream",
+        lambda *_args: [2, 3, 5],
+    )
+
+    assert _get_existing_class_sections(guild, level, stream) == [2, 3, 5]
 
 
 def test_teacher_registration_is_one_time(tmp_path, monkeypatch):
