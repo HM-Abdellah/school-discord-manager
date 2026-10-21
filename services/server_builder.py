@@ -64,6 +64,46 @@ ROLE_CREATE_DELAY = 1.0
 RESOURCE_CREATE_DELAY = 0.2
 
 
+def _missing_requested_permissions(
+    guild: discord.Guild,
+    requested: discord.Permissions,
+) -> list[str] | None:
+    """Return requested permission bits the bot does not currently hold."""
+    bot_member = getattr(guild, "me", None)
+    current = getattr(bot_member, "guild_permissions", None)
+    if current is None:
+        return None
+    if getattr(current, "administrator", False):
+        return []
+
+    missing_bits = int(requested.value) & ~int(current.value)
+    if not missing_bits:
+        return []
+
+    flags = getattr(discord.Permissions, "VALID_FLAGS", {})
+    return sorted({
+        name
+        for name, bit in flags.items()
+        if int(bit) & missing_bits
+    })
+
+
+def _permissions_grantable_by_bot(
+    guild: discord.Guild,
+    requested: discord.Permissions,
+) -> discord.Permissions | None:
+    """Limit a role's requested permissions to bits the bot can legitimately grant."""
+    bot_member = getattr(guild, "me", None)
+    current = getattr(bot_member, "guild_permissions", None)
+    if current is None:
+        return None
+    if getattr(current, "administrator", False):
+        return requested
+    return discord.Permissions(
+        int(requested.value) & int(current.value)
+    )
+
+
 def _safe_name(value: str, max_length: int = 80) -> str:
     value = value.lower().replace("’", "'").replace(" ", "-")
     value = re.sub(r"[^\w\-àâçéèêëîïôûùüÿñæœ']+", "-", value, flags=re.UNICODE)
@@ -346,7 +386,55 @@ class ServerBuilder:
 
     async def _create_role(self, name: str, *, permissions: discord.Permissions, colour: discord.Colour, hoist: bool = False, mentionable: bool = False, reason: str) -> discord.Role:
         print(f"[BUILD] -> create role: {name}", flush=True)
-        role = await self.guild.create_role(name=name, permissions=permissions, colour=colour, hoist=hoist, mentionable=mentionable, reason=reason)
+        try:
+            role = await self.guild.create_role(
+                name=name,
+                permissions=permissions,
+                colour=colour,
+                hoist=hoist,
+                mentionable=mentionable,
+                reason=reason,
+            )
+        except discord.Forbidden as exc:
+            # A 50013 while creating a role can happen when the role requests
+            # permission bits the bot does not hold. Retry once without only
+            # those bits; never add Administrator or broaden the bot's access.
+            if getattr(exc, "code", None) != 50013:
+                raise
+
+            bot_member = getattr(self.guild, "me", None)
+            bot_permissions = getattr(bot_member, "guild_permissions", None)
+            if bot_permissions is None or not (
+                getattr(bot_permissions, "manage_roles", False)
+                or getattr(bot_permissions, "administrator", False)
+            ):
+                raise
+
+            missing = _missing_requested_permissions(self.guild, permissions)
+            grantable = _permissions_grantable_by_bot(self.guild, permissions)
+            if (
+                missing is None
+                or not missing
+                or grantable is None
+                or int(grantable.value) == int(permissions.value)
+            ):
+                raise
+
+            omitted = ", ".join(missing)
+            print(
+                f"[BUILD WARNING] Discord rejected the requested permissions for role "
+                f"'{name}'. Retrying with only bot-grantable permissions; omitted: {omitted}",
+                flush=True,
+            )
+            role = await self.guild.create_role(
+                name=name,
+                permissions=grantable,
+                colour=colour,
+                hoist=hoist,
+                mentionable=mentionable,
+                reason=reason,
+            )
+
         print(f"[BUILD] <- create role: {name}", flush=True)
         self.stats.roles_created += 1
         await asyncio.sleep(ROLE_CREATE_DELAY)
