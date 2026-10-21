@@ -14,10 +14,10 @@ from services.permissions import (
 from services.server_builder import (
     BuildPermissionError,
     ServerBuilder,
+    _prepare_channel_overwrites,
     _required_setup_permissions,
     _stream_category_name,
     _subject_channel_overwrites,
-    _with_bot_view_access,
 )
 
 
@@ -281,57 +281,45 @@ def test_fresh_channel_snapshot_does_not_reuse_deleted_cached_text_channel():
 
 
 
-def test_required_setup_permissions_include_role_and_channel_overwrite_grants():
+def test_required_setup_permissions_are_only_the_structural_baseline():
     required = _required_setup_permissions()
+    assert required.view_channel is True
+    assert required.manage_channels is True
+    assert required.manage_roles is True
     for name in (
-        "manage_channels",
-        "manage_roles",
+        "send_messages",
+        "read_message_history",
         "manage_messages",
         "manage_threads",
+        "connect",
+        "speak",
+        "stream",
+        "use_application_commands",
         "create_public_threads",
         "create_private_threads",
         "send_messages_in_threads",
     ):
-        assert getattr(required, name) is True
+        assert getattr(required, name) is False
 
 
-def test_required_setup_permissions_cover_every_positive_overwrite_bit():
-    everyone, admin, professor, female_professor, student, teacher_stream, student_stream, bot = (
-        object() for _ in range(8)
-    )
-    overwrite_maps = [
-        general_area_overwrites(everyone, admin, professor, female_professor, student),
-        teacher_area_overwrites(everyone, admin, professor, female_professor, student),
-        public_voice_overwrites(
-            everyone, admin, professor, female_professor,
-            student, teacher_stream, student_stream,
-        ),
-        stream_announcement_overwrites(
-            everyone, admin, professor, female_professor,
-            student, teacher_stream, student_stream,
-        ),
-        _subject_channel_overwrites(
-            everyone, admin, professor, female_professor,
-            teacher_stream, student_stream,
-            student_role=student,
-            bot_member=bot,
-        ),
-    ]
-
-    all_allowed_bits = 0
-    for overwrites in overwrite_maps:
-        for overwrite in overwrites.values():
-            allow, _deny = overwrite.pair()
-            all_allowed_bits |= int(allow.value)
-
-    required = _required_setup_permissions()
-    assert all_allowed_bits & ~int(required.value) == 0
-
-
-def test_with_bot_view_access_preserves_existing_overwrites_without_mutating_input():
+def test_channel_overwrites_filter_ungranted_allows_preserve_denies_and_input():
     bot_member = MagicMock()
+    bot_member.guild_permissions = discord.Permissions(
+        view_channel=True,
+        manage_channels=True,
+        manage_roles=True,
+        send_messages=True,
+        read_message_history=True,
+        connect=True,
+        speak=True,
+        stream=True,
+        use_application_commands=True,
+        create_public_threads=True,
+        send_messages_in_threads=True,
+    )
     everyone = object()
     admin_role = object()
+    professor_role = object()
     everyone_overwrite = discord.PermissionOverwrite(view_channel=False)
     admin_overwrite = discord.PermissionOverwrite(
         view_channel=True,
@@ -339,29 +327,49 @@ def test_with_bot_view_access_preserves_existing_overwrites_without_mutating_inp
         manage_messages=True,
         manage_threads=True,
     )
+    professor_overwrite = discord.PermissionOverwrite(
+        view_channel=True,
+        send_messages=False,
+        manage_messages=False,
+        manage_threads=False,
+        create_private_threads=False,
+    )
     original = {
         everyone: everyone_overwrite,
         admin_role: admin_overwrite,
+        professor_role: professor_overwrite,
     }
-    guild = SimpleNamespace(me=bot_member)
 
-    prepared = _with_bot_view_access(guild, original)
+    prepared, omitted = _prepare_channel_overwrites(
+        SimpleNamespace(me=bot_member),
+        original,
+    )
 
     assert prepared is not original
-    assert bot_member not in original
-    assert prepared[bot_member].view_channel is True
-    assert prepared[everyone].view_channel is False
+    assert set(omitted) == {"manage_messages", "manage_threads"}
+    assert everyone in prepared and prepared[everyone].view_channel is False
+    assert prepared[admin_role].view_channel is True
     assert prepared[admin_role].manage_channels is True
-    assert prepared[admin_role].manage_messages is True
-    assert prepared[admin_role].manage_threads is True
+    assert prepared[admin_role].manage_messages is None
+    assert prepared[admin_role].manage_threads is None
+    assert prepared[professor_role].send_messages is False
+    assert prepared[professor_role].manage_messages is False
+    assert prepared[professor_role].manage_threads is False
+    assert prepared[professor_role].create_private_threads is False
+    # The builder grants the bot only explicit visibility/history/posting it
+    # already possesses, so hidden categories do not lock the bot out.
+    assert prepared[bot_member].view_channel is True
+    assert prepared[bot_member].read_message_history is True
+    assert prepared[bot_member].send_messages is True
+    # Caller-owned permission objects must remain unchanged.
+    assert original[admin_role].manage_messages is True
+    assert original[admin_role].manage_threads is True
 
 
 @pytest.mark.asyncio
-async def test_build_permission_preflight_reports_exact_missing_bits_before_mutation():
+async def test_build_preflight_reports_missing_structural_permission_before_mutation():
     bot_permissions = _required_setup_permissions()
-    bot_permissions.manage_messages = False
-    bot_permissions.manage_threads = False
-    bot_permissions.create_private_threads = False
+    bot_permissions.manage_channels = False
     bot_member = MagicMock()
     bot_member.guild_permissions = bot_permissions
     guild = SimpleNamespace(
@@ -379,17 +387,89 @@ async def test_build_permission_preflight_reports_exact_missing_bits_before_muta
     with pytest.raises(BuildPermissionError) as caught:
         await builder.build({"levels": []})
 
-    message = str(caught.value)
-    assert "Manage Messages (manage_messages)" in message
-    assert "Manage Threads (manage_threads)" in message
-    assert "Create Private Threads (create_private_threads)" in message
-    assert "Administrator n'est pas nécessaire" in message
+    assert "Manage Channels (manage_channels)" in str(caught.value)
+    assert "Administrator n'est pas nécessaire" in str(caught.value)
     guild.create_role.assert_not_awaited()
     guild.create_category.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_create_role_forbidden_logs_exact_operation_without_permission_downgrade(monkeypatch, capsys):
+async def test_build_preflight_allows_optional_permissions_to_be_absent(monkeypatch):
+    bot_member = MagicMock()
+    bot_member.guild_permissions = discord.Permissions(
+        view_channel=True,
+        manage_channels=True,
+        manage_roles=True,
+    )
+    guild = SimpleNamespace(
+        id=1,
+        me=bot_member,
+        roles=[],
+        channels=[],
+        categories=[],
+        fetch_channels=AsyncMock(return_value=[]),
+    )
+    builder = ServerBuilder(guild)
+    role_names = ("Administration", "Prof", "Prof (F)", "Élève")
+    builder._ensure_main_roles = AsyncMock(
+        return_value={
+            name: SimpleNamespace(id=index + 1, name=name)
+            for index, name in enumerate(role_names)
+        }
+    )
+    builder._ensure_general_area = AsyncMock()
+    builder._ensure_professor_area = AsyncMock()
+    builder._get_or_create_category = AsyncMock(return_value=SimpleNamespace())
+
+    stats = await builder.build({"levels": []})
+
+    assert bot_member.guild_permissions.administrator is False
+    assert stats.levels_processed == 0
+    builder._ensure_main_roles.assert_awaited_once()
+    builder._ensure_general_area.assert_awaited_once()
+    builder._ensure_professor_area.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_create_role_filters_ungranted_permissions_instead_of_retrying(monkeypatch, capsys):
+    bot_member = MagicMock()
+    bot_member.guild_permissions = discord.Permissions(
+        view_channel=True,
+        manage_channels=True,
+        manage_roles=True,
+    )
+    role = SimpleNamespace(id=22, name="Administration")
+    guild = SimpleNamespace(id=1, me=bot_member)
+    guild.create_role = AsyncMock(return_value=role)
+    monkeypatch.setattr(server_builder_module, "ROLE_CREATE_DELAY", 0)
+    builder = ServerBuilder(guild)
+
+    result = await builder._create_role(
+        "Administration",
+        permissions=discord.Permissions(
+            view_channel=True,
+            manage_roles=True,
+            manage_messages=True,
+            manage_threads=True,
+        ),
+        colour=discord.Colour.red(),
+        reason="test",
+    )
+
+    assert result is role
+    guild.create_role.assert_awaited_once()
+    granted = guild.create_role.await_args.kwargs["permissions"]
+    assert granted.view_channel is True
+    assert granted.manage_roles is True
+    assert granted.manage_messages is False
+    assert granted.manage_threads is False
+    assert builder.stats.omitted_permissions == {"manage_messages", "manage_threads"}
+    output = capsys.readouterr().out
+    assert "omitted_ungranted_permissions=manage_messages, manage_threads" in output
+
+
+@pytest.mark.asyncio
+async def test_create_role_forbidden_logs_exact_operation(monkeypatch, capsys):
     bot_member = MagicMock()
     bot_member.guild_permissions = _required_setup_permissions()
     guild = SimpleNamespace(id=1, me=bot_member)
@@ -408,8 +488,6 @@ async def test_create_role_forbidden_logs_exact_operation_without_permission_dow
             permissions=discord.Permissions(
                 view_channel=True,
                 manage_roles=True,
-                manage_messages=True,
-                manage_threads=True,
             ),
             colour=discord.Colour.red(),
             reason="test",

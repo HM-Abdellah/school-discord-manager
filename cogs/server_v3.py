@@ -36,6 +36,7 @@ from services.server_builder import (
     _safe_name,
     _stream_category_name,
     _subject_channel_name,
+    permission_omission_notice,
 )
 from services.storage import (
     create_and_activate_academic_year,
@@ -382,7 +383,8 @@ class ServerCommands(commands.Cog):
             )
             return
         await interaction.followup.send(
-            f"✅ Structure synchronisée. Niveaux: {stats.levels_processed} · Filières: {stats.streams_processed} · Rôles créés: {stats.roles_created} · Catégories créées: {stats.categories_created} · Texte créé: {stats.text_channels_created} · Vocaux créés: {stats.voice_channels_created}",
+            f"✅ Structure synchronisée. Niveaux: {stats.levels_processed} · Filières: {stats.streams_processed} · Rôles créés: {stats.roles_created} · Catégories créées: {stats.categories_created} · Texte créé: {stats.text_channels_created} · Vocaux créés: {stats.voice_channels_created}"
+            + permission_omission_notice(stats),
             ephemeral=True,
         )
 
@@ -464,7 +466,7 @@ class ServerCommands(commands.Cog):
             ephemeral=True,
         )
         try:
-            await _run_build(guild, candidate)
+            stats = await _run_build(guild, candidate)
         except discord.Forbidden:
             await interaction.followup.send(
                 "❌ Permission refusée. Vérifie Manage Channels, Manage Roles et la hiérarchie.",
@@ -498,7 +500,8 @@ class ServerCommands(commands.Cog):
             )
             return
         await interaction.followup.send(
-            f"✅ **{code} — {stream}** ajoutée. Catégorie créée : {category.mention}",
+            f"✅ **{code} — {stream}** ajoutée. Catégorie créée : {category.mention}"
+            + permission_omission_notice(stats),
             ephemeral=True,
         )
 
