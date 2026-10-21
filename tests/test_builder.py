@@ -354,14 +354,13 @@ async def test_create_role_does_not_retry_when_bot_lacks_manage_roles(monkeypatc
 
 
 def test_prepare_channel_overwrites_strips_only_ungrantable_allow_bits():
-    bot_member = SimpleNamespace(
-        guild_permissions=discord.Permissions(
-            manage_roles=True,
-            manage_channels=True,
-            view_channel=True,
-            read_message_history=True,
-            send_messages=True,
-        )
+    bot_member = MagicMock()
+    bot_member.guild_permissions = discord.Permissions(
+        manage_roles=True,
+        manage_channels=True,
+        view_channel=True,
+        read_message_history=True,
+        send_messages=True,
     )
     admin_role = object()
     everyone = object()
@@ -389,9 +388,8 @@ def test_prepare_channel_overwrites_strips_only_ungrantable_allow_bits():
 
 
 def test_prepare_channel_overwrites_keeps_requested_permissions_for_administrator_bot():
-    bot_member = SimpleNamespace(
-        guild_permissions=discord.Permissions(administrator=True)
-    )
+    bot_member = MagicMock()
+    bot_member.guild_permissions = discord.Permissions(administrator=True)
     admin_role = object()
     guild = SimpleNamespace(me=bot_member)
     requested = discord.PermissionOverwrite(
