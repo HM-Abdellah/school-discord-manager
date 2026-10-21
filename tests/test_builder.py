@@ -13,11 +13,13 @@ from services.permissions import (
 )
 from services.server_builder import (
     BuildPermissionError,
+    BuildStats,
     ServerBuilder,
     _prepare_channel_overwrites,
     _required_setup_permissions,
     _stream_category_name,
     _subject_channel_overwrites,
+    permission_omission_notice,
 )
 
 
@@ -281,7 +283,7 @@ def test_fresh_channel_snapshot_does_not_reuse_deleted_cached_text_channel():
 
 
 
-def test_general_area_overwrites_strip_ungrantable_denies_like_live_setup_failure():
+def test_general_area_overwrites_do_not_report_manage_roles_as_missing_from_bot():
     # Mirrors the live bot's granular permissions: it can manage channels/roles
     # and the ordinary text/thread/voice permissions, but not Manage Messages
     # or Manage Threads. Discord rejects channel creation if either unsupported
@@ -313,7 +315,7 @@ def test_general_area_overwrites_strip_ungrantable_denies_like_live_setup_failur
         SimpleNamespace(me=bot_member), policy
     )
 
-    assert set(omitted) == {"manage_roles", "manage_messages", "manage_threads"}
+    assert set(omitted) == {"manage_messages", "manage_threads"}
     for overwrite in prepared.values():
         allow, deny = overwrite.pair()
         assert int(allow.value) & ~int(bot_member.guild_permissions.value) == 0
@@ -322,6 +324,30 @@ def test_general_area_overwrites_strip_ungrantable_denies_like_live_setup_failur
     assert prepared[professor].manage_threads is None
     assert prepared[admin].manage_roles is None
     assert prepared[bot_member].view_channel is True
+
+
+def test_permission_omission_notice_is_informational_and_precise():
+    stats = BuildStats()
+    stats.omitted_permissions.update({"manage_messages", "manage_threads"})
+
+    notice = permission_omission_notice(stats)
+
+    assert notice.startswith("\n\nℹ️ Construction terminée avec succès")
+    assert "Manage Messages, Manage Threads" in notice
+    assert "Manage Roles" not in notice
+    assert "Administrator" in notice
+
+
+def test_overwrite_omission_logs_each_distinct_permission_set_once(capsys):
+    builder = ServerBuilder(SimpleNamespace())
+
+    builder._report_overwrite_omissions("category", "general", ["manage_threads", "manage_messages"])
+    builder._report_overwrite_omissions("text_channel", "announcements", ["manage_messages", "manage_threads"])
+
+    output = capsys.readouterr().out
+    assert output.count("[BUILD INFO]") == 1
+    assert "first_affected_resource=category:'general'" in output
+    assert builder.stats.omitted_permissions == {"manage_messages", "manage_threads"}
 
 
 def test_required_setup_permissions_are_only_the_structural_baseline():
@@ -392,7 +418,7 @@ def test_channel_overwrites_filter_ungranted_allows_and_denies_without_mutating_
     )
 
     assert prepared is not original
-    assert set(omitted) == {"manage_roles", "manage_messages", "manage_threads"}
+    assert set(omitted) == {"manage_messages", "manage_threads"}
     assert everyone in prepared and prepared[everyone].view_channel is False
     assert prepared[admin_role].view_channel is True
     assert prepared[admin_role].manage_channels is True
