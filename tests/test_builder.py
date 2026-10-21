@@ -5,7 +5,9 @@ import discord
 import pytest
 
 from services.server_builder import (
+    BuildPermissionError,
     ServerBuilder,
+    _run_build_discord_operation,
     _stream_category_name,
     _subject_channel_overwrites,
 )
@@ -324,3 +326,30 @@ async def test_created_private_managed_channel_grants_bot_view(channel_kind):
     assert passed[bot_member].view_channel is True
     assert bot_member not in source_overwrites
 
+
+
+
+@pytest.mark.asyncio
+async def test_build_permission_error_reports_operation_resource_and_discord_code():
+    response = SimpleNamespace(status=403, reason="Forbidden")
+    action = AsyncMock(
+        side_effect=discord.Forbidden(
+            response,
+            {"message": "Missing Permissions", "code": 50013},
+        )
+    )
+
+    with pytest.raises(BuildPermissionError) as caught:
+        await _run_build_discord_operation(
+            operation="create_category",
+            resource_name="private-category",
+            action=action,
+        )
+
+    details = str(caught.value)
+    assert "operation=create_category" in details
+    assert "resource_name='private-category'" in details
+    assert "http_status=403" in details
+    assert "discord_code=50013" in details
+    assert "Missing Permissions" in details
+    action.assert_awaited_once()
