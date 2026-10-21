@@ -324,12 +324,14 @@ def test_channel_overwrites_filter_ungranted_allows_preserve_denies_and_input():
     admin_overwrite = discord.PermissionOverwrite(
         view_channel=True,
         manage_channels=True,
+        manage_permissions=True,
         manage_messages=True,
         manage_threads=True,
     )
     professor_overwrite = discord.PermissionOverwrite(
         view_channel=True,
         send_messages=False,
+        manage_roles=False,
         manage_messages=False,
         manage_threads=False,
         create_private_threads=False,
@@ -346,24 +348,31 @@ def test_channel_overwrites_filter_ungranted_allows_preserve_denies_and_input():
     )
 
     assert prepared is not original
-    assert set(omitted) == {"manage_messages", "manage_threads"}
+    assert set(omitted) == {"manage_roles", "manage_messages", "manage_threads"}
     assert everyone in prepared and prepared[everyone].view_channel is False
     assert prepared[admin_role].view_channel is True
     assert prepared[admin_role].manage_channels is True
+    assert prepared[admin_role].manage_roles is None
+    assert prepared[admin_role].manage_permissions is None
     assert prepared[admin_role].manage_messages is None
     assert prepared[admin_role].manage_threads is None
     assert prepared[professor_role].send_messages is False
+    assert prepared[professor_role].manage_roles is None
     assert prepared[professor_role].manage_messages is False
     assert prepared[professor_role].manage_threads is False
     assert prepared[professor_role].create_private_threads is False
+    assert all(overwrite.manage_roles is None for overwrite in prepared.values())
     # The builder grants the bot only explicit visibility/history/posting it
     # already possesses, so hidden categories do not lock the bot out.
     assert prepared[bot_member].view_channel is True
     assert prepared[bot_member].read_message_history is True
     assert prepared[bot_member].send_messages is True
     # Caller-owned permission objects must remain unchanged.
+    assert original[admin_role].manage_permissions is True
+    assert original[admin_role].manage_roles is True
     assert original[admin_role].manage_messages is True
     assert original[admin_role].manage_threads is True
+    assert original[professor_role].manage_roles is False
 
 
 @pytest.mark.asyncio

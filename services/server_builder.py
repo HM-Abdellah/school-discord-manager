@@ -185,10 +185,19 @@ def _prepare_channel_overwrites(
             prepared[target] = copy(overwrite)
             continue
         allow, deny = overwrite.pair()
+        # Discord rejects MANAGE_ROLES in channel permission overwrites when
+        # the caller is not a guild Administrator, even when it has the
+        # guild-level Manage Roles permission. Keep that capability on the
+        # managed role itself, but never send this bit in channel overwrites.
+        if allow.manage_roles or deny.manage_roles:
+            omitted.add("manage_roles")
+        allow.manage_roles = False
+        deny.manage_roles = False
+
         grantable_allow, removed_allow = _grantable_permissions(guild, allow)
         omitted.update(removed_allow)
-        # Preserve explicit denies: dropping a deny can accidentally make a
-        # restricted school channel writable or visible to a broader audience.
+        # Preserve explicit denies for every other permission: dropping a deny
+        # can accidentally expose a restricted school channel or make it writable.
         prepared[target] = discord.PermissionOverwrite.from_pair(
             grantable_allow,
             deny,
