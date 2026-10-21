@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 import unicodedata
+from copy import copy
 
 import discord
 
@@ -152,6 +153,21 @@ class ServerBuilder:
         self.managed: dict[str, dict[str, int]] = {"roles": {}, "categories": {}, "channels": {}}
         self._channel_snapshot: list[discord.abc.GuildChannel] = []
         self._channel_snapshot_refreshed = False
+
+    def _with_bot_view_access(self, overwrites):
+        """Keep the bot able to manage private resources it creates.
+
+        School channels intentionally deny @everyone visibility. Preserve all
+        configured overwrites while granting View Channel only to the bot member.
+        """
+        bot_member = getattr(self.guild, "me", None)
+        if bot_member is None or overwrites is None:
+            return overwrites
+        result = dict(overwrites)
+        bot_overwrite = copy(result.get(bot_member, discord.PermissionOverwrite()))
+        bot_overwrite.view_channel = True
+        result[bot_member] = bot_overwrite
+        return result
 
     @staticmethod
     def _stream_channel_count(level: dict, stream: dict) -> int:
@@ -400,7 +416,7 @@ class ServerBuilder:
             return category
         kwargs = {"name": name, "reason": "School manager automatic setup"}
         if overwrites is not None:
-            kwargs["overwrites"] = overwrites
+            kwargs["overwrites"] = self._with_bot_view_access(overwrites)
         category = await self.guild.create_category(**kwargs)
         self.stats.categories_created += 1
         self._remember_category(category)
@@ -413,7 +429,7 @@ class ServerBuilder:
         if channel is not None:
             self._remember_channel(channel)
             return channel
-        channel = await category.create_text_channel(name=name, topic=topic, overwrites=overwrites, reason="School manager automatic setup")
+        channel = await category.create_text_channel(name=name, topic=topic, overwrites=self._with_bot_view_access(overwrites), reason="School manager automatic setup")
         self.stats.text_channels_created += 1
         self._remember_channel(channel)
         self._channel_snapshot.append(channel)
@@ -425,7 +441,7 @@ class ServerBuilder:
         if channel is not None:
             self._remember_channel(channel)
             return channel
-        channel = await category.create_voice_channel(name=name, overwrites=overwrites, reason="School manager automatic setup")
+        channel = await category.create_voice_channel(name=name, overwrites=self._with_bot_view_access(overwrites), reason="School manager automatic setup")
         self.stats.voice_channels_created += 1
         self._remember_channel(channel)
         self._channel_snapshot.append(channel)
