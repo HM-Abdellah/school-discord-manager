@@ -326,7 +326,6 @@ class ServerBuilder:
         self.managed: dict[str, dict[str, int]] = {"roles": {}, "categories": {}, "channels": {}}
         self._channel_snapshot: list[discord.abc.GuildChannel] = []
         self._channel_snapshot_refreshed = False
-        self._reported_overwrite_omission_sets: set[tuple[str, ...]] = set()
 
     @staticmethod
     def _stream_channel_count(level: dict, stream: dict) -> int:
@@ -543,11 +542,6 @@ class ServerBuilder:
         print(f"[BUILD] -> create role: {name}", flush=True)
         grantable, omitted = _grantable_permissions(self.guild, permissions)
         self.stats.omitted_permissions.update(omitted)
-        if omitted:
-            print(
-                f"[BUILD INFO] role={name!r}; omitted_ungranted_permissions={', '.join(omitted)}",
-                flush=True,
-            )
         try:
             role = await self.guild.create_role(
                 name=name,
@@ -613,23 +607,9 @@ class ServerBuilder:
         self._remember_role(role)
         return role
 
-    def _report_overwrite_omissions(
-        self, resource_type: str, resource_name: str, omitted: list[str]
-    ) -> None:
-        """Log each distinct optional-overwrite omission set once per build."""
+    def _record_permission_omissions(self, omitted: list[str]) -> None:
+        """Track optional permissions omitted during construction without log noise."""
         self.stats.omitted_permissions.update(omitted)
-        if not omitted:
-            return
-        key = tuple(sorted(set(omitted)))
-        if key in self._reported_overwrite_omission_sets:
-            return
-        self._reported_overwrite_omission_sets.add(key)
-        print(
-            "[BUILD INFO] optional_overwrite_permissions_omitted="
-            f"{', '.join(key)}; first_affected_resource={resource_type}:{resource_name!r}; "
-            "further matching resources summarized in the final notice",
-            flush=True,
-        )
 
     async def _get_or_create_category(self, name: str, overwrites=None) -> discord.CategoryChannel:
         category = self._find_category(name)
@@ -638,7 +618,7 @@ class ServerBuilder:
             return category
         kwargs = {"name": name, "reason": "School Manager automatic setup"}
         prepared, omitted = _prepare_channel_overwrites(self.guild, overwrites)
-        self._report_overwrite_omissions("category", name, omitted)
+        self._record_permission_omissions(omitted)
         if prepared is not None:
             kwargs["overwrites"] = prepared
         try:
@@ -664,7 +644,7 @@ class ServerBuilder:
             self._remember_channel(channel)
             return channel
         prepared, omitted = _prepare_channel_overwrites(self.guild, overwrites)
-        self._report_overwrite_omissions("text_channel", name, omitted)
+        self._record_permission_omissions(omitted)
         try:
             channel = await category.create_text_channel(
                 name=name,
@@ -694,7 +674,7 @@ class ServerBuilder:
             self._remember_channel(channel)
             return channel
         prepared, omitted = _prepare_channel_overwrites(self.guild, overwrites)
-        self._report_overwrite_omissions("voice_channel", name, omitted)
+        self._record_permission_omissions(omitted)
         try:
             channel = await category.create_voice_channel(
                 name=name,

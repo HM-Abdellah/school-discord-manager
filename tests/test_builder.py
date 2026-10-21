@@ -338,15 +338,13 @@ def test_permission_omission_notice_is_informational_and_precise():
     assert "Administrator" in notice
 
 
-def test_overwrite_omission_logs_each_distinct_permission_set_once(capsys):
+def test_overwrite_omissions_are_tracked_without_terminal_noise(capsys):
     builder = ServerBuilder(SimpleNamespace())
 
-    builder._report_overwrite_omissions("category", "general", ["manage_threads", "manage_messages"])
-    builder._report_overwrite_omissions("text_channel", "announcements", ["manage_messages", "manage_threads"])
+    builder._record_permission_omissions(["manage_threads", "manage_messages"])
+    builder._record_permission_omissions(["manage_messages", "manage_threads"])
 
-    output = capsys.readouterr().out
-    assert output.count("[BUILD INFO]") == 1
-    assert "first_affected_resource=category:'general'" in output
+    assert capsys.readouterr().out == ""
     assert builder.stats.omitted_permissions == {"manage_messages", "manage_threads"}
 
 
@@ -549,7 +547,8 @@ async def test_create_role_filters_ungranted_permissions_instead_of_retrying(mon
     assert granted.manage_threads is False
     assert builder.stats.omitted_permissions == {"manage_messages", "manage_threads"}
     output = capsys.readouterr().out
-    assert "omitted_ungranted_permissions=manage_messages, manage_threads" in output
+    assert "omitted_ungranted_permissions=" not in output
+    assert "[BUILD INFO]" not in output
 
 
 @pytest.mark.asyncio
