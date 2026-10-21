@@ -281,6 +281,49 @@ def test_fresh_channel_snapshot_does_not_reuse_deleted_cached_text_channel():
 
 
 
+def test_general_area_overwrites_strip_ungrantable_denies_like_live_setup_failure():
+    # Mirrors the live bot's granular permissions: it can manage channels/roles
+    # and the ordinary text/thread/voice permissions, but not Manage Messages
+    # or Manage Threads. Discord rejects channel creation if either unsupported
+    # bit appears in an allow OR deny overwrite.
+    bot_member = type("BotMember", (), {})()
+    bot_member.guild_permissions = discord.Permissions(
+        view_channel=True,
+        manage_channels=True,
+        manage_roles=True,
+        create_instant_invite=True,
+        send_messages=True,
+        read_message_history=True,
+        embed_links=True,
+        attach_files=True,
+        use_application_commands=True,
+        create_public_threads=True,
+        create_private_threads=True,
+        send_messages_in_threads=True,
+        connect=True,
+        speak=True,
+        stream=True,
+    )
+    everyone, admin, professor, female_professor, student = (object() for _ in range(5))
+    policy = general_area_overwrites(
+        everyone, admin, professor, female_professor, student
+    )
+
+    prepared, omitted = _prepare_channel_overwrites(
+        SimpleNamespace(me=bot_member), policy
+    )
+
+    assert set(omitted) == {"manage_roles", "manage_messages", "manage_threads"}
+    for overwrite in prepared.values():
+        allow, deny = overwrite.pair()
+        assert int(allow.value) & ~int(bot_member.guild_permissions.value) == 0
+        assert int(deny.value) & ~int(bot_member.guild_permissions.value) == 0
+    assert prepared[professor].manage_messages is None
+    assert prepared[professor].manage_threads is None
+    assert prepared[admin].manage_roles is None
+    assert prepared[bot_member].view_channel is True
+
+
 def test_required_setup_permissions_are_only_the_structural_baseline():
     required = _required_setup_permissions()
     assert required.view_channel is True
@@ -302,7 +345,7 @@ def test_required_setup_permissions_are_only_the_structural_baseline():
         assert getattr(required, name) is False
 
 
-def test_channel_overwrites_filter_ungranted_allows_preserve_denies_and_input():
+def test_channel_overwrites_filter_ungranted_allows_and_denies_without_mutating_input():
     bot_member = MagicMock()
     bot_member.guild_permissions = discord.Permissions(
         view_channel=True,
@@ -315,6 +358,7 @@ def test_channel_overwrites_filter_ungranted_allows_preserve_denies_and_input():
         stream=True,
         use_application_commands=True,
         create_public_threads=True,
+        create_private_threads=True,
         send_messages_in_threads=True,
     )
     everyone = object()
@@ -358,10 +402,15 @@ def test_channel_overwrites_filter_ungranted_allows_preserve_denies_and_input():
     assert prepared[admin_role].manage_threads is None
     assert prepared[professor_role].send_messages is False
     assert prepared[professor_role].manage_roles is None
-    assert prepared[professor_role].manage_messages is False
-    assert prepared[professor_role].manage_threads is False
+    # The bot cannot express denials for permissions it does not hold at guild level.
+    assert prepared[professor_role].manage_messages is None
+    assert prepared[professor_role].manage_threads is None
     assert prepared[professor_role].create_private_threads is False
     assert all(overwrite.manage_roles is None for overwrite in prepared.values())
+    for overwrite in prepared.values():
+        allow, deny = overwrite.pair()
+        assert int(allow.value) & ~int(bot_member.guild_permissions.value) == 0
+        assert int(deny.value) & ~int(bot_member.guild_permissions.value) == 0
     # The builder grants the bot only explicit visibility/history/posting it
     # already possesses, so hidden categories do not lock the bot out.
     assert prepared[bot_member].view_channel is True

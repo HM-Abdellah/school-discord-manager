@@ -195,12 +195,16 @@ def _prepare_channel_overwrites(
         deny.manage_roles = False
 
         grantable_allow, removed_allow = _grantable_permissions(guild, allow)
+        grantable_deny, removed_deny = _grantable_permissions(guild, deny)
         omitted.update(removed_allow)
-        # Preserve explicit denies for every other permission: dropping a deny
-        # can accidentally expose a restricted school channel or make it writable.
+        omitted.update(removed_deny)
+        # Discord validates denied bits too: the request cannot set a channel
+        # overwrite for permissions the bot does not hold at guild level.
+        # Keep every supported explicit deny, but strip unsupported deny bits
+        # instead of sending an invalid payload that fails with 403 / 50013.
         prepared[target] = discord.PermissionOverwrite.from_pair(
             grantable_allow,
-            deny,
+            grantable_deny,
         )
 
     # Keep only the narrow bot-member visibility grant. It is needed because
