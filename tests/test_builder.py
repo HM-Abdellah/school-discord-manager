@@ -271,65 +271,87 @@ def test_fresh_channel_snapshot_does_not_reuse_deleted_cached_text_channel():
     assert builder._find_text(category, "stale-channel") is None
 
 
-@pytest.mark.asyncio
-async def test_create_role_retries_50013_with_only_bot_grantable_permissions(monkeypatch, capsys):
-    bot_permissions = discord.Permissions(
-        manage_roles=True,
-        manage_channels=True,
-        view_channel=True,
-    )
-    guild = SimpleNamespace(
-        id=1,
-        me=SimpleNamespace(guild_permissions=bot_permissions),
-    )
-    response = SimpleNamespace(status=403, reason="Forbidden")
-    forbidden = discord.Forbidden(
-        response,
-        {"message": "Missing Permissions", "code": 50013},
-    )
-    created_role = SimpleNamespace(id=700, name="Administration")
-    guild.create_role = AsyncMock(side_effect=[forbidden, created_role])
-    monkeypatch.setattr(server_builder_module, "ROLE_CREATE_DELAY", 0)
 
-    builder = ServerBuilder(guild)
-    requested = discord.Permissions(
-        manage_roles=True,
+
+def test_required_setup_permissions_include_role_and_channel_overwrite_grants():
+    required = _required_setup_permissions()
+    for name in (
+        "manage_channels",
+        "manage_roles",
+        "manage_messages",
+        "manage_threads",
+        "create_public_threads",
+        "create_private_threads",
+        "send_messages_in_threads",
+    ):
+        assert getattr(required, name) is True
+
+
+def test_with_bot_view_access_preserves_existing_overwrites_without_mutating_input():
+    bot_member = MagicMock()
+    everyone = object()
+    admin_role = object()
+    everyone_overwrite = discord.PermissionOverwrite(view_channel=False)
+    admin_overwrite = discord.PermissionOverwrite(
+        view_channel=True,
         manage_channels=True,
         manage_messages=True,
         manage_threads=True,
-        view_channel=True,
     )
-    result = await builder._create_role(
-        "Administration",
-        permissions=requested,
-        colour=discord.Colour.red(),
-        hoist=True,
-        mentionable=True,
-        reason="test",
-    )
+    original = {
+        everyone: everyone_overwrite,
+        admin_role: admin_overwrite,
+    }
+    guild = SimpleNamespace(me=bot_member)
 
-    assert result is created_role
-    assert guild.create_role.await_count == 2
-    retry_permissions = guild.create_role.await_args_list[1].kwargs["permissions"]
-    assert retry_permissions.manage_roles is True
-    assert retry_permissions.manage_channels is True
-    assert retry_permissions.view_channel is True
-    assert retry_permissions.manage_messages is False
-    assert retry_permissions.manage_threads is False
-    assert builder.stats.roles_created == 1
-    output = capsys.readouterr().out
-    assert "Retrying with only bot-grantable permissions" in output
-    assert "manage_messages" in output
-    assert "manage_threads" in output
+    prepared = _with_bot_view_access(guild, original)
+
+    assert prepared is not original
+    assert bot_member not in original
+    assert prepared[bot_member].view_channel is True
+    assert prepared[everyone].view_channel is False
+    assert prepared[admin_role].manage_channels is True
+    assert prepared[admin_role].manage_messages is True
+    assert prepared[admin_role].manage_threads is True
 
 
 @pytest.mark.asyncio
-async def test_create_role_does_not_retry_when_bot_lacks_manage_roles(monkeypatch):
-    guild_permissions = discord.Permissions(manage_channels=True)
+async def test_build_permission_preflight_reports_exact_missing_bits_before_mutation():
+    bot_permissions = _required_setup_permissions()
+    bot_permissions.manage_messages = False
+    bot_permissions.manage_threads = False
+    bot_permissions.create_private_threads = False
+    bot_member = MagicMock()
+    bot_member.guild_permissions = bot_permissions
     guild = SimpleNamespace(
         id=1,
-        me=SimpleNamespace(guild_permissions=guild_permissions),
+        me=bot_member,
+        roles=[],
+        channels=[],
+        categories=[],
+        fetch_channels=AsyncMock(return_value=[]),
+        create_role=AsyncMock(),
+        create_category=AsyncMock(),
     )
+    builder = ServerBuilder(guild)
+
+    with pytest.raises(BuildPermissionError) as caught:
+        await builder.build({"levels": []})
+
+    message = str(caught.value)
+    assert "Manage Messages (manage_messages)" in message
+    assert "Manage Threads (manage_threads)" in message
+    assert "Create Private Threads (create_private_threads)" in message
+    assert "Administrator n'est pas nécessaire" in message
+    guild.create_role.assert_not_awaited()
+    guild.create_category.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_role_forbidden_logs_exact_operation_without_permission_downgrade(monkeypatch, capsys):
+    bot_member = MagicMock()
+    bot_member.guild_permissions = _required_setup_permissions()
+    guild = SimpleNamespace(id=1, me=bot_member)
     response = SimpleNamespace(status=403, reason="Forbidden")
     forbidden = discord.Forbidden(
         response,
@@ -337,73 +359,23 @@ async def test_create_role_does_not_retry_when_bot_lacks_manage_roles(monkeypatc
     )
     guild.create_role = AsyncMock(side_effect=forbidden)
     monkeypatch.setattr(server_builder_module, "ROLE_CREATE_DELAY", 0)
-
     builder = ServerBuilder(guild)
+
     with pytest.raises(discord.Forbidden):
         await builder._create_role(
             "Administration",
             permissions=discord.Permissions(
+                view_channel=True,
                 manage_roles=True,
                 manage_messages=True,
+                manage_threads=True,
             ),
             colour=discord.Colour.red(),
             reason="test",
         )
 
     guild.create_role.assert_awaited_once()
-
-
-def test_prepare_channel_overwrites_strips_only_ungrantable_allow_bits():
-    bot_member = MagicMock()
-    bot_member.guild_permissions = discord.Permissions(
-        manage_roles=True,
-        manage_channels=True,
-        view_channel=True,
-        read_message_history=True,
-        send_messages=True,
-    )
-    admin_role = object()
-    everyone = object()
-    guild = SimpleNamespace(me=bot_member)
-    overwrites = {
-        everyone: discord.PermissionOverwrite(view_channel=False),
-        admin_role: discord.PermissionOverwrite(
-            view_channel=True,
-            manage_channels=True,
-            manage_messages=True,
-            manage_threads=True,
-        ),
-    }
-
-    prepared, removed = _prepare_channel_overwrites(guild, overwrites)
-
-    assert prepared[everyone].view_channel is False
-    assert prepared[admin_role].view_channel is True
-    assert prepared[admin_role].manage_channels is True
-    assert prepared[admin_role].manage_messages is None
-    assert prepared[admin_role].manage_threads is None
-    assert prepared[bot_member].view_channel is True
-    assert "manage_messages" in removed
-    assert "manage_threads" in removed
-
-
-def test_prepare_channel_overwrites_keeps_requested_permissions_for_administrator_bot():
-    bot_member = MagicMock()
-    bot_member.guild_permissions = discord.Permissions(administrator=True)
-    admin_role = object()
-    guild = SimpleNamespace(me=bot_member)
-    requested = discord.PermissionOverwrite(
-        manage_messages=True,
-        manage_threads=True,
-    )
-
-    prepared, removed = _prepare_channel_overwrites(
-        guild,
-        {admin_role: requested},
-    )
-
-    assert prepared[admin_role].manage_messages is True
-    assert prepared[admin_role].manage_threads is True
-    assert prepared[bot_member].view_channel is True
-    assert removed == []
-
+    output = capsys.readouterr().out
+    assert "operation=create_role" in output
+    assert "resource_name='Administration'" in output
+    assert "discord_code=50013" in output
