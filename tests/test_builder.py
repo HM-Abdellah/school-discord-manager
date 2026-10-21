@@ -5,6 +5,12 @@ import discord
 import pytest
 
 from services import server_builder as server_builder_module
+from services.permissions import (
+    general_area_overwrites,
+    public_voice_overwrites,
+    stream_announcement_overwrites,
+    teacher_area_overwrites,
+)
 from services.server_builder import (
     BuildPermissionError,
     ServerBuilder,
@@ -287,6 +293,39 @@ def test_required_setup_permissions_include_role_and_channel_overwrite_grants():
         "send_messages_in_threads",
     ):
         assert getattr(required, name) is True
+
+
+def test_required_setup_permissions_cover_every_positive_overwrite_bit():
+    everyone, admin, professor, female_professor, student, teacher_stream, student_stream, bot = (
+        object() for _ in range(8)
+    )
+    overwrite_maps = [
+        general_area_overwrites(everyone, admin, professor, female_professor, student),
+        teacher_area_overwrites(everyone, admin, professor, female_professor, student),
+        public_voice_overwrites(
+            everyone, admin, professor, female_professor,
+            student, teacher_stream, student_stream,
+        ),
+        stream_announcement_overwrites(
+            everyone, admin, professor, female_professor,
+            student, teacher_stream, student_stream,
+        ),
+        _subject_channel_overwrites(
+            everyone, admin, professor, female_professor,
+            teacher_stream, student_stream,
+            student_role=student,
+            bot_member=bot,
+        ),
+    ]
+
+    all_allowed_bits = 0
+    for overwrites in overwrite_maps:
+        for overwrite in overwrites.values():
+            allow, _deny = overwrite.pair()
+            all_allowed_bits |= int(allow.value)
+
+    required = _required_setup_permissions()
+    assert all_allowed_bits & ~int(required.value) == 0
 
 
 def test_with_bot_view_access_preserves_existing_overwrites_without_mutating_input():
