@@ -1,5 +1,7 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import discord
 import pytest
 
 from cogs.removestream_fix import _recorded_id, _stream_channel_names, _stream_role_names
@@ -193,7 +195,7 @@ def test_reset_role_hierarchy_fails_before_mutation():
 def test_reset_archives_before_discord_deletion():
     source = open("cogs/security_hardening_v3.py", encoding="utf-8").read()
     assert "archive_path = archive_guild_database" in source
-    assert source.index("archive_path = archive_guild_database") < source.index("await channel.delete")
+    assert source.index("archive_path = archive_guild_database") < source.index('operation="delete_channel"')
 
 
 def test_latency_sensitive_commands_acknowledge_before_slow_work():
@@ -207,3 +209,46 @@ def test_latency_sensitive_commands_acknowledge_before_slow_work():
     assert report.index("await interaction.followup.send") > report.index("await interaction.response.defer(ephemeral=True)")
     assert full.index("await interaction.response.defer(ephemeral=True)") < full.index("execute_teacher_assignment(")
     assert "except TeacherAssignmentError as exc" in full
+
+
+@pytest.mark.asyncio
+async def test_reset_discord_operation_failure_reports_exact_target_and_api_code(caplog):
+    from cogs.security_hardening_v3 import ResetOperationError, _run_reset_discord_operation
+
+    response = SimpleNamespace(status=403, reason="Forbidden")
+    resource = SimpleNamespace(id=987654, name="teacher-private")
+    action = AsyncMock(
+        side_effect=discord.Forbidden(
+            response,
+            {"message": "Missing Access", "code": 50001},
+        )
+    )
+
+    with pytest.raises(ResetOperationError) as caught:
+        await _run_reset_discord_operation(
+            operation="delete_channel",
+            resource_type="channel",
+            resource=resource,
+            action=action,
+        )
+
+    details = str(caught.value)
+    assert "operation=delete_channel" in details
+    assert "resource_type=channel" in details
+    assert "resource_id=987654" in details
+    assert "resource_name='teacher-private'" in details
+    assert "http_status=403" in details
+    assert "discord_code=50001" in details
+    assert "exception_type=Forbidden" in details
+    assert "resetserver API operation failed" in caplog.text
+    action.assert_awaited_once()
+
+
+def test_reset_routes_all_resource_deletions_through_diagnostic_wrapper():
+    source = open("cogs/security_hardening_v3.py", encoding="utf-8").read()
+    reset_body = source[source.index("async def reset_server"):source.index("\n\nasync def setup")]
+
+    assert reset_body.count("await _run_reset_discord_operation(") == 3
+    assert 'operation="delete_channel"' in reset_body
+    assert 'operation="delete_category"' in reset_body
+    assert 'operation="delete_role"' in reset_body

@@ -294,8 +294,9 @@ def test_reset_restores_original_registered_resource_loop_and_archives_before_de
     source = inspect.getsource(__import__("cogs.security_hardening_v3", fromlist=["HardenedResetCommands"]).HardenedResetCommands.reset_server.callback)
     archive = source.index("archive_path = archive_guild_database")
     channel_lookup = source.index("channel = guild.get_channel(channel_id)")
-    delete = source.index("await channel.delete")
+    delete = source.index('operation="delete_channel"')
 
     assert archive < channel_lookup < delete
+    assert "_run_reset_discord_operation(" in source
     assert "_unregistered_children_of_managed_categories" not in source
     assert 'config["pending_reset"]' not in source

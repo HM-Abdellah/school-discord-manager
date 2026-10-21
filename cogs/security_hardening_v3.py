@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
+from collections.abc import Awaitable, Callable
 
 import discord
 from discord import app_commands
@@ -14,12 +16,49 @@ from services.permissions import owner_only_check
 from services.storage import archive_guild_database, get_active_academic_year, get_guild_config, reset_guild_data
 
 OWNED_COMMANDS = {"resetserver"}
+logger = logging.getLogger(__name__)
 
 
 def _managed_mapping(config: dict, section: str) -> dict:
     managed = config.get("managed", {}) if isinstance(config, dict) else {}
     value = managed.get(section, {}) if isinstance(managed, dict) else {}
     return value if isinstance(value, dict) else {}
+
+
+class ResetOperationError(RuntimeError):
+    """A Discord reset operation failed with bounded, safe diagnostic context."""
+
+
+def _bounded_resource_name(resource: object) -> str:
+    name = getattr(resource, "name", None)
+    if not isinstance(name, str):
+        return "<unknown>"
+    safe_name = " ".join(name.replace("`", "'").split())[:80]
+    return safe_name or "<unnamed>"
+
+
+async def _run_reset_discord_operation(
+    *,
+    operation: str,
+    resource_type: str,
+    resource: object,
+    action: Callable[[], Awaitable[object]],
+) -> None:
+    """Run one Discord API action and retain its target and HTTP failure code."""
+    try:
+        await action()
+    except discord.HTTPException as exc:
+        resource_id = getattr(resource, "id", "unknown")
+        resource_name = _bounded_resource_name(resource)
+        http_status = getattr(exc, "status", "unknown")
+        discord_code = getattr(exc, "code", "unknown")
+        details = (
+            f"operation={operation}; resource_type={resource_type}; resource_id={resource_id}; "
+            f"resource_name='{resource_name}'; http_status={http_status}; "
+            f"discord_code={discord_code}; exception_type={type(exc).__name__}"
+        )
+        logger.error("resetserver API operation failed: %s", details)
+        raise ResetOperationError(details) from exc
 
 
 def _validate_reset_role_hierarchy(guild: discord.Guild, role_ids: set[int]) -> str | None:
@@ -98,7 +137,12 @@ class HardenedResetCommands(commands.Cog):
                     channel = guild.get_channel(channel_id)
                     if channel is None or not isinstance(channel, discord.abc.GuildChannel):
                         continue
-                    await channel.delete(reason="School Manager scoped reset")
+                    await _run_reset_discord_operation(
+                        operation="delete_channel",
+                        resource_type="channel",
+                        resource=channel,
+                        action=lambda: channel.delete(reason="School Manager scoped reset"),
+                    )
                     deleted_channels += 1
 
                 for category_id in sorted(category_ids):
@@ -109,7 +153,12 @@ class HardenedResetCommands(commands.Cog):
                     if remaining:
                         retained_categories += 1
                         continue
-                    await category.delete(reason="School Manager scoped reset")
+                    await _run_reset_discord_operation(
+                        operation="delete_category",
+                        resource_type="category",
+                        resource=category,
+                        action=lambda: category.delete(reason="School Manager scoped reset"),
+                    )
                     deleted_categories += 1
 
                 top_role = guild.me.top_role if guild.me is not None else None
@@ -117,10 +166,21 @@ class HardenedResetCommands(commands.Cog):
                     role = guild.get_role(role_id)
                     if role is None:
                         continue
-                    await role.delete(reason="School Manager scoped reset")
+                    await _run_reset_discord_operation(
+                        operation="delete_role",
+                        resource_type="role",
+                        resource=role,
+                        action=lambda: role.delete(reason="School Manager scoped reset"),
+                    )
                     deleted_roles += 1
 
                 reset_guild_data(guild.id)
+        except ResetOperationError as exc:
+            await interaction.followup.send(
+                f"❌ Reset interrompu : `{exc}`. Aucun nom n'a été utilisé pour élargir le scope.",
+                ephemeral=True,
+            )
+            return
         except (discord.Forbidden, discord.HTTPException, discord.NotFound, OSError) as exc:
             await interaction.followup.send(
                 f"❌ Reset interrompu : `{type(exc).__name__}`. Aucun nom n'a été utilisé pour élargir le scope.",
