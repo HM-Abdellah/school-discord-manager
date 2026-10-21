@@ -8,6 +8,7 @@ from services import server_builder as server_builder_module
 from services.server_builder import (
     ServerBuilder,
     _stream_category_name,
+    _prepare_channel_overwrites,
     _subject_channel_overwrites,
 )
 
@@ -350,4 +351,61 @@ async def test_create_role_does_not_retry_when_bot_lacks_manage_roles(monkeypatc
         )
 
     guild.create_role.assert_awaited_once()
+
+
+def test_prepare_channel_overwrites_strips_only_ungrantable_allow_bits():
+    bot_member = SimpleNamespace(
+        guild_permissions=discord.Permissions(
+            manage_roles=True,
+            manage_channels=True,
+            view_channel=True,
+            read_message_history=True,
+            send_messages=True,
+        )
+    )
+    admin_role = object()
+    everyone = object()
+    guild = SimpleNamespace(me=bot_member)
+    overwrites = {
+        everyone: discord.PermissionOverwrite(view_channel=False),
+        admin_role: discord.PermissionOverwrite(
+            view_channel=True,
+            manage_channels=True,
+            manage_messages=True,
+            manage_threads=True,
+        ),
+    }
+
+    prepared, removed = _prepare_channel_overwrites(guild, overwrites)
+
+    assert prepared[everyone].view_channel is False
+    assert prepared[admin_role].view_channel is True
+    assert prepared[admin_role].manage_channels is True
+    assert prepared[admin_role].manage_messages is None
+    assert prepared[admin_role].manage_threads is None
+    assert prepared[bot_member].view_channel is True
+    assert "manage_messages" in removed
+    assert "manage_threads" in removed
+
+
+def test_prepare_channel_overwrites_keeps_requested_permissions_for_administrator_bot():
+    bot_member = SimpleNamespace(
+        guild_permissions=discord.Permissions(administrator=True)
+    )
+    admin_role = object()
+    guild = SimpleNamespace(me=bot_member)
+    requested = discord.PermissionOverwrite(
+        manage_messages=True,
+        manage_threads=True,
+    )
+
+    prepared, removed = _prepare_channel_overwrites(
+        guild,
+        {admin_role: requested},
+    )
+
+    assert prepared[admin_role].manage_messages is True
+    assert prepared[admin_role].manage_threads is True
+    assert prepared[bot_member].view_channel is True
+    assert removed == []
 
