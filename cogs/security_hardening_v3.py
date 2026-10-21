@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from copy import copy
 from collections.abc import Awaitable, Callable
 
 import discord
@@ -17,6 +18,10 @@ from services.storage import archive_guild_database, get_active_academic_year, g
 
 OWNED_COMMANDS = {"resetserver"}
 logger = logging.getLogger(__name__)
+
+
+class ResetPreflightError(RuntimeError):
+    """A reset preflight repair failed before any Discord resource was deleted."""
 
 
 def _managed_mapping(config: dict, section: str) -> dict:
@@ -59,6 +64,93 @@ async def _run_reset_discord_operation(
         )
         logger.error("resetserver API operation failed: %s", details)
         raise ResetOperationError(details) from exc
+
+
+async def _fetch_reset_channels(guild: discord.Guild) -> dict[int, discord.abc.GuildChannel]:
+    """Resolve registered resources from a fresh API snapshot plus the existing cache."""
+    channels = list(getattr(guild, "channels", []))
+    fetch_channels = getattr(guild, "fetch_channels", None)
+    if callable(fetch_channels):
+        channels.extend(await fetch_channels())
+    return {
+        int(channel.id): channel
+        for channel in channels
+        if getattr(channel, "id", None) is not None
+    }
+
+
+def _reset_access_hint(api_code: object) -> str:
+    if api_code == 50001:
+        return (
+            "Discord renvoie Missing Access (50001). Vérifie les permission overwrites "
+            "View Channel du bot sur le salon et sa catégorie parente."
+        )
+    if api_code == 50013:
+        return (
+            "Discord renvoie Missing Permissions (50013). Vérifie Manage Channels et Manage Roles "
+            "dans les permissions serveur/catégorie du bot."
+        )
+    return "Vérifie les permissions et les overwrites du bot sur cette ressource."
+
+
+async def _ensure_bot_can_view_managed_resources(
+    guild: discord.Guild,
+    live_channels: dict[int, discord.abc.GuildChannel],
+    channel_ids: set[int],
+    category_ids: set[int],
+) -> int:
+    """Repair only the bot-member View Channel overwrite for registered resources."""
+    bot_member = getattr(guild, "me", None)
+    if bot_member is None:
+        raise ResetPreflightError(
+            "Impossible d'identifier le membre du bot pour vérifier l'accès aux ressources gérées."
+        )
+
+    repaired = 0
+    for resource_id in [*sorted(category_ids), *sorted(channel_ids)]:
+        resource = live_channels.get(resource_id)
+        if resource is None:
+            continue
+        permissions_for = getattr(resource, "permissions_for", None)
+        if not callable(permissions_for):
+            raise ResetPreflightError(
+                f"Impossible de vérifier l'accès à la ressource gérée ID {resource_id}; "
+                "aucune suppression Discord n'a encore été lancée."
+            )
+        try:
+            effective_permissions = permissions_for(bot_member)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ResetPreflightError(
+                f"Impossible de calculer les permissions du bot pour la ressource ID {resource_id}: {exc}"
+            ) from exc
+        if getattr(effective_permissions, "view_channel", False):
+            continue
+
+        current_overwrite_for = getattr(resource, "overwrites_for", None)
+        bot_overwrite = copy(
+            current_overwrite_for(bot_member)
+            if callable(current_overwrite_for)
+            else discord.PermissionOverwrite()
+        )
+        bot_overwrite.view_channel = True
+        overwrites = dict(getattr(resource, "overwrites", {}) or {})
+        overwrites[bot_member] = bot_overwrite
+        try:
+            await resource.edit(
+                overwrites=overwrites,
+                reason="School Manager reset recovery: restore bot visibility to managed resource",
+            )
+        except discord.HTTPException as exc:
+            api_code = getattr(exc, "code", None)
+            api_status = getattr(exc, "status", None)
+            name = str(getattr(resource, "name", resource_id)).replace("`", "'")[:80]
+            raise ResetPreflightError(
+                f"Impossible de restaurer View Channel pour la ressource gérée "
+                f"'{name}' (ID {resource_id}; HTTP {api_status}; code {api_code}). "
+                f"{_reset_access_hint(api_code)} Aucune suppression Discord n'a encore été lancée."
+            ) from exc
+        repaired += 1
+    return repaired
 
 
 def _validate_reset_role_hierarchy(guild: discord.Guild, role_ids: set[int]) -> str | None:
@@ -133,8 +225,13 @@ class HardenedResetCommands(commands.Cog):
                         )
                         return
 
+                live_channels = await _fetch_reset_channels(guild)
+                await _ensure_bot_can_view_managed_resources(
+                    guild, live_channels, channel_ids, category_ids
+                )
+
                 for channel_id in sorted(channel_ids):
-                    channel = guild.get_channel(channel_id)
+                    channel = live_channels.get(channel_id) or guild.get_channel(channel_id)
                     if channel is None or not isinstance(channel, discord.abc.GuildChannel):
                         continue
                     await _run_reset_discord_operation(
@@ -146,7 +243,7 @@ class HardenedResetCommands(commands.Cog):
                     deleted_channels += 1
 
                 for category_id in sorted(category_ids):
-                    category = guild.get_channel(category_id)
+                    category = live_channels.get(category_id) or guild.get_channel(category_id)
                     if not isinstance(category, discord.CategoryChannel):
                         continue
                     remaining = [channel for channel in guild.channels if getattr(channel, "category_id", None) == category.id]
@@ -175,6 +272,14 @@ class HardenedResetCommands(commands.Cog):
                     deleted_roles += 1
 
                 reset_guild_data(guild.id)
+        except ResetPreflightError as exc:
+            logger.error("resetserver permission preflight failed: %s", exc)
+            await interaction.followup.send(
+                f"❌ Reset interrompu avant les suppressions Discord : `{exc}`. "
+                "Aucune suppression Discord n'a été lancée pendant cette tentative.",
+                ephemeral=True,
+            )
+            return
         except ResetOperationError as exc:
             await interaction.followup.send(
                 f"❌ Reset interrompu : `{exc}`. Aucun nom n'a été utilisé pour élargir le scope.",
