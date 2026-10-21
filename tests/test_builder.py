@@ -7,6 +7,7 @@ import pytest
 from services.server_builder import (
     BuildPermissionError,
     ServerBuilder,
+    _missing_requested_permissions,
     _run_build_discord_operation,
     _stream_category_name,
     _subject_channel_overwrites,
@@ -353,3 +354,38 @@ async def test_build_permission_error_reports_operation_resource_and_discord_cod
     assert "discord_code=50013" in details
     assert "Missing Permissions" in details
     action.assert_awaited_once()
+
+
+
+def test_missing_requested_permissions_reports_only_bits_not_granted_to_bot():
+    guild = SimpleNamespace(
+        me=SimpleNamespace(
+            guild_permissions=discord.Permissions(
+                manage_roles=True,
+                manage_channels=True,
+                view_channel=True,
+            )
+        )
+    )
+    requested = discord.Permissions(
+        manage_roles=True,
+        manage_channels=True,
+        manage_messages=True,
+        view_channel=True,
+    )
+
+    missing = _missing_requested_permissions(guild, requested)
+
+    assert missing is not None
+    assert "manage_messages" in missing
+    assert "manage_roles" not in missing
+    assert "manage_channels" not in missing
+
+
+def test_missing_requested_permissions_returns_empty_when_bot_is_admin():
+    guild = SimpleNamespace(
+        me=SimpleNamespace(guild_permissions=discord.Permissions(administrator=True))
+    )
+    requested = discord.Permissions(manage_roles=True, manage_channels=True)
+
+    assert _missing_requested_permissions(guild, requested) == []
