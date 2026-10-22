@@ -33,9 +33,11 @@ from services.permissions import (
     SCHOOL_ADMIN_ROLE_NAMES,
     SUBJECT_ROLE_PREFIX,
     STREAM_ROLE_PREFIX,
+    admin_qr_available_roles,
+    admin_qr_check,
+    can_create_admin_qr_for_role,
     get_managed_role,
     management_check,
-    owner_only_check,
 )
 from services.teacher_assignment import TeacherAssignmentError, execute_teacher_assignment
 from services.teacher_threads import ensure_teacher_threads
@@ -52,6 +54,18 @@ from services.storage import (
     save_guild_config,
 )
 
+
+async def _admin_qr_role_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    """Show only QR role targets that the invoking member is authorized to issue."""
+    query = current.casefold().strip()
+    return [
+        app_commands.Choice(name=name, value=name)
+        for name in admin_qr_available_roles(interaction)
+        if query in name.casefold()
+    ][:25]
 
 
 async def _get_or_create_pending_role(guild: discord.Guild, config: dict) -> tuple[discord.Role, bool]:
@@ -1682,18 +1696,12 @@ class TeacherQROnboarding(commands.Cog):
         description="Créer un QR à usage unique pour un rôle administratif choisi.",
     )
     @app_commands.describe(role="Rôle attribué à la personne qui rejoint le serveur")
-    @app_commands.choices(
-        role=[
-            app_commands.Choice(name=ROLE_DIRECTION, value=ROLE_DIRECTION),
-            app_commands.Choice(name=ROLE_SURVEILLANT_GENERAL, value=ROLE_SURVEILLANT_GENERAL),
-            app_commands.Choice(name=ROLE_PERSONNEL_ADMINISTRATIF, value=ROLE_PERSONNEL_ADMINISTRATIF),
-        ]
-    )
-    @owner_only_check(lock=False)
+    @app_commands.autocomplete(role=_admin_qr_role_autocomplete)
+    @admin_qr_check(lock=False)
     async def create_admin_qr(
         self,
         interaction: discord.Interaction,
-        role: app_commands.Choice[str],
+        role: str,
     ) -> None:
         """Create a one-use invite for one explicitly selected school-admin role."""
         guild = interaction.guild
@@ -1701,10 +1709,17 @@ class TeacherQROnboarding(commands.Cog):
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
 
-        target_role_name = getattr(role, "value", None)
+        target_role_name = role
         if target_role_name not in SCHOOL_ADMIN_ROLE_NAMES:
             await interaction.response.send_message(
                 "❌ Choisis un rôle administratif valide dans la liste proposée.",
+                ephemeral=True,
+            )
+            return
+        if not can_create_admin_qr_for_role(interaction, target_role_name):
+            await interaction.response.send_message(
+                "❌ Le propriétaire peut créer les QR des trois rôles scolaires. `Direction` et "
+                "`Surveillant Général` peuvent créer uniquement un QR pour `Personnel Administratif`.",
                 ephemeral=True,
             )
             return

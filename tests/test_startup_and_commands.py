@@ -243,20 +243,34 @@ def test_teacher_qr_commands_are_admin_visible_only():
     assert not hasattr(cog, "approve_teacher")
     assert not hasattr(cog, "reject_teacher")
 
-def test_createadminqr_is_owner_only_and_offers_only_the_three_school_roles():
+def test_createadminqr_is_staff_guarded_and_offers_only_the_three_school_roles():
     module = importlib.import_module("cogs.teacher_qr_onboarding")
     bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
     cog = module.TeacherQROnboarding(bot)
     command = cog.create_admin_qr
 
     assert command.default_permissions is not None
-    assert command.default_permissions.administrator is True
+    assert command.default_permissions.manage_roles is True
+    assert command.default_permissions.administrator is False
     role_parameter = next(parameter for parameter in command.parameters if parameter.name == "role")
-    assert [choice.value for choice in role_parameter.choices] == [
-        "Direction",
-        "Surveillant Général",
-        "Personnel Administratif",
-    ]
+    assert role_parameter.autocomplete is not None
+    assert role_parameter.choices == []
     awaitable = bot.close()
     import asyncio
     asyncio.run(awaitable)
+
+
+
+def test_resetserver_is_visible_to_direction_without_administrator_permission():
+    module = importlib.import_module("cogs.security_hardening_v3")
+    bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
+    cog = module.HardenedResetCommands(bot)
+    command = cog.reset_server
+
+    assert command.default_permissions is not None
+    assert command.default_permissions.manage_roles is True
+    assert command.default_permissions.administrator is False
+    assert len(command.checks) == 1
+
+    import asyncio
+    asyncio.run(bot.close())

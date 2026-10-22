@@ -446,6 +446,127 @@ def management_check(*, lock: bool = True) -> app_commands.check:
     return decorator
 
 
+def _has_managed_role(interaction: discord.Interaction, role_name: str) -> bool:
+    """Check a member's role against the role ID registered by School Manager."""
+    guild = interaction.guild
+    if guild is None:
+        return False
+    managed_role = get_managed_role(guild, role_name)
+    if managed_role is None:
+        return False
+    member_role_ids = {
+        role.id for role in getattr(interaction.user, "roles", [])
+        if getattr(role, "id", None) is not None
+    }
+    return managed_role.id in member_role_ids
+
+
+def admin_qr_available_roles(interaction: discord.Interaction) -> tuple[str, ...]:
+    """Return only the QR role choices authorized for the invoking member."""
+    guild = interaction.guild
+    if guild is None:
+        return ()
+    if interaction.user.id == guild.owner_id:
+        return SCHOOL_ADMIN_ROLE_NAMES
+    if _has_managed_role(interaction, ROLE_DIRECTION) or _has_managed_role(
+        interaction, ROLE_SURVEILLANT_GENERAL
+    ):
+        return (ROLE_PERSONNEL_ADMINISTRATIF,)
+    return ()
+
+
+def can_create_admin_qr_for_role(interaction: discord.Interaction, target_role_name: str) -> bool:
+    """Allow the owner any school-role QR; limit Direction/Surveillant to office staff."""
+    return target_role_name in admin_qr_available_roles(interaction)
+
+
+def direction_or_owner_check(*, lock: bool = True) -> app_commands.check:
+    """Authorize /resetserver for the server owner or the registered school Direction role."""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        guild = interaction.guild
+        if guild is None or (
+            interaction.user.id != guild.owner_id
+            and not _has_managed_role(interaction, ROLE_DIRECTION)
+        ):
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Cette commande est réservée au propriétaire du serveur ou au rôle `Direction`.",
+                    ephemeral=True,
+                )
+            return False
+        command_name = getattr(getattr(interaction, "command", None), "name", "")
+        pending_message = _pending_removal_message(guild, command_name)
+        if pending_message:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(pending_message, ephemeral=True)
+            return False
+        pending_reset = _pending_reset_message(guild, command_name)
+        if pending_reset:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(pending_reset, ephemeral=True)
+            return False
+        message = _preflight_message(interaction, needs_channels=True, needs_roles=True)
+        if message:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(message, ephemeral=True)
+            return False
+        return True
+
+    check_decorator = app_commands.check(predicate)
+
+    def decorator(function):
+        function = check_decorator(function)
+        # School Direction has MANAGE_ROLES, not Discord's global Administrator bit.
+        function = _apply_default_permission(function, manage_roles=True)
+        return _wrap_with_mutation_lock(function) if lock else function
+
+    return decorator
+
+
+def admin_qr_check(*, lock: bool = True) -> app_commands.check:
+    """Authorize staff who may create admin QR codes; target-role limits are checked separately."""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        guild = interaction.guild
+        allowed = guild is not None and (
+            interaction.user.id == guild.owner_id
+            or _has_managed_role(interaction, ROLE_DIRECTION)
+            or _has_managed_role(interaction, ROLE_SURVEILLANT_GENERAL)
+        )
+        if not allowed:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ `/createadminqr` est réservé au propriétaire, à `Direction` et au `Surveillant Général`.",
+                    ephemeral=True,
+                )
+            return False
+        command_name = getattr(getattr(interaction, "command", None), "name", "")
+        pending_message = _pending_removal_message(guild, command_name)
+        if pending_message:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(pending_message, ephemeral=True)
+            return False
+        pending_reset = _pending_reset_message(guild, command_name)
+        if pending_reset:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(pending_reset, ephemeral=True)
+            return False
+        message = _preflight_message(interaction, needs_channels=True, needs_roles=True)
+        if message:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(message, ephemeral=True)
+            return False
+        return True
+
+    check_decorator = app_commands.check(predicate)
+
+    def decorator(function):
+        function = check_decorator(function)
+        function = _apply_default_permission(function, manage_roles=True)
+        return _wrap_with_mutation_lock(function) if lock else function
+
+    return decorator
+
+
 def owner_only_check(*, lock: bool = True) -> app_commands.check:
     async def predicate(interaction: discord.Interaction) -> bool:
         guild = interaction.guild

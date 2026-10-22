@@ -6,7 +6,13 @@ import discord
 
 import pytest
 
-from services.permissions import ROLE_ADMIN, ROLE_PROFESSOR, ROLE_TEACHER_PENDING, _hierarchy_error, get_managed_role, management_check, owner_only_check, teacher_assignment_check
+from services.permissions import (
+    ROLE_ADMIN, ROLE_DIRECTION, ROLE_PERSONNEL_ADMINISTRATIF, ROLE_PROFESSOR,
+    ROLE_SUPPORT_ENGINEER, ROLE_SURVEILLANT_GENERAL, ROLE_TEACHER_PENDING,
+    _hierarchy_error, admin_qr_available_roles, admin_qr_check, can_create_admin_qr_for_role,
+    direction_or_owner_check, get_managed_role, management_check,
+    owner_only_check, teacher_assignment_check,
+)
 
 
 class FakeRole:
@@ -501,3 +507,108 @@ def test_unregistered_new_management_role_is_not_adopted_by_name(monkeypatch):
     )
 
     assert get_managed_role(guild, ROLE_DIRECTION) is None
+
+
+def _staff_access_fixture(monkeypatch):
+    everyone = role("@everyone", 0, 1)
+    direction = role(ROLE_DIRECTION, 5, 51)
+    surveillant = role(ROLE_SURVEILLANT_GENERAL, 5, 52)
+    personnel = role(ROLE_PERSONNEL_ADMINISTRATIF, 5, 53)
+    support = role(ROLE_SUPPORT_ENGINEER, 5, 54)
+    bot_role = role("Bot", 10, 99)
+    all_roles = [everyone, direction, surveillant, personnel, support, bot_role]
+    roles_by_id = {item.id: item for item in all_roles}
+    guild = SimpleNamespace(
+        id=123,
+        owner_id=999,
+        roles=all_roles,
+        default_role=everyone,
+        me=SimpleNamespace(
+            top_role=bot_role,
+            guild_permissions=SimpleNamespace(
+                manage_channels=True,
+                manage_roles=True,
+                administrator=False,
+            ),
+        ),
+        get_role=lambda role_id: roles_by_id.get(role_id),
+    )
+    config = {
+        "management_role_id": direction.id,
+        "managed": {
+            "roles": {
+                ROLE_DIRECTION: direction.id,
+                ROLE_SURVEILLANT_GENERAL: surveillant.id,
+                ROLE_PERSONNEL_ADMINISTRATIF: personnel.id,
+                ROLE_SUPPORT_ENGINEER: support.id,
+            }
+        },
+    }
+    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: config)
+    response = SimpleNamespace(is_done=lambda: False, send_message=noop)
+    return guild, response, direction, surveillant, personnel, support
+
+
+def _staff_interaction(guild, response, user_id, user_roles, command_name):
+    return SimpleNamespace(
+        guild=guild,
+        user=SimpleNamespace(id=user_id, roles=user_roles),
+        response=response,
+        command=SimpleNamespace(name=command_name),
+    )
+
+
+@pytest.mark.asyncio
+async def test_resetserver_allows_direction_and_owner_but_not_other_managed_roles(monkeypatch):
+    guild, response, direction, surveillant, _personnel, support = _staff_access_fixture(monkeypatch)
+
+    @direction_or_owner_check(lock=False)
+    async def dummy(_interaction):
+        return True
+
+    predicate = dummy.__discord_app_commands_checks__[0]
+    assert await predicate(_staff_interaction(guild, response, 1234, [direction], "resetserver")) is True
+    assert await predicate(_staff_interaction(guild, response, guild.owner_id, [], "resetserver")) is True
+    assert await predicate(_staff_interaction(guild, response, 1234, [surveillant], "resetserver")) is False
+    assert await predicate(_staff_interaction(guild, response, 1234, [support], "resetserver")) is False
+
+
+@pytest.mark.asyncio
+async def test_createadminqr_authorizes_only_owner_direction_and_surveillant(monkeypatch):
+    guild, response, direction, surveillant, personnel, support = _staff_access_fixture(monkeypatch)
+
+    @admin_qr_check(lock=False)
+    async def dummy(_interaction):
+        return True
+
+    predicate = dummy.__discord_app_commands_checks__[0]
+    assert await predicate(_staff_interaction(guild, response, guild.owner_id, [], "createadminqr")) is True
+    assert await predicate(_staff_interaction(guild, response, 1234, [direction], "createadminqr")) is True
+    assert await predicate(_staff_interaction(guild, response, 1234, [surveillant], "createadminqr")) is True
+    assert await predicate(_staff_interaction(guild, response, 1234, [personnel], "createadminqr")) is False
+    assert await predicate(_staff_interaction(guild, response, 1234, [support], "createadminqr")) is False
+
+
+def test_createadminqr_target_policy_limits_staff_to_personnel_administratif(monkeypatch):
+    guild, response, direction, surveillant, _personnel, support = _staff_access_fixture(monkeypatch)
+    direction_interaction = _staff_interaction(guild, response, 1234, [direction], "createadminqr")
+    surveillant_interaction = _staff_interaction(guild, response, 1235, [surveillant], "createadminqr")
+    owner_interaction = _staff_interaction(guild, response, guild.owner_id, [], "createadminqr")
+    support_interaction = _staff_interaction(guild, response, 1236, [support], "createadminqr")
+
+    assert can_create_admin_qr_for_role(direction_interaction, ROLE_PERSONNEL_ADMINISTRATIF) is True
+    assert can_create_admin_qr_for_role(direction_interaction, ROLE_DIRECTION) is False
+    assert can_create_admin_qr_for_role(direction_interaction, ROLE_SURVEILLANT_GENERAL) is False
+    assert can_create_admin_qr_for_role(surveillant_interaction, ROLE_PERSONNEL_ADMINISTRATIF) is True
+    assert can_create_admin_qr_for_role(surveillant_interaction, ROLE_DIRECTION) is False
+    assert can_create_admin_qr_for_role(owner_interaction, ROLE_DIRECTION) is True
+    assert can_create_admin_qr_for_role(owner_interaction, ROLE_SURVEILLANT_GENERAL) is True
+    assert can_create_admin_qr_for_role(owner_interaction, ROLE_PERSONNEL_ADMINISTRATIF) is True
+    assert can_create_admin_qr_for_role(support_interaction, ROLE_PERSONNEL_ADMINISTRATIF) is False
+    assert admin_qr_available_roles(direction_interaction) == (ROLE_PERSONNEL_ADMINISTRATIF,)
+    assert admin_qr_available_roles(surveillant_interaction) == (ROLE_PERSONNEL_ADMINISTRATIF,)
+    assert admin_qr_available_roles(owner_interaction) == (
+        ROLE_DIRECTION, ROLE_SURVEILLANT_GENERAL, ROLE_PERSONNEL_ADMINISTRATIF
+    )
+    assert admin_qr_available_roles(support_interaction) == ()
+    assert can_create_admin_qr_for_role(owner_interaction, ROLE_SUPPORT_ENGINEER) is False

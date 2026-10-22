@@ -10,7 +10,7 @@ from discord.ext import commands
 
 from services.build_guard import get_build_lock
 from services.discord_ownership import validate_managed_registry
-from services.permissions import owner_only_check
+from services.permissions import direction_or_owner_check
 from services.storage import archive_guild_database, get_active_academic_year, get_guild_config, reset_guild_data
 
 OWNED_COMMANDS = {"resetserver"}
@@ -46,8 +46,8 @@ class HardenedResetCommands(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="resetserver", description="Supprimer uniquement les ressources School Manager enregistrées.")
-    @app_commands.describe(confirm="Écris RESET SCHOOL MANAGER pour confirmer. Réservé au propriétaire.")
-    @owner_only_check(lock=False)
+    @app_commands.describe(confirm="Écris RESET SCHOOL MANAGER pour confirmer. Propriétaire ou Direction.")
+    @direction_or_owner_check(lock=False)
     async def reset_server(self, interaction: discord.Interaction, confirm: str) -> None:
         guild = interaction.guild
         if guild is None:

@@ -30,7 +30,7 @@ Core roles:
 - `Prof (F)` (unchanged)
 - `Élève` (unchanged)
 
-The three school-administration roles and `Support Engineer` preserve the current administrative command-access envelope. `/resetserver` and `/createadminqr` remain strictly owner-only. `/createadminqr` lets the owner select `Direction`, `Surveillant Général`, or `Personnel Administratif`; its one-use invite expires after two hours and never grants `Support Engineer`.
+The three school-administration roles and `Support Engineer` preserve the current administrative command-access envelope. `/resetserver` is available to the server owner and the registered `Direction` role, with an explicit confirmation and the existing managed-resource scope checks. `/createadminqr` is available to the owner, `Direction`, and `Surveillant Général`: the owner can issue a QR for any of the three school roles, while `Direction` and `Surveillant Général` can issue a QR only for `Personnel Administratif`. Role suggestions are filtered for the caller and the target is revalidated server-side; each invite is one-use, expires after two hours, and never grants `Support Engineer`.
 
 During the transition, the previously configured `Administration` role remains recognized and tracked only while its exact recorded ID still exists. `/build` creates/reuses the four replacement roles and copies the old role's explicit overwrites to replacement roles only on registered, managed channels/categories. It does not delete the old role or automatically change its members. Move existing staff to the appropriate replacement roles and verify their access before manually deleting `Administration`; the next successful build will then remove that stale role ID from the managed registry. Never use `/resetserver` as a role-migration shortcut.
 
@@ -132,7 +132,7 @@ cogs/
   removestream_fix.py         fail-closed stream removal
   section_aware_exam.py       section-aware exam workflow
   section_aware_timetable.py  section-aware timetable workflow
-  security_hardening_v3.py    scoped owner-only reset
+  security_hardening_v3.py    scoped owner/Direction reset
   year_rollback.py            academic-year rollback
 
 services/
