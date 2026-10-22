@@ -100,7 +100,7 @@ class TeacherFullNameModal(discord.ui.Modal):
         self.onboarding_view = onboarding_view
         self.name_input = discord.ui.TextInput(
             label="Votre nom complet",
-            placeholder="Ex. : Abdellah Hamdan",
+            placeholder=" ",
             min_length=2,
             max_length=100,
             required=True,
