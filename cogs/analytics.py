@@ -43,7 +43,7 @@ class UsageAnalytics(commands.Cog):
 
         if not management_authorized(interaction):
             await interaction.followup.send(
-                "❌ Outil réservé au propriétaire du serveur ou au rôle Administration configuré.",
+                "❌ Outil réservé au propriétaire du serveur ou à un rôle administratif configuré.",
                 ephemeral=True,
             )
             return

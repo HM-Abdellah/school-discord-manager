@@ -152,7 +152,10 @@ def test_legacy_resource_discovery_requires_exact_canonical_names():
 def test_build_structure_does_not_require_on_demand_subject_roles():
     config = {"levels": [{"name": "Tronc Commun", "streams": [{"name": "Tronc Commun Scientifique", "abbreviation": "TCS", "subjects": ["Mathématiques", "Physique-Chimie"]}]}]}
     expected_roles, expected_categories, expected_channels = _expected_structure_names(config)
-    assert expected_roles == {"Administration", "Prof", "Prof (F)", "Élève", "Filière - TCS", "Élèves - TCS"}
+    assert expected_roles == {
+        "Direction", "Surveillant Général", "Personnel Administratif", "Support Engineer",
+        "Prof", "Prof (F)", "Élève", "Filière - TCS", "Élèves - TCS",
+    }
     assert "Matière - TCS - MAT" not in expected_roles
     assert "Matière - TCS - PC" not in expected_roles
     assert len(expected_channels["📘・TC・🔬 TCS"]) == 5
@@ -239,3 +242,21 @@ def test_teacher_qr_commands_are_admin_visible_only():
     assert not hasattr(cog, "teacher_requests")
     assert not hasattr(cog, "approve_teacher")
     assert not hasattr(cog, "reject_teacher")
+
+def test_createadminqr_is_owner_only_and_offers_only_the_three_school_roles():
+    module = importlib.import_module("cogs.teacher_qr_onboarding")
+    bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
+    cog = module.TeacherQROnboarding(bot)
+    command = cog.create_admin_qr
+
+    assert command.default_permissions is not None
+    assert command.default_permissions.administrator is True
+    role_parameter = next(parameter for parameter in command.parameters if parameter.name == "role")
+    assert [choice.value for choice in role_parameter.choices] == [
+        "Direction",
+        "Surveillant Général",
+        "Personnel Administratif",
+    ]
+    awaitable = bot.close()
+    import asyncio
+    asyncio.run(awaitable)

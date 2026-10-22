@@ -22,12 +22,17 @@ The builder is idempotent and protected by a per-guild mutation lock. Builds and
 
 Core roles:
 
-- `Administration`
-- `Prof`
-- `Prof (F)`
-- `Élève`
+- `Direction`
+- `Surveillant Général`
+- `Personnel Administratif`
+- `Support Engineer`
+- `Prof` (unchanged)
+- `Prof (F)` (unchanged)
+- `Élève` (unchanged)
 
-Management commands use the server owner or the configured `Administration` role. Destructive maintenance such as `/resetserver` remains owner-only.
+The three school-administration roles and `Support Engineer` preserve the current administrative command-access envelope. `/resetserver` and `/createadminqr` remain strictly owner-only. `/createadminqr` lets the owner select `Direction`, `Surveillant Général`, or `Personnel Administratif`; its one-use invite expires after two hours and never grants `Support Engineer`.
+
+During the transition, the previously configured `Administration` role remains recognized and tracked only while its exact recorded ID still exists. `/build` creates/reuses the four replacement roles and copies the old role's explicit overwrites to replacement roles only on registered, managed channels/categories. It does not delete the old role or automatically change its members. Move existing staff to the appropriate replacement roles and verify their access before manually deleting `Administration`; the next successful build will then remove that stale role ID from the managed registry. Never use `/resetserver` as a role-migration shortcut.
 
 Managed stream roles are persisted by Discord ID. Destructive operations resolve targets from the persisted managed-resource registry instead of discovering resources by name.
 
@@ -107,7 +112,7 @@ Administrators use `/createclasstransferqr` to prepare a one-student, one-use tr
 /resetserver RESET SCHOOL MANAGER
 ```
 
-`/usagereport` is restricted to the configured server administrator or owner. It exports daily aggregate command-use counts and selected action names from existing audited workflows as a CSV attachment, and stores a local copy under `data/reports/`. The optional `days` value supports `1..400` days. The analytics tables store only server ID, command/action name, outcome, and UTC timestamp; they do not store user IDs, names, command arguments, message contents, or targets. Existing security/audit logs remain separate. Records older than 400 days are pruned as new analytics events are recorded. The report distinguishes completed command callbacks from uncaught application-command errors and from actions recorded by audited workflows; a callback completing is **not** proof that its business operation succeeded, and these metrics do not automatically measure time saved.
+`/usagereport` is restricted to a configured administrative role or the server owner. It exports daily aggregate command-use counts and selected action names from existing audited workflows as a CSV attachment, and stores a local copy under `data/reports/`. The optional `days` value supports `1..400` days. The analytics tables store only server ID, command/action name, outcome, and UTC timestamp; they do not store user IDs, names, command arguments, message contents, or targets. Existing security/audit logs remain separate. Records older than 400 days are pruned as new analytics events are recorded. The report distinguishes completed command callbacks from uncaught application-command errors and from actions recorded by audited workflows; a callback completing is **not** proof that its business operation succeeded, and these metrics do not automatically measure time saved.
 
 `/resetserver` is scoped to persisted School Manager resource IDs and clears that guild’s student/teacher records, audit events, and aggregate usage telemetry. It refuses to start or continue deleting when unregistered channels remain inside a managed category, because keeping such a category after clearing its registry would block a clean rebuild. Move those channels to a separate category, then retry. Unmanaged Discord resources are never directly deleted.
 

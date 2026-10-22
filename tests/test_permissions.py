@@ -415,3 +415,89 @@ async def test_management_mutations_are_blocked_during_interrupted_reset(monkeyp
     assert await dummy.__discord_app_commands_checks__[0](interaction) is False
     response.send_message.assert_awaited_once()
     assert "reset" in response.send_message.await_args.args[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_all_replacement_management_roles_authorize_normal_commands_but_support_is_not_owner(monkeypatch):
+    from services.permissions import (
+        ADMIN_ROLE_NAMES,
+        ROLE_STUDENT,
+        management_authorized,
+    )
+
+    everyone = role("@everyone", 0, 1)
+    replacement_roles = [role(name, 5, 100 + index) for index, name in enumerate(ADMIN_ROLE_NAMES)]
+    student = role(ROLE_STUDENT, 2, 200)
+    bot_role = role("Bot", 10, 999)
+    roles_by_id = {item.id: item for item in [everyone, *replacement_roles, student, bot_role]}
+    guild = SimpleNamespace(
+        owner_id=9999,
+        id=123,
+        roles=list(roles_by_id.values()),
+        default_role=everyone,
+        me=SimpleNamespace(top_role=bot_role),
+        get_role=lambda role_id: roles_by_id.get(role_id),
+    )
+    monkeypatch.setattr(
+        "services.permissions.get_guild_config",
+        lambda _guild_id: {"managed": {"roles": {item.name: item.id for item in replacement_roles}}},
+    )
+
+    for item in replacement_roles:
+        user_roles = [item]
+        if item.name == "Support Engineer":
+            user_roles.append(student)
+        interaction = SimpleNamespace(guild=guild, user=SimpleNamespace(id=1234, roles=user_roles))
+        assert management_authorized(interaction) is True
+
+    owner = SimpleNamespace(id=guild.owner_id, roles=[])
+    assert management_authorized(SimpleNamespace(guild=guild, user=owner)) is True
+
+
+@pytest.mark.asyncio
+async def test_support_engineer_cannot_use_owner_only_commands(monkeypatch):
+    support = role("Support Engineer", 5, 501)
+    everyone = role("@everyone", 0, 1)
+    bot_role = role("Bot", 10, 999)
+    guild = SimpleNamespace(
+        owner_id=9999,
+        id=123,
+        roles=[everyone, support, bot_role],
+        default_role=everyone,
+        me=SimpleNamespace(top_role=bot_role),
+        get_role=lambda role_id: support if role_id == support.id else None,
+    )
+    response = SimpleNamespace(is_done=lambda: False, send_message=noop)
+    interaction = SimpleNamespace(
+        guild=guild,
+        user=SimpleNamespace(id=1234, roles=[support]),
+        response=response,
+        command=SimpleNamespace(name="resetserver"),
+    )
+    monkeypatch.setattr(
+        "services.permissions.get_guild_config",
+        lambda _guild_id: {"managed": {"roles": {"Support Engineer": support.id}}},
+    )
+
+    @owner_only_check(lock=False)
+    async def dummy(_interaction):
+        return True
+
+    predicate = dummy.__discord_app_commands_checks__[0]
+    assert await predicate(interaction) is False
+
+
+def test_unregistered_new_management_role_is_not_adopted_by_name(monkeypatch):
+    from services.permissions import ROLE_DIRECTION
+
+    unregistered = role(ROLE_DIRECTION, 5, 701)
+    guild = SimpleNamespace(id=123, get_role=lambda role_id: unregistered if role_id == unregistered.id else None)
+    monkeypatch.setattr(
+        "services.permissions.get_guild_config",
+        lambda _guild_id: {
+            "levels": [{"name": "Tronc Commun", "streams": [{"name": "Tronc Commun Scientifique"}]}],
+            "managed": {"roles": {}},
+        },
+    )
+
+    assert get_managed_role(guild, ROLE_DIRECTION) is None

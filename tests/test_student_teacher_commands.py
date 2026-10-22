@@ -307,3 +307,40 @@ async def test_legacy_subject_role_migration_touches_only_managed_channels(monke
 
     managed_channel.set_permissions.assert_awaited_once()
     unmanaged_channel.set_permissions.assert_not_awaited()
+
+def test_support_engineer_can_also_be_a_student(monkeypatch):
+    from services.permissions import ROLE_STUDENT, ROLE_SUPPORT_ENGINEER
+    from services.role_conflicts import student_staff_conflict
+
+    support = SimpleNamespace(id=501, name=ROLE_SUPPORT_ENGINEER)
+    student = SimpleNamespace(id=502, name=ROLE_STUDENT)
+    role_map = {ROLE_SUPPORT_ENGINEER: support, ROLE_STUDENT: student}
+    monkeypatch.setattr(
+        "services.role_conflicts.get_managed_role",
+        lambda _guild, name: role_map.get(name),
+    )
+
+    member = SimpleNamespace(bot=False, roles=[support, student])
+    assert student_staff_conflict(member, SimpleNamespace(id=123)) is None
+
+
+def test_support_engineer_is_managed_but_not_treated_as_a_student_assignment_role(monkeypatch):
+    from cogs.students import _school_role_ids, _student_assignment_roles
+
+    support = SimpleNamespace(id=501, name="Support Engineer", managed=False)
+    student = SimpleNamespace(id=502, name="Élève", managed=False)
+    professor = SimpleNamespace(id=503, name="Prof", managed=False)
+    roles_by_id = {item.id: item for item in (support, student, professor)}
+    guild = SimpleNamespace(
+        id=123,
+        roles=[support, student, professor],
+        get_role=lambda role_id: roles_by_id.get(role_id),
+    )
+    monkeypatch.setattr(
+        "cogs.students.get_guild_config",
+        lambda _guild_id: {"managed": {"roles": {item.name: item.id for item in roles_by_id.values()}}},
+    )
+    member = SimpleNamespace(roles=[support, student])
+
+    assert _school_role_ids(guild) == {501, 502, 503}
+    assert _student_assignment_roles(member, guild) == [student]

@@ -154,3 +154,44 @@ async def test_managed_text_channel_rejects_wrong_live_resource_type(monkeypatch
 
     with pytest.raises(ManagedResourceConflict, match="non-text"):
         await validate_managed_registry(guild, config)
+
+
+def test_canonical_role_set_uses_four_replacements_and_does_not_require_legacy_administration():
+    from services.discord_ownership import _expected_canonical_names
+
+    role_names, _category_names, _channel_names = _expected_canonical_names({"levels": []})
+
+    assert {
+        "Direction",
+        "Surveillant Général",
+        "Personnel Administratif",
+        "Support Engineer",
+        "Prof",
+        "Prof (F)",
+        "Élève",
+    }.issubset(role_names)
+    assert "Administration" not in role_names
+
+
+@pytest.mark.asyncio
+async def test_unregistered_new_administrative_role_name_is_a_collision():
+    guild = SimpleNamespace(
+        roles=[SimpleNamespace(id=701, name="Direction", managed=False)],
+        channels=[],
+        fetch_channels=AsyncMock(return_value=[]),
+    )
+
+    with pytest.raises(ManagedResourceConflict, match="refusing silent adoption"):
+        await validate_unmanaged_canonical_collisions(guild, {"levels": []})
+
+
+@pytest.mark.asyncio
+async def test_unregistered_legacy_administration_role_blocks_unsafe_migration_by_name():
+    guild = SimpleNamespace(
+        roles=[SimpleNamespace(id=777, name="Administration", managed=False)],
+        channels=[],
+        fetch_channels=AsyncMock(return_value=[]),
+    )
+
+    with pytest.raises(ManagedResourceConflict, match="unsafe role migration by name"):
+        await validate_unmanaged_canonical_collisions(guild, {"levels": []})

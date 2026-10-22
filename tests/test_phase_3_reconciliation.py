@@ -41,7 +41,7 @@ def _stream_config():
 
 @pytest.mark.asyncio
 async def test_unmanaged_canonical_role_is_rejected():
-    guild = _guild(roles=[SimpleNamespace(id=101, name="Administration", managed=False)])
+    guild = _guild(roles=[SimpleNamespace(id=101, name="Direction", managed=False)])
 
     with pytest.raises(ManagedResourceConflict, match="refusing silent adoption"):
         await validate_unmanaged_canonical_collisions(guild, _stream_config())

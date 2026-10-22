@@ -69,7 +69,10 @@ def test_validate_capacity_rejects_stream_above_category_limit():
 
 @pytest.mark.asyncio
 async def test_existing_main_roles_are_reused_without_create_calls():
-    role_names = ("Administration", "Prof", "Prof (F)", "Élève")
+    role_names = (
+        "Direction", "Surveillant Général", "Personnel Administratif", "Support Engineer",
+        "Prof", "Prof (F)", "Élève",
+    )
     roles = [SimpleNamespace(name=name, id=index + 1) for index, name in enumerate(role_names)]
     guild = SimpleNamespace(roles=roles)
     guild.create_role = AsyncMock()
@@ -492,7 +495,10 @@ async def test_build_preflight_allows_optional_permissions_to_be_absent(monkeypa
         fetch_channels=AsyncMock(return_value=[]),
     )
     builder = ServerBuilder(guild)
-    role_names = ("Administration", "Prof", "Prof (F)", "Élève")
+    role_names = (
+        "Direction", "Surveillant Général", "Personnel Administratif", "Support Engineer",
+        "Prof", "Prof (F)", "Élève",
+    )
     builder._ensure_main_roles = AsyncMock(
         return_value={
             name: SimpleNamespace(id=index + 1, name=name)
@@ -581,3 +587,62 @@ async def test_create_role_forbidden_logs_exact_operation(monkeypatch, capsys):
     assert "operation=create_role" in output
     assert "resource_name='Administration'" in output
     assert "discord_code=50013" in output
+
+
+def test_general_area_overwrites_grant_each_replacement_management_role_the_old_admin_access():
+    everyone = object()
+    direction, supervisor, personnel, support, professor, female_professor, student = (object() for _ in range(7))
+
+    overwrites = general_area_overwrites(
+        everyone,
+        (direction, supervisor, personnel, support),
+        professor,
+        female_professor,
+        student,
+    )
+
+    assert set((direction, supervisor, personnel, support)).issubset(overwrites)
+    for staff_role in (direction, supervisor, personnel, support):
+        assert overwrites[staff_role].view_channel is True
+        assert overwrites[staff_role].manage_channels is True
+    assert overwrites[professor].manage_channels is False
+    assert overwrites[female_professor].manage_channels is False
+    assert overwrites[student].send_messages is False
+
+
+@pytest.mark.asyncio
+async def test_builder_creates_four_management_roles_without_replacing_existing_school_roles(monkeypatch):
+    monkeypatch.setattr(server_builder_module, "ROLE_CREATE_DELAY", 0)
+    teacher_roles = [
+        SimpleNamespace(name="Prof", id=20),
+        SimpleNamespace(name="Prof (F)", id=21),
+        SimpleNamespace(name="Élève", id=22),
+    ]
+    bot_member = SimpleNamespace(guild_permissions=discord.Permissions(view_channel=True, manage_roles=True, manage_channels=True, use_application_commands=True))
+    guild = SimpleNamespace(roles=list(teacher_roles), me=bot_member)
+    created = []
+
+    async def create_role(name, **kwargs):
+        item = SimpleNamespace(name=name, id=100 + len(created))
+        item.permissions = kwargs["permissions"]
+        created.append(item)
+        return item
+
+    guild.create_role = AsyncMock(side_effect=create_role)
+    builder = ServerBuilder(guild)
+
+    roles = await builder._ensure_main_roles()
+
+    assert set(roles) == {
+        "Direction", "Surveillant Général", "Personnel Administratif", "Support Engineer",
+        "Prof", "Prof (F)", "Élève",
+    }
+    assert [item.name for item in created] == [
+        "Direction", "Surveillant Général", "Personnel Administratif", "Support Engineer",
+    ]
+    for name in ("Prof", "Prof (F)", "Élève"):
+        assert roles[name] is next(item for item in teacher_roles if item.name == name)
+    for item in created:
+        assert item.permissions.manage_roles is True
+        assert item.permissions.manage_channels is True
+        assert item.permissions.use_application_commands is True

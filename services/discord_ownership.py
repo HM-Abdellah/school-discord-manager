@@ -19,6 +19,7 @@ from config.curriculum import (
     get_stream_subjects,
 )
 from services.permissions import (
+    ADMIN_ROLE_NAMES,
     ROLE_ADMIN,
     ROLE_PROFESSOR,
     ROLE_PROFESSOR_FEMALE,
@@ -141,7 +142,7 @@ async def validate_managed_registry(guild: discord.Guild, config: dict) -> None:
 def _expected_canonical_names(config: dict) -> tuple[set[str], set[str], set[str]]:
     """Return canonical role/category/channel names the builder may create/reuse."""
     role_names = {
-        ROLE_ADMIN,
+        *ADMIN_ROLE_NAMES,
         ROLE_PROFESSOR,
         ROLE_PROFESSOR_FEMALE,
         ROLE_STUDENT,
@@ -249,10 +250,17 @@ async def validate_unmanaged_canonical_collisions(
     managed_category_ids = set(_mapping(config, "categories").values())
     managed_channel_ids = set(_mapping(config, "channels").values())
 
+    legacy_admin_key = _name_key(ROLE_ADMIN)
     for role in getattr(guild, "roles", []):
         if role.id in managed_role_ids:
             continue
-        if _name_key(role.name) in canonical_role_keys:
+        role_key = _name_key(role.name)
+        if role_key == legacy_admin_key:
+            raise ManagedResourceConflict(
+                f"Legacy role `{ROLE_ADMIN}` exists as ID {role.id} but is absent from the managed registry; "
+                "refusing silent adoption or an unsafe role migration by name."
+            )
+        if role_key in canonical_role_keys:
             ownership = "Discord-managed" if getattr(role, "managed", False) else "unmanaged"
             raise ManagedResourceConflict(
                 f"Canonical role `{role.name}` exists as {ownership} ID {role.id}; refusing silent adoption."

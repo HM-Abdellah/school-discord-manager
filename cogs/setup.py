@@ -160,7 +160,7 @@ class SummaryView(SetupBaseView):
 
         if not management_authorized(interaction):
             await interaction.response.send_message(
-                "❌ Tes droits d'administration ont changé. Relance /setup avec le rôle Administration configuré ou en tant que propriétaire.",
+                "❌ Tes droits d'administration ont changé. Relance /setup avec un rôle administratif configuré ou en tant que propriétaire.",
                 ephemeral=True,
             )
             return

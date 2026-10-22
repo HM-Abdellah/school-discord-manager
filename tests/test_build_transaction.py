@@ -10,8 +10,15 @@ from services.discord_ownership import ManagedResourceConflict
 
 class _FakeBuilder:
     def __init__(self, guild):
+        from services.permissions import ADMIN_ROLE_NAMES
+
         self.guild = guild
         self.rollback = AsyncMock()
+        self.main_roles = {
+            name: SimpleNamespace(id=index + 100, name=name)
+            for index, name in enumerate(ADMIN_ROLE_NAMES)
+        }
+        self.migrate_legacy_admin_overwrites = AsyncMock()
 
     async def build(self, config):
         config["managed"] = {"roles": {"Administration": 10}, "categories": {}, "channels": {}}
@@ -302,3 +309,81 @@ async def test_transaction_tracks_role_created_before_cancellation(monkeypatch):
         await builder._create_role("new-role")
 
     assert builder.created_roles == [role]
+
+
+@pytest.mark.asyncio
+async def test_legacy_administration_overwrites_are_copied_only_to_registered_resources_and_rollback(monkeypatch):
+    import discord
+
+    class Role:
+        def __init__(self, role_id, name):
+            self.id = role_id
+            self.name = name
+            self.managed = False
+
+        def is_default(self):
+            return False
+
+        def __hash__(self):
+            return hash(self.id)
+
+        def __eq__(self, other):
+            return isinstance(other, Role) and self.id == other.id
+
+    class Resource:
+        def __init__(self, resource_id, overwrites):
+            self.id = resource_id
+            self.overwrites = dict(overwrites)
+
+        async def set_permissions(self, role, *, overwrite, reason):
+            if overwrite is None:
+                self.overwrites.pop(role, None)
+            else:
+                self.overwrites[role] = overwrite
+
+    legacy = Role(10, "Administration")
+    new_roles = [
+        Role(11, "Direction"),
+        Role(12, "Surveillant Général"),
+        Role(13, "Personnel Administratif"),
+        Role(14, "Support Engineer"),
+    ]
+    legacy_overwrite = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+    custom_direction_overwrite = discord.PermissionOverwrite(view_channel=False)
+    registered_channel = Resource(20, {legacy: legacy_overwrite})
+    registered_category = Resource(30, {legacy: legacy_overwrite, new_roles[0]: custom_direction_overwrite})
+    unregistered_channel = Resource(40, {legacy: legacy_overwrite})
+    roles_by_id = {legacy.id: legacy}
+    channels_by_id = {20: registered_channel, 30: registered_category, 40: unregistered_channel}
+    guild = SimpleNamespace(
+        id=123,
+        get_role=lambda role_id: roles_by_id.get(role_id),
+        get_channel=lambda channel_id: channels_by_id.get(channel_id),
+    )
+    builder = build_transaction.TransactionalServerBuilder(guild)
+    previous_config = {
+        "management_role_id": legacy.id,
+        "managed": {
+            "roles": {"Administration": legacy.id},
+            "channels": {"private": registered_channel.id},
+            "categories": {"private-category": registered_category.id},
+        },
+    }
+
+    await builder.migrate_legacy_admin_overwrites(previous_config, new_roles)
+
+    for role in new_roles[1:]:
+        assert registered_channel.overwrites[role] == legacy_overwrite
+    assert registered_category.overwrites[new_roles[0]] == custom_direction_overwrite
+    for role in new_roles[1:]:
+        assert registered_category.overwrites[role] == legacy_overwrite
+    assert set(unregistered_channel.overwrites) == {legacy}
+
+    await builder.rollback()
+
+    assert registered_channel.overwrites == {legacy: legacy_overwrite}
+    assert registered_category.overwrites == {
+        legacy: legacy_overwrite,
+        new_roles[0]: custom_direction_overwrite,
+    }
+    assert unregistered_channel.overwrites == {legacy: legacy_overwrite}

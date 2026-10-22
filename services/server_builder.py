@@ -18,10 +18,15 @@ from config.curriculum import (
     get_subject_internal_code,
 )
 from services.permissions import (
+    ADMIN_ROLE_NAMES,
     ROLE_ADMIN,
+    ROLE_DIRECTION,
+    ROLE_PERSONNEL_ADMINISTRATIF,
     ROLE_PROFESSOR,
     ROLE_PROFESSOR_FEMALE,
     ROLE_STUDENT,
+    ROLE_SUPPORT_ENGINEER,
+    ROLE_SURVEILLANT_GENERAL,
     STREAM_ROLE_PREFIX,
     STUDENT_STREAM_ROLE_PREFIX,
     SUBJECT_ROLE_PREFIX,
@@ -268,12 +273,14 @@ def _level_category_name(level_name: str) -> str:
     return LEVEL_PREFIXES.get(level_name, f"📚・{_safe_name(level_name, 30).upper()}")
 
 
-def _subject_channel_overwrites(everyone, admin_role, professor_role, female_professor_role, teacher_stream_role, student_stream_role, student_role=None, bot_member=None):
+def _subject_channel_overwrites(everyone, admin_roles, professor_role, female_professor_role, teacher_stream_role, student_stream_role, student_role=None, bot_member=None):
     teacher = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, create_public_threads=True, send_messages_in_threads=True)
     professor = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
     student = student_subject_channel_overwrite()
     admin = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, manage_channels=True, manage_permissions=True, manage_messages=True, manage_threads=True)
-    overwrites = {everyone: discord.PermissionOverwrite(view_channel=False), admin_role: admin, professor_role: professor, female_professor_role: professor, teacher_stream_role: teacher, student_stream_role: student}
+    role_targets = tuple(admin_roles) if isinstance(admin_roles, (tuple, list, set, frozenset)) else (admin_roles,)
+    overwrites = {everyone: discord.PermissionOverwrite(view_channel=False), professor_role: professor, female_professor_role: professor, teacher_stream_role: teacher, student_stream_role: student}
+    overwrites.update({role: admin for role in role_targets if role is not None})
     if student_role is not None:
         overwrites[student_role] = student_view_overwrite()
     if bot_member is not None:
@@ -309,10 +316,10 @@ def permission_omission_notice(stats: BuildStats) -> str:
     labels = ", ".join(_PERMISSION_LABELS.get(name, name) for name in names)
     return (
         "\n\nℹ️ Construction terminée avec succès sans Administrator. "
-        "Permissions optionnelles non attribuées au rôle Administration : "
+        "Permissions optionnelles non attribuées aux nouveaux rôles administratifs : "
         f"**{labels}**. Le bot ne possède pas ces permissions au niveau du serveur; "
         "elles ne sont donc pas nécessaires à la construction et n'ont pas été "
-        "ajoutées au rôle Administration. Accorde uniquement ces permissions "
+        "attribuées aux rôles administratifs gérés. Accorde uniquement ces permissions "
         "granulaires au bot si tu veux activer ces fonctions de modération."
     )
 
@@ -324,6 +331,7 @@ class ServerBuilder:
         self.guild = guild
         self.stats = BuildStats()
         self.managed: dict[str, dict[str, int]] = {"roles": {}, "categories": {}, "channels": {}}
+        self.main_roles: dict[str, discord.Role] = {}
         self._channel_snapshot: list[discord.abc.GuildChannel] = []
         self._channel_snapshot_refreshed = False
 
@@ -523,8 +531,15 @@ class ServerBuilder:
             )
         print("[BUILD] Phase: main roles", flush=True)
         roles = await self._ensure_main_roles()
+        legacy_admin_role = self._resolve_legacy_admin_role(selected)
+        if legacy_admin_role is not None:
+            # Keep the old role managed during transition so current holders do
+            # not lose access before the owner has moved them to replacement roles.
+            roles[ROLE_ADMIN] = legacy_admin_role
+            self._remember_role(legacy_admin_role)
+        self.main_roles = dict(roles)
         selected["managed"] = self.managed
-        selected["management_role_id"] = roles[ROLE_ADMIN].id
+        selected["management_role_id"] = roles[ROLE_DIRECTION].id
         print("[BUILD] Phase: general area", flush=True)
         await self._ensure_general_area(roles)
         print("[BUILD] Phase: professor area", flush=True)
@@ -566,9 +581,37 @@ class ServerBuilder:
         await asyncio.sleep(ROLE_CREATE_DELAY)
         return role
 
+    def _resolve_legacy_admin_role(self, selected: dict) -> discord.Role | None:
+        """Resolve the old Administration role only from its recorded ID."""
+        managed = selected.get("managed", {}) if isinstance(selected, dict) else {}
+        configured_roles = managed.get("roles", {}) if isinstance(managed, dict) else {}
+        role_id = configured_roles.get(ROLE_ADMIN) if isinstance(configured_roles, dict) else None
+        if not isinstance(role_id, int) or role_id <= 0:
+            role_id = selected.get("management_role_id") if isinstance(selected, dict) else None
+        if not isinstance(role_id, int) or role_id <= 0:
+            return None
+        getter = getattr(self.guild, "get_role", None)
+        role = getter(role_id) if callable(getter) else None
+        if (
+            role is None
+            or role.name != ROLE_ADMIN
+            or getattr(role, "managed", False)
+            or (callable(getattr(role, "is_default", None)) and role.is_default())
+        ):
+            return None
+        return role
+
     async def _ensure_main_roles(self) -> dict[str, discord.Role]:
+        management_permissions = (
+            "view_channel", "send_messages", "read_message_history", "manage_channels",
+            "manage_permissions", "manage_roles", "manage_messages", "manage_threads",
+            "connect", "speak", "stream", "use_application_commands",
+        )
         specs = {
-            ROLE_ADMIN: (discord.Colour.red(), True, True, ("view_channel", "send_messages", "read_message_history", "manage_channels", "manage_permissions", "manage_roles", "manage_messages", "manage_threads", "connect", "speak", "stream", "use_application_commands")),
+            ROLE_DIRECTION: (discord.Colour.red(), True, True, management_permissions),
+            ROLE_SURVEILLANT_GENERAL: (discord.Colour.orange(), True, True, management_permissions),
+            ROLE_PERSONNEL_ADMINISTRATIF: (discord.Colour.gold(), True, True, management_permissions),
+            ROLE_SUPPORT_ENGINEER: (discord.Colour.purple(), True, True, management_permissions),
             ROLE_PROFESSOR: (discord.Colour.blue(), True, True, ("view_channel", "read_message_history", "connect", "speak", "stream", "use_application_commands")),
             ROLE_PROFESSOR_FEMALE: (discord.Colour.blue(), True, True, ("view_channel", "read_message_history", "connect", "speak", "stream", "use_application_commands")),
             ROLE_STUDENT: (discord.Colour.green(), True, True, ("view_channel", "send_messages", "read_message_history", "create_public_threads", "send_messages_in_threads", "connect", "speak", "use_application_commands")),
@@ -697,15 +740,22 @@ class ServerBuilder:
         await self._pace_after_create()
         return channel
 
+    def _management_overwrite_roles(self, roles) -> tuple[discord.Role, ...]:
+        replacements = tuple(roles[name] for name in ADMIN_ROLE_NAMES)
+        legacy = (roles[ROLE_ADMIN],) if ROLE_ADMIN in roles else ()
+        return (*replacements, *legacy)
+
     async def _ensure_general_area(self, roles) -> None:
-        overwrites = general_area_overwrites(self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT])
+        admin_roles = self._management_overwrite_roles(roles)
+        overwrites = general_area_overwrites(self.guild.default_role, admin_roles, roles[ROLE_PROFESSOR], roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT])
         category = await self._get_or_create_category(CATEGORY_GENERAL, overwrites)
         topics = {"actualites": "Annonces et informations officielles de l'établissement.", "absences": "Informations concernant les absences des professeurs.", "results": "Résultats et communications scolaires importantes.", "post_bac": "Orientation, études supérieures, bourses et opportunités post-bac.", "contests": "Concours, clubs, activités et événements scolaires."}
         for key, name in GENERAL_CHANNELS.items():
             await self._get_or_create_text(category, name, topic=topics[key], overwrites=overwrites)
 
     async def _ensure_professor_area(self, roles) -> None:
-        overwrites = teacher_area_overwrites(self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT])
+        admin_roles = self._management_overwrite_roles(roles)
+        overwrites = teacher_area_overwrites(self.guild.default_role, admin_roles, roles[ROLE_PROFESSOR], roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT])
         category = await self._get_or_create_category(CATEGORY_PROFESSORS, overwrites)
         await self._get_or_create_text(category, PROFESSOR_CHANNELS["discussion"], topic="Espace privé de discussion et de coordination des professeurs.", overwrites=overwrites)
         await self._get_or_create_voice(category, PROFESSOR_CHANNELS["meeting"], overwrites)
@@ -720,13 +770,14 @@ class ServerBuilder:
             print(f"[BUILD] Stream start: {level_name}/{code} -> {category.name}", flush=True)
             teacher_stream_role = await self._ensure_stream_role(level_name, stream_name)
             student_stream_role = await self._ensure_student_stream_role(level_name, stream_name)
-            announcement_overwrites = stream_announcement_overwrites(self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT], teacher_stream_role, student_stream_role)
+            admin_roles = self._management_overwrite_roles(roles)
+            announcement_overwrites = stream_announcement_overwrites(self.guild.default_role, admin_roles, roles[ROLE_PROFESSOR], roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT], teacher_stream_role, student_stream_role)
             await self._get_or_create_text(category, f"📌-{code}・informations", topic=f"{code} — {stream_name}. Informations générales et organisation de la filière.", overwrites=announcement_overwrites)
             await self._get_or_create_text(category, f"🗓️-{code}・emploi-du-temps", topic=f"Emplois du temps de {stream_name} ({level_name}).", overwrites=announcement_overwrites)
             await self._get_or_create_text(category, f"📝-{code}・examens", topic=f"Dates, horaires et consignes des examens pour {stream_name} — {level_name}.", overwrites=announcement_overwrites)
             subject_overwrites = _subject_channel_overwrites(
                 self.guild.default_role,
-                roles[ROLE_ADMIN],
+                admin_roles,
                 roles[ROLE_PROFESSOR],
                 roles[ROLE_PROFESSOR_FEMALE],
                 teacher_stream_role,
@@ -736,6 +787,6 @@ class ServerBuilder:
             )
             for subject in subjects:
                 await self._get_or_create_text(category, _subject_channel_name(code, subject), topic=f"Cours, devoirs, exercices, examens blancs et ressources de {get_subject_display_name(subject)} pour {stream_name} ({level_name}).", overwrites=subject_overwrites)
-            await self._get_or_create_voice(voice_category, f"🔊-{_safe_name(code, 30)}-à-distance", public_voice_overwrites(self.guild.default_role, roles[ROLE_ADMIN], roles[ROLE_PROFESSOR], roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT], teacher_stream_role, student_stream_role))
+            await self._get_or_create_voice(voice_category, f"🔊-{_safe_name(code, 30)}-à-distance", public_voice_overwrites(self.guild.default_role, admin_roles, roles[ROLE_PROFESSOR], roles[ROLE_PROFESSOR_FEMALE], roles[ROLE_STUDENT], teacher_stream_role, student_stream_role))
             self.stats.streams_processed += 1
             print(f"[BUILD] Stream done: {level_name}/{code}", flush=True)

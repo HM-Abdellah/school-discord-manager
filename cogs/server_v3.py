@@ -21,7 +21,7 @@ from config.curriculum import (
 from services.build_guard import get_build_lock
 from services.build_transaction import build_and_persist
 from services.permissions import (
-    ROLE_ADMIN,
+    ADMIN_ROLE_NAMES,
     ROLE_PROFESSOR,
     ROLE_PROFESSOR_FEMALE,
     ROLE_STUDENT,
@@ -108,7 +108,7 @@ def _configured_managed_ids(
 
     expected_categories = {CATEGORY_GENERAL, CATEGORY_PROFESSORS, CATEGORY_VOICE}
     expected_roles = {
-        ROLE_ADMIN,
+        *ADMIN_ROLE_NAMES,
         ROLE_PROFESSOR,
         ROLE_PROFESSOR_FEMALE,
         ROLE_STUDENT,
@@ -166,7 +166,7 @@ def _expected_structure_names(
     config: dict,
 ) -> tuple[set[str], set[str], dict[str, set[str]]]:
     expected_roles = {
-        ROLE_ADMIN,
+        *ADMIN_ROLE_NAMES,
         ROLE_PROFESSOR,
         ROLE_PROFESSOR_FEMALE,
         ROLE_STUDENT,

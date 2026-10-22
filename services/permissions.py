@@ -12,7 +12,19 @@ from config.curriculum import get_stream_abbreviation, get_stream_subjects, get_
 from services.build_guard import get_build_lock
 from services.storage import get_guild_config, get_teacher_registration
 
+# Administration is retained only as a compatibility identity during migration.
 ROLE_ADMIN = "Administration"
+ROLE_DIRECTION = "Direction"
+ROLE_SURVEILLANT_GENERAL = "Surveillant Général"
+ROLE_PERSONNEL_ADMINISTRATIF = "Personnel Administratif"
+ROLE_SUPPORT_ENGINEER = "Support Engineer"
+SCHOOL_ADMIN_ROLE_NAMES = (
+    ROLE_DIRECTION,
+    ROLE_SURVEILLANT_GENERAL,
+    ROLE_PERSONNEL_ADMINISTRATIF,
+)
+ADMIN_ROLE_NAMES = (*SCHOOL_ADMIN_ROLE_NAMES, ROLE_SUPPORT_ENGINEER)
+MANAGEMENT_ROLE_NAMES = (*ADMIN_ROLE_NAMES, ROLE_ADMIN)
 ROLE_PROFESSOR = "Prof"
 ROLE_PROFESSOR_FEMALE = "Prof (F)"
 ROLE_TEACHER_PENDING = "Professeur - En attente"
@@ -63,7 +75,12 @@ def _legacy_role_names(config: dict) -> set[str]:
     levels = config.get("levels", []) if isinstance(config, dict) else []
     if not levels:
         return set()
-    names = {ROLE_ADMIN, ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, ROLE_STUDENT}
+    names = {
+        ROLE_ADMIN,  # legacy role kept recognizable while existing staff migrate
+        ROLE_PROFESSOR,
+        ROLE_PROFESSOR_FEMALE,
+        ROLE_STUDENT,
+    }
     for level in levels:
         if not isinstance(level, dict) or not isinstance(level.get("name"), str):
             continue
@@ -134,19 +151,51 @@ def _hierarchy_error(guild: discord.Guild) -> str | None:
     return None
 
 
+def get_management_roles(
+    guild: discord.Guild,
+    *,
+    include_legacy: bool = True,
+) -> tuple[discord.Role, ...]:
+    """Resolve managed administrative roles by their recorded identities.
+
+    The legacy Administration role is included during migration so its holders
+    retain their current access until the owner has moved them to replacement
+    roles and manually removes the old role.
+    """
+    names = MANAGEMENT_ROLE_NAMES if include_legacy else ADMIN_ROLE_NAMES
+    resolved: list[discord.Role] = []
+    for name in names:
+        role = get_managed_role(guild, name)
+        if role is not None and all(existing.id != role.id for existing in resolved):
+            resolved.append(role)
+    return tuple(resolved)
+
+
 def _management_role(guild: discord.Guild) -> discord.Role | None:
+    """Compatibility accessor for the legacy Administration role."""
     return get_managed_role(guild, ROLE_ADMIN)
 
 
 def management_authorized(interaction: discord.Interaction) -> bool:
-    """Return whether the invoking member is the owner or configured administrator."""
+    """Return whether the invoking member is the owner or holds a managed staff role."""
     guild = interaction.guild
     if guild is None:
         return False
     if interaction.user.id == guild.owner_id:
         return True
-    role = _management_role(guild)
-    return role is not None and role in getattr(interaction.user, "roles", [])
+    member_roles = getattr(interaction.user, "roles", [])
+    if not member_roles:
+        return False
+    # Preserve compatibility with the legacy configured-role accessor; this also
+    # keeps authorization safe for minimal interaction objects in unit tests.
+    legacy_role = _management_role(guild)
+    if legacy_role is not None and legacy_role in member_roles:
+        return True
+    member_role_ids = {
+        role.id for role in member_roles
+        if getattr(role, "id", None) is not None
+    }
+    return any(role.id in member_role_ids for role in get_management_roles(guild))
 
 
 def _preflight_message(interaction: discord.Interaction, *, needs_channels: bool = False, needs_roles: bool = False) -> str | None:
@@ -359,7 +408,7 @@ def management_check(*, lock: bool = True) -> app_commands.check:
             return False
         if not management_authorized(interaction):
             if not interaction.response.is_done():
-                await interaction.response.send_message("❌ Outil réservé au propriétaire du serveur ou au rôle Administration configuré.", ephemeral=True)
+                await interaction.response.send_message("❌ Outil réservé au propriétaire du serveur ou à un rôle administratif configuré.", ephemeral=True)
             return False
         command_name = getattr(getattr(interaction, "command", None), "name", "")
         pending_message = _pending_removal_message(guild, command_name)
@@ -389,8 +438,8 @@ def management_check(*, lock: bool = True) -> app_commands.check:
     def decorator(function):
         function = check_decorator(function)
         # Keep management commands hidden from ordinary members at the Discord UI
-        # level while retaining runtime authorization for the configured
-        # Administration role and server owner.
+        # level while retaining runtime authorization for configured
+        # administrative roles and the server owner.
         function = _apply_default_permission(function, manage_roles=True)
         return _wrap_with_mutation_lock(function) if lock else function
 
@@ -473,12 +522,27 @@ def hidden_overwrite() -> discord.PermissionOverwrite:
     return discord.PermissionOverwrite(view_channel=False)
 
 
-def stream_area_overwrites(everyone, admin_role, professor_role, female_professor_role, student_role, teacher_stream_role, student_stream_role):
-    return {everyone: hidden_overwrite(), professor_role: professor_subject_view_overwrite(), female_professor_role: professor_subject_view_overwrite(), admin_role: administrator_overwrite(), teacher_stream_role: professor_subject_view_overwrite(), student_stream_role: student_overwrite(can_send=True)}
+def _role_targets(value):
+    """Accept either the legacy single-role argument or multiple staff roles."""
+    if isinstance(value, (tuple, list, set, frozenset)):
+        return tuple(role for role in value if role is not None)
+    return (value,) if value is not None else ()
 
 
-def stream_announcement_overwrites(everyone, admin_role, professor_role, female_professor_role, student_role, teacher_stream_role, student_stream_role):
-    overwrites = stream_area_overwrites(everyone, admin_role, professor_role, female_professor_role, student_role, teacher_stream_role, student_stream_role)
+def stream_area_overwrites(everyone, admin_roles, professor_role, female_professor_role, student_role, teacher_stream_role, student_stream_role):
+    overwrites = {
+        everyone: hidden_overwrite(),
+        professor_role: professor_subject_view_overwrite(),
+        female_professor_role: professor_subject_view_overwrite(),
+        teacher_stream_role: professor_subject_view_overwrite(),
+        student_stream_role: student_overwrite(can_send=True),
+    }
+    overwrites.update({role: administrator_overwrite() for role in _role_targets(admin_roles)})
+    return overwrites
+
+
+def stream_announcement_overwrites(everyone, admin_roles, professor_role, female_professor_role, student_role, teacher_stream_role, student_stream_role):
+    overwrites = stream_area_overwrites(everyone, admin_roles, professor_role, female_professor_role, student_role, teacher_stream_role, student_stream_role)
     overwrites[professor_role] = professor_general_overwrite()
     overwrites[female_professor_role] = professor_general_overwrite()
     overwrites[teacher_stream_role] = professor_general_overwrite()
@@ -486,21 +550,50 @@ def stream_announcement_overwrites(everyone, admin_role, professor_role, female_
     return overwrites
 
 
-def general_area_overwrites(everyone, admin_role, professor_role, female_professor_role, student_role):
-    return {everyone: discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True), student_role: student_overwrite(can_send=False), professor_role: professor_general_overwrite(), female_professor_role: professor_general_overwrite(), admin_role: administrator_overwrite()}
+def general_area_overwrites(everyone, admin_roles, professor_role, female_professor_role, student_role):
+    overwrites = {
+        everyone: discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True),
+        student_role: student_overwrite(can_send=False),
+        professor_role: professor_general_overwrite(),
+        female_professor_role: professor_general_overwrite(),
+    }
+    overwrites.update({role: administrator_overwrite() for role in _role_targets(admin_roles)})
+    return overwrites
 
 
-def teacher_area_overwrites(everyone, admin_role, professor_role, female_professor_role, student_role):
-    return {everyone: hidden_overwrite(), student_role: hidden_overwrite(), professor_role: professor_general_overwrite(), female_professor_role: professor_general_overwrite(), admin_role: administrator_overwrite()}
+def teacher_area_overwrites(everyone, admin_roles, professor_role, female_professor_role, student_role):
+    overwrites = {
+        everyone: hidden_overwrite(),
+        student_role: hidden_overwrite(),
+        professor_role: professor_general_overwrite(),
+        female_professor_role: professor_general_overwrite(),
+    }
+    overwrites.update({role: administrator_overwrite() for role in _role_targets(admin_roles)})
+    return overwrites
 
 
-def subject_channel_overwrites(everyone, admin_role, professor_role, female_professor_role, teacher_stream_role, student_stream_role, subject_role=None, student_role=None):
-    overwrites = {everyone: hidden_overwrite(), admin_role: administrator_overwrite(), professor_role: professor_subject_view_overwrite(), female_professor_role: professor_subject_view_overwrite(), teacher_stream_role: professor_subject_view_overwrite(), student_stream_role: student_subject_channel_overwrite()}
+def subject_channel_overwrites(everyone, admin_roles, professor_role, female_professor_role, teacher_stream_role, student_stream_role, subject_role=None, student_role=None):
+    overwrites = {
+        everyone: hidden_overwrite(),
+        professor_role: professor_subject_view_overwrite(),
+        female_professor_role: professor_subject_view_overwrite(),
+        teacher_stream_role: professor_subject_view_overwrite(),
+        student_stream_role: student_subject_channel_overwrite(),
+    }
+    overwrites.update({role: administrator_overwrite() for role in _role_targets(admin_roles)})
     if subject_role is not None:
         overwrites[subject_role] = professor_subject_member_overwrite()
     return overwrites
 
 
-def public_voice_overwrites(everyone, admin_role, professor_role, female_professor_role, student_role, teacher_stream_role, student_stream_role):
+def public_voice_overwrites(everyone, admin_roles, professor_role, female_professor_role, student_role, teacher_stream_role, student_stream_role):
     voice = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, stream=True)
-    return {everyone: hidden_overwrite(), professor_role: voice, female_professor_role: voice, admin_role: voice, teacher_stream_role: voice, student_stream_role: voice}
+    overwrites = {
+        everyone: hidden_overwrite(),
+        professor_role: voice,
+        female_professor_role: voice,
+        teacher_stream_role: voice,
+        student_stream_role: voice,
+    }
+    overwrites.update({role: voice for role in _role_targets(admin_roles)})
+    return overwrites

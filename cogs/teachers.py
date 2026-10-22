@@ -24,10 +24,10 @@ from services.discord_registry import resolve_registered_text_channel
 from services.role_transactions import restore_role_presence, snapshot_role_presence
 from services.role_conflicts import teacher_target_conflict
 from services.permissions import (
-    ROLE_ADMIN,
     ROLE_PROFESSOR,
     ROLE_PROFESSOR_FEMALE,
     get_managed_role,
+    get_management_roles,
     management_check,
     professor_subject_member_overwrite,
     professor_subject_view_overwrite,
@@ -215,12 +215,12 @@ class TeacherCommands(commands.Cog):
             original_overwrites = dict(channel.overwrites)
 
             overwrites = {guild.default_role: hidden_overwrite(), stream_role: professor_subject_view_overwrite()}
-            admin_role = get_managed_role(guild, ROLE_ADMIN)
+            administrative_roles = get_management_roles(guild)
             prof_role = get_managed_role(guild, ROLE_PROFESSOR)
             prof_f_role = get_managed_role(guild, ROLE_PROFESSOR_FEMALE)
             student_stream_role = get_managed_role(guild, f"Élèves - {code}")
-            if admin_role is not None:
-                overwrites[admin_role] = administrator_overwrite()
+            for administrative_role in administrative_roles:
+                overwrites[administrative_role] = administrator_overwrite()
             if prof_role is not None:
                 overwrites[prof_role] = professor_subject_view_overwrite()
             if prof_f_role is not None:
