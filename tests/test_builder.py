@@ -4,10 +4,22 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
+from services import server_builder as server_builder_module
+from services.permissions import (
+    general_area_overwrites,
+    public_voice_overwrites,
+    stream_announcement_overwrites,
+    teacher_area_overwrites,
+)
 from services.server_builder import (
+    BuildPermissionError,
+    BuildStats,
     ServerBuilder,
+    _prepare_channel_overwrites,
+    _required_setup_permissions,
     _stream_category_name,
     _subject_channel_overwrites,
+    permission_omission_notice,
 )
 
 
@@ -267,3 +279,305 @@ def test_fresh_channel_snapshot_does_not_reuse_deleted_cached_text_channel():
     builder._channel_snapshot_refreshed = True
 
     assert builder._find_text(category, "stale-channel") is None
+
+
+
+
+def test_general_area_overwrites_do_not_report_manage_roles_as_missing_from_bot():
+    # Mirrors the live bot's granular permissions: it can manage channels/roles
+    # and the ordinary text/thread/voice permissions, but not Manage Messages
+    # or Manage Threads. Discord rejects channel creation if either unsupported
+    # bit appears in an allow OR deny overwrite.
+    bot_member = type("BotMember", (), {})()
+    bot_member.guild_permissions = discord.Permissions(
+        view_channel=True,
+        manage_channels=True,
+        manage_roles=True,
+        create_instant_invite=True,
+        send_messages=True,
+        read_message_history=True,
+        embed_links=True,
+        attach_files=True,
+        use_application_commands=True,
+        create_public_threads=True,
+        create_private_threads=True,
+        send_messages_in_threads=True,
+        connect=True,
+        speak=True,
+        stream=True,
+    )
+    everyone, admin, professor, female_professor, student = (object() for _ in range(5))
+    policy = general_area_overwrites(
+        everyone, admin, professor, female_professor, student
+    )
+
+    prepared, omitted = _prepare_channel_overwrites(
+        SimpleNamespace(me=bot_member), policy
+    )
+
+    assert set(omitted) == {"manage_messages", "manage_threads"}
+    for overwrite in prepared.values():
+        allow, deny = overwrite.pair()
+        assert int(allow.value) & ~int(bot_member.guild_permissions.value) == 0
+        assert int(deny.value) & ~int(bot_member.guild_permissions.value) == 0
+    assert prepared[professor].manage_messages is None
+    assert prepared[professor].manage_threads is None
+    assert prepared[admin].manage_roles is None
+    assert prepared[bot_member].view_channel is True
+
+
+def test_permission_omission_notice_is_informational_and_precise():
+    stats = BuildStats()
+    stats.omitted_permissions.update({"manage_messages", "manage_threads"})
+
+    notice = permission_omission_notice(stats)
+
+    assert notice.startswith("\n\nℹ️ Construction terminée avec succès")
+    assert "Manage Messages, Manage Threads" in notice
+    assert "Manage Roles" not in notice
+    assert "Administrator" in notice
+
+
+def test_overwrite_omissions_are_tracked_without_terminal_noise(capsys):
+    builder = ServerBuilder(SimpleNamespace())
+
+    builder._record_permission_omissions(["manage_threads", "manage_messages"])
+    builder._record_permission_omissions(["manage_messages", "manage_threads"])
+
+    assert capsys.readouterr().out == ""
+    assert builder.stats.omitted_permissions == {"manage_messages", "manage_threads"}
+
+
+def test_required_setup_permissions_are_only_the_structural_baseline():
+    required = _required_setup_permissions()
+    assert required.view_channel is True
+    assert required.manage_channels is True
+    assert required.manage_roles is True
+    for name in (
+        "send_messages",
+        "read_message_history",
+        "manage_messages",
+        "manage_threads",
+        "connect",
+        "speak",
+        "stream",
+        "use_application_commands",
+        "create_public_threads",
+        "create_private_threads",
+        "send_messages_in_threads",
+    ):
+        assert getattr(required, name) is False
+
+
+def test_channel_overwrites_filter_ungranted_allows_and_denies_without_mutating_input():
+    bot_member = MagicMock()
+    bot_member.guild_permissions = discord.Permissions(
+        view_channel=True,
+        manage_channels=True,
+        manage_roles=True,
+        send_messages=True,
+        read_message_history=True,
+        connect=True,
+        speak=True,
+        stream=True,
+        use_application_commands=True,
+        create_public_threads=True,
+        create_private_threads=True,
+        send_messages_in_threads=True,
+    )
+    everyone = object()
+    admin_role = object()
+    professor_role = object()
+    everyone_overwrite = discord.PermissionOverwrite(view_channel=False)
+    admin_overwrite = discord.PermissionOverwrite(
+        view_channel=True,
+        manage_channels=True,
+        manage_permissions=True,
+        manage_messages=True,
+        manage_threads=True,
+    )
+    professor_overwrite = discord.PermissionOverwrite(
+        view_channel=True,
+        send_messages=False,
+        manage_roles=False,
+        manage_messages=False,
+        manage_threads=False,
+        create_private_threads=False,
+    )
+    original = {
+        everyone: everyone_overwrite,
+        admin_role: admin_overwrite,
+        professor_role: professor_overwrite,
+    }
+
+    prepared, omitted = _prepare_channel_overwrites(
+        SimpleNamespace(me=bot_member),
+        original,
+    )
+
+    assert prepared is not original
+    assert set(omitted) == {"manage_messages", "manage_threads"}
+    assert everyone in prepared and prepared[everyone].view_channel is False
+    assert prepared[admin_role].view_channel is True
+    assert prepared[admin_role].manage_channels is True
+    assert prepared[admin_role].manage_roles is None
+    assert prepared[admin_role].manage_permissions is None
+    assert prepared[admin_role].manage_messages is None
+    assert prepared[admin_role].manage_threads is None
+    assert prepared[professor_role].send_messages is False
+    assert prepared[professor_role].manage_roles is None
+    # The bot cannot express denials for permissions it does not hold at guild level.
+    assert prepared[professor_role].manage_messages is None
+    assert prepared[professor_role].manage_threads is None
+    assert prepared[professor_role].create_private_threads is False
+    assert all(overwrite.manage_roles is None for overwrite in prepared.values())
+    for overwrite in prepared.values():
+        allow, deny = overwrite.pair()
+        assert int(allow.value) & ~int(bot_member.guild_permissions.value) == 0
+        assert int(deny.value) & ~int(bot_member.guild_permissions.value) == 0
+    # The builder grants the bot only explicit visibility/history/posting it
+    # already possesses, so hidden categories do not lock the bot out.
+    assert prepared[bot_member].view_channel is True
+    assert prepared[bot_member].read_message_history is True
+    assert prepared[bot_member].send_messages is True
+    # Caller-owned permission objects must remain unchanged.
+    assert original[admin_role].manage_permissions is True
+    assert original[admin_role].manage_roles is True
+    assert original[admin_role].manage_messages is True
+    assert original[admin_role].manage_threads is True
+    assert original[professor_role].manage_roles is False
+
+
+@pytest.mark.asyncio
+async def test_build_preflight_reports_missing_structural_permission_before_mutation():
+    bot_permissions = _required_setup_permissions()
+    bot_permissions.manage_channels = False
+    bot_member = MagicMock()
+    bot_member.guild_permissions = bot_permissions
+    guild = SimpleNamespace(
+        id=1,
+        me=bot_member,
+        roles=[],
+        channels=[],
+        categories=[],
+        fetch_channels=AsyncMock(return_value=[]),
+        create_role=AsyncMock(),
+        create_category=AsyncMock(),
+    )
+    builder = ServerBuilder(guild)
+
+    with pytest.raises(BuildPermissionError) as caught:
+        await builder.build({"levels": []})
+
+    assert "Manage Channels (manage_channels)" in str(caught.value)
+    assert "Administrator n'est pas nécessaire" in str(caught.value)
+    guild.create_role.assert_not_awaited()
+    guild.create_category.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_build_preflight_allows_optional_permissions_to_be_absent(monkeypatch):
+    bot_member = MagicMock()
+    bot_member.guild_permissions = discord.Permissions(
+        view_channel=True,
+        manage_channels=True,
+        manage_roles=True,
+    )
+    guild = SimpleNamespace(
+        id=1,
+        me=bot_member,
+        roles=[],
+        channels=[],
+        categories=[],
+        fetch_channels=AsyncMock(return_value=[]),
+    )
+    builder = ServerBuilder(guild)
+    role_names = ("Administration", "Prof", "Prof (F)", "Élève")
+    builder._ensure_main_roles = AsyncMock(
+        return_value={
+            name: SimpleNamespace(id=index + 1, name=name)
+            for index, name in enumerate(role_names)
+        }
+    )
+    builder._ensure_general_area = AsyncMock()
+    builder._ensure_professor_area = AsyncMock()
+    builder._get_or_create_category = AsyncMock(return_value=SimpleNamespace())
+
+    stats = await builder.build({"levels": []})
+
+    assert bot_member.guild_permissions.administrator is False
+    assert stats.levels_processed == 0
+    builder._ensure_main_roles.assert_awaited_once()
+    builder._ensure_general_area.assert_awaited_once()
+    builder._ensure_professor_area.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_create_role_filters_ungranted_permissions_instead_of_retrying(monkeypatch, capsys):
+    bot_member = MagicMock()
+    bot_member.guild_permissions = discord.Permissions(
+        view_channel=True,
+        manage_channels=True,
+        manage_roles=True,
+    )
+    role = SimpleNamespace(id=22, name="Administration")
+    guild = SimpleNamespace(id=1, me=bot_member)
+    guild.create_role = AsyncMock(return_value=role)
+    monkeypatch.setattr(server_builder_module, "ROLE_CREATE_DELAY", 0)
+    builder = ServerBuilder(guild)
+
+    result = await builder._create_role(
+        "Administration",
+        permissions=discord.Permissions(
+            view_channel=True,
+            manage_roles=True,
+            manage_messages=True,
+            manage_threads=True,
+        ),
+        colour=discord.Colour.red(),
+        reason="test",
+    )
+
+    assert result is role
+    guild.create_role.assert_awaited_once()
+    granted = guild.create_role.await_args.kwargs["permissions"]
+    assert granted.view_channel is True
+    assert granted.manage_roles is True
+    assert granted.manage_messages is False
+    assert granted.manage_threads is False
+    assert builder.stats.omitted_permissions == {"manage_messages", "manage_threads"}
+    output = capsys.readouterr().out
+    assert "omitted_ungranted_permissions=" not in output
+    assert "[BUILD INFO]" not in output
+
+
+@pytest.mark.asyncio
+async def test_create_role_forbidden_logs_exact_operation(monkeypatch, capsys):
+    bot_member = MagicMock()
+    bot_member.guild_permissions = _required_setup_permissions()
+    guild = SimpleNamespace(id=1, me=bot_member)
+    response = SimpleNamespace(status=403, reason="Forbidden")
+    forbidden = discord.Forbidden(
+        response,
+        {"message": "Missing Permissions", "code": 50013},
+    )
+    guild.create_role = AsyncMock(side_effect=forbidden)
+    monkeypatch.setattr(server_builder_module, "ROLE_CREATE_DELAY", 0)
+    builder = ServerBuilder(guild)
+
+    with pytest.raises(discord.Forbidden):
+        await builder._create_role(
+            "Administration",
+            permissions=discord.Permissions(
+                view_channel=True,
+                manage_roles=True,
+            ),
+            colour=discord.Colour.red(),
+            reason="test",
+        )
+
+    guild.create_role.assert_awaited_once()
+    output = capsys.readouterr().out
+    assert "operation=create_role" in output
+    assert "resource_name='Administration'" in output
+    assert "discord_code=50013" in output

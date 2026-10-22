@@ -1360,6 +1360,7 @@ def list_academic_years(guild_id: int) -> list[sqlite3.Row]:
         return conn.execute("SELECT * FROM academic_years WHERE guild_id=? ORDER BY name DESC", (guild_id,)).fetchall()
 
 
+
 def _sync_configuration_to_database_conn(conn: sqlite3.Connection, guild_id: int, config: dict[str, Any]) -> None:
     """Snapshot configured streams into the active academic year without switching years."""
     active = conn.execute(

@@ -31,6 +31,11 @@ def test_setup_delegates_build_and_persistence_to_transaction_service():
     assert "save_guild_config" not in lines
 
 
+def test_setup_success_message_stays_success_only():
+    source = (ROOT / "cogs" / "setup.py").read_text(encoding="utf-8")
+    assert "permission_omission_notice" not in source
+
+
 def test_transaction_service_build_happens_before_config_persistence():
     node = _function_node(ROOT / "services" / "build_transaction.py", "build_and_persist")
     lines = _call_line_numbers(node)

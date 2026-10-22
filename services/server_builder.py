@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 import unicodedata
+from copy import copy
 
 import discord
 
@@ -62,6 +63,162 @@ STREAM_EMOJIS = {
 
 ROLE_CREATE_DELAY = 1.0
 RESOURCE_CREATE_DELAY = 0.2
+
+
+class BuildPermissionError(RuntimeError):
+    """A setup build cannot safely run with the bot's current permissions."""
+
+
+# These permissions are needed to discover existing resources and create the
+# requested Discord resources. Other role/channel permission bits are shaped
+# to the bot's actual grants instead of requiring Administrator.
+_REQUIRED_SETUP_PERMISSION_NAMES = (
+    "view_channel",
+    "manage_channels",
+    "manage_roles",
+)
+
+_PERMISSION_LABELS = {
+    "view_channel": "View Channel",
+    "send_messages": "Send Messages",
+    "read_message_history": "Read Message History",
+    "manage_channels": "Manage Channels",
+    "manage_roles": "Manage Roles",
+    "manage_messages": "Manage Messages",
+    "manage_threads": "Manage Threads",
+    "connect": "Connect",
+    "speak": "Speak",
+    "stream": "Video",
+    "use_application_commands": "Use Application Commands",
+    "create_public_threads": "Create Public Threads",
+    "create_private_threads": "Create Private Threads",
+    "send_messages_in_threads": "Send Messages in Threads",
+}
+
+
+def _permission_names_for_bits(permission_bits: int) -> list[str]:
+    """Map permission bits to stable, user-facing canonical names."""
+    flags = getattr(discord.Permissions, "VALID_FLAGS", {})
+    return sorted(
+        name
+        for name in _PERMISSION_LABELS
+        if name in flags and (int(flags[name]) & int(permission_bits))
+    )
+
+
+def _required_setup_permissions() -> discord.Permissions:
+    """Return the minimum effective guild permissions needed to build safely."""
+    requested = discord.Permissions.none()
+    for name in _REQUIRED_SETUP_PERMISSION_NAMES:
+        setattr(requested, name, True)
+    return requested
+
+
+def _missing_requested_permissions(
+    guild: discord.Guild,
+    requested: discord.Permissions,
+) -> list[str] | None:
+    """Return requested permission bits the bot does not currently hold."""
+    bot_member = getattr(guild, "me", None)
+    current = getattr(bot_member, "guild_permissions", None)
+    if current is None:
+        return None
+    if getattr(current, "administrator", False):
+        return []
+
+    missing_bits = int(requested.value) & ~int(current.value)
+    return _permission_names_for_bits(missing_bits)
+
+
+def _grantable_permissions(
+    guild: discord.Guild,
+    requested: discord.Permissions,
+) -> tuple[discord.Permissions, list[str]]:
+    """Keep only permission bits the bot is allowed to grant to another resource."""
+    bot_member = getattr(guild, "me", None)
+    current = getattr(bot_member, "guild_permissions", None)
+    if current is None:
+        raise BuildPermissionError(
+            "Impossible d'identifier les permissions effectives du bot; aucun droit n'a été accordé."
+        )
+    if getattr(current, "administrator", False):
+        return requested, []
+
+    requested_bits = int(requested.value)
+    current_bits = int(current.value)
+    omitted_bits = requested_bits & ~current_bits
+    return (
+        discord.Permissions(requested_bits & current_bits),
+        _permission_names_for_bits(omitted_bits),
+    )
+
+
+def _prepare_channel_overwrites(
+    guild: discord.Guild,
+    overwrites: dict | None,
+) -> tuple[dict | None, list[str]]:
+    """Fit allow/deny overwrites to the bot's grants without mutating the policy.
+
+    Discord won't let a bot grant arbitrary permission bits through role/channel
+    configuration when it does not possess those bits itself. Remove those bits
+    consistently from role grants and channel overwrites; callers report any
+    omitted capabilities explicitly rather than silently claiming full access.
+    """
+    if overwrites is None:
+        return None, []
+
+    bot_member = getattr(guild, "me", None)
+    current = getattr(bot_member, "guild_permissions", None)
+    if bot_member is None or current is None:
+        raise BuildPermissionError(
+            "Impossible d'identifier les permissions effectives du bot; aucun salon n'a été créé."
+        )
+    if not getattr(current, "view_channel", False) and not getattr(current, "administrator", False):
+        raise BuildPermissionError(
+            "View Channel est nécessaire pour garantir l'accès du bot aux salons privés gérés."
+        )
+
+    prepared: dict = {}
+    omitted: set[str] = set()
+    for target, overwrite in overwrites.items():
+        if getattr(current, "administrator", False):
+            prepared[target] = copy(overwrite)
+            continue
+        allow, deny = overwrite.pair()
+        # Discord rejects MANAGE_ROLES in channel permission overwrites when
+        # the caller is not a guild Administrator, even when it has the
+        # guild-level Manage Roles permission. Keep that capability on the
+        # managed role itself, but never send this bit in channel overwrites.
+        # This is a Discord channel-overwrite restriction, not a permission
+        # missing from the bot's guild-level grants; do not report it as missing.
+        allow.manage_roles = False
+        deny.manage_roles = False
+
+        grantable_allow, removed_allow = _grantable_permissions(guild, allow)
+        grantable_deny, removed_deny = _grantable_permissions(guild, deny)
+        omitted.update(removed_allow)
+        omitted.update(removed_deny)
+        # Discord validates denied bits too: the request cannot set a channel
+        # overwrite for permissions the bot does not hold at guild level.
+        # Keep every supported explicit deny, but strip unsupported deny bits
+        # instead of sending an invalid payload that fails with 403 / 50013.
+        prepared[target] = discord.PermissionOverwrite.from_pair(
+            grantable_allow,
+            grantable_deny,
+        )
+
+    # Keep only the narrow bot-member visibility grant. It is needed because
+    # some managed areas intentionally hide @everyone from private channels.
+    bot_overwrite = copy(
+        prepared.get(bot_member, discord.PermissionOverwrite())
+    )
+    bot_overwrite.view_channel = True
+    if getattr(current, "read_message_history", False):
+        bot_overwrite.read_message_history = True
+    if getattr(current, "send_messages", False):
+        bot_overwrite.send_messages = True
+    prepared[bot_member] = bot_overwrite
+    return prepared, sorted(omitted)
 
 
 def _safe_name(value: str, max_length: int = 80) -> str:
@@ -141,6 +298,23 @@ class BuildStats:
         self.voice_channels_created = 0
         self.levels_processed = 0
         self.streams_processed = 0
+        self.omitted_permissions: set[str] = set()
+
+
+def permission_omission_notice(stats: BuildStats) -> str:
+    """Format a visible notice when optional Discord capabilities were omitted."""
+    names = sorted(getattr(stats, "omitted_permissions", set()))
+    if not names:
+        return ""
+    labels = ", ".join(_PERMISSION_LABELS.get(name, name) for name in names)
+    return (
+        "\n\nℹ️ Construction terminée avec succès sans Administrator. "
+        "Permissions optionnelles non attribuées au rôle Administration : "
+        f"**{labels}**. Le bot ne possède pas ces permissions au niveau du serveur; "
+        "elles ne sont donc pas nécessaires à la construction et n'ont pas été "
+        "ajoutées au rôle Administration. Accorde uniquement ces permissions "
+        "granulaires au bot si tu veux activer ces fonctions de modération."
+    )
 
 
 class ServerBuilder:
@@ -327,6 +501,26 @@ class ServerBuilder:
         await self._refresh_channel_snapshot()
         print("[BUILD] Phase: capacity check", flush=True)
         self._validate_capacity(selected)
+        print("[BUILD] Phase: permission preflight", flush=True)
+        missing_permissions = _missing_requested_permissions(
+            self.guild,
+            _required_setup_permissions(),
+        )
+        if missing_permissions is None:
+            raise BuildPermissionError(
+                "Impossible de lire les permissions effectives du bot; aucun resource n'a été créé."
+            )
+        if missing_permissions:
+            missing_labels = [
+                f"{_PERMISSION_LABELS.get(name, name)} ({name})"
+                for name in missing_permissions
+            ]
+            raise BuildPermissionError(
+                "Permissions de base manquantes sur le rôle du bot : "
+                + ", ".join(missing_labels)
+                + ". Ajoute uniquement ces permissions au rôle du bot; "
+                "Administrator n'est pas nécessaire. La construction a été arrêtée avant toute création."
+            )
         print("[BUILD] Phase: main roles", flush=True)
         roles = await self._ensure_main_roles()
         selected["managed"] = self.managed
@@ -346,7 +540,27 @@ class ServerBuilder:
 
     async def _create_role(self, name: str, *, permissions: discord.Permissions, colour: discord.Colour, hoist: bool = False, mentionable: bool = False, reason: str) -> discord.Role:
         print(f"[BUILD] -> create role: {name}", flush=True)
-        role = await self.guild.create_role(name=name, permissions=permissions, colour=colour, hoist=hoist, mentionable=mentionable, reason=reason)
+        grantable, omitted = _grantable_permissions(self.guild, permissions)
+        self.stats.omitted_permissions.update(omitted)
+        try:
+            role = await self.guild.create_role(
+                name=name,
+                permissions=grantable,
+                colour=colour,
+                hoist=hoist,
+                mentionable=mentionable,
+                reason=reason,
+            )
+        except discord.Forbidden as exc:
+            print(
+                f"[BUILD PERMISSION ERROR] operation=create_role; resource_name={name!r}; "
+                f"http_status={getattr(exc, 'status', 'unknown')}; "
+                f"discord_code={getattr(exc, 'code', 'unknown')}; "
+                f"discord_message={getattr(exc, 'text', '') or str(exc)}",
+                flush=True,
+            )
+            raise
+
         print(f"[BUILD] <- create role: {name}", flush=True)
         self.stats.roles_created += 1
         await asyncio.sleep(ROLE_CREATE_DELAY)
@@ -393,15 +607,31 @@ class ServerBuilder:
         self._remember_role(role)
         return role
 
+    def _record_permission_omissions(self, omitted: list[str]) -> None:
+        """Track optional permissions omitted during construction without log noise."""
+        self.stats.omitted_permissions.update(omitted)
+
     async def _get_or_create_category(self, name: str, overwrites=None) -> discord.CategoryChannel:
         category = self._find_category(name)
         if category is not None:
             self._remember_category(category)
             return category
-        kwargs = {"name": name, "reason": "School manager automatic setup"}
-        if overwrites is not None:
-            kwargs["overwrites"] = overwrites
-        category = await self.guild.create_category(**kwargs)
+        kwargs = {"name": name, "reason": "School Manager automatic setup"}
+        prepared, omitted = _prepare_channel_overwrites(self.guild, overwrites)
+        self._record_permission_omissions(omitted)
+        if prepared is not None:
+            kwargs["overwrites"] = prepared
+        try:
+            category = await self.guild.create_category(**kwargs)
+        except discord.Forbidden as exc:
+            print(
+                f"[BUILD PERMISSION ERROR] operation=create_category; resource_name={name!r}; "
+                f"http_status={getattr(exc, 'status', 'unknown')}; "
+                f"discord_code={getattr(exc, 'code', 'unknown')}; "
+                f"discord_message={getattr(exc, 'text', '') or str(exc)}",
+                flush=True,
+            )
+            raise
         self.stats.categories_created += 1
         self._remember_category(category)
         self._channel_snapshot.append(category)
@@ -413,7 +643,25 @@ class ServerBuilder:
         if channel is not None:
             self._remember_channel(channel)
             return channel
-        channel = await category.create_text_channel(name=name, topic=topic, overwrites=overwrites, reason="School manager automatic setup")
+        prepared, omitted = _prepare_channel_overwrites(self.guild, overwrites)
+        self._record_permission_omissions(omitted)
+        try:
+            channel = await category.create_text_channel(
+                name=name,
+                topic=topic,
+                overwrites=prepared,
+                reason="School Manager automatic setup",
+            )
+        except discord.Forbidden as exc:
+            print(
+                f"[BUILD PERMISSION ERROR] operation=create_text_channel; resource_name={name!r}; "
+                f"category={category.name!r}; "
+                f"http_status={getattr(exc, 'status', 'unknown')}; "
+                f"discord_code={getattr(exc, 'code', 'unknown')}; "
+                f"discord_message={getattr(exc, 'text', '') or str(exc)}",
+                flush=True,
+            )
+            raise
         self.stats.text_channels_created += 1
         self._remember_channel(channel)
         self._channel_snapshot.append(channel)
@@ -425,7 +673,24 @@ class ServerBuilder:
         if channel is not None:
             self._remember_channel(channel)
             return channel
-        channel = await category.create_voice_channel(name=name, overwrites=overwrites, reason="School manager automatic setup")
+        prepared, omitted = _prepare_channel_overwrites(self.guild, overwrites)
+        self._record_permission_omissions(omitted)
+        try:
+            channel = await category.create_voice_channel(
+                name=name,
+                overwrites=prepared,
+                reason="School Manager automatic setup",
+            )
+        except discord.Forbidden as exc:
+            print(
+                f"[BUILD PERMISSION ERROR] operation=create_voice_channel; resource_name={name!r}; "
+                f"category={category.name!r}; "
+                f"http_status={getattr(exc, 'status', 'unknown')}; "
+                f"discord_code={getattr(exc, 'code', 'unknown')}; "
+                f"discord_message={getattr(exc, 'text', '') or str(exc)}",
+                flush=True,
+            )
+            raise
         self.stats.voice_channels_created += 1
         self._remember_channel(channel)
         self._channel_snapshot.append(channel)
