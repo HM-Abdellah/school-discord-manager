@@ -174,9 +174,32 @@ The live E2E gate is intentionally separate from CI. Discord slash-command execu
 
 ### Discord Developer Portal prerequisites
 
-The bot enables Discord's **Guild Members privileged intent** because the application uses live guild member state for role-based administration and member discovery. Before starting the bot, open **Developer Portal → Bot → Privileged Gateway Intents** and enable **Server Members Intent**. Discord requires privileged intents to be enabled in the application's settings; verified apps may have additional access requirements. See Discord's current [Privileged Intents documentation](https://support-dev.discord.com/hc/en-us/articles/6207308062871-What-are-Privileged-Intents) and the [2026 server-data access requirements](https://discord.com/blog/updated-requirements-to-how-apps-access-data-in-servers).
+Create and configure the application at the [Discord Developer Portal](https://discord.com/developers/applications). Discord's client-side **Developer Mode** is only used to copy IDs; it is not where bot applications are created.
 
-The bot does **not** enable Message Content Intent in code.
+1. Create an application for the school, open its **Bot** page, and make sure it has a bot user.
+2. Under **Bot → Privileged Gateway Intents**, enable **Server Members Intent**. The current `bot.py` enables `intents.members` because SDM uses guild-member state for administrative workflows.
+3. Leave **Message Content Intent** and **Presence Intent** disabled for this version. The current bot code does not enable them.
+4. In **Installation** or the OAuth2 install/URL generator settings, use the `bot` and `applications.commands` scopes for server installation.
+5. Request the following bot permissions for the current feature set:
+
+   - `View Channels`
+   - `Manage Channels`
+   - `Manage Roles`
+   - `Send Messages`
+   - `Read Message History`
+   - `Embed Links`
+   - `Attach Files`
+   - `Create Public Threads`
+   - `Send Messages in Threads`
+   - `Create Instant Invite`
+
+   Do **not** grant `Administrator` by default. SDM's builder checks for the required channel/role permissions and is designed to operate without the global Administrator permission. Add any future permission only when a specific feature is shown to require it.
+
+6. After adding the bot to the test server, open **Server Settings → Roles** and move the bot's highest role above the School Manager roles it must manage. Discord role hierarchy still applies even when `Manage Roles` is granted.
+
+The thread-sync implementation requires `View Channel`, `Read Message History`, `Send Messages`, `Create Public Threads`, and `Send Messages in Threads` for the relevant channel. It does not require `Manage Threads` merely to create ordinary public threads. Repairing the bot's own channel access also requires server-level `Manage Channels` and `Manage Roles`.
+
+Discord references: [OAuth2 and scopes](https://discord.com/developers/docs/topics/oauth2), [Application commands](https://discord.com/developers/docs/interactions/slash-commands), and [Privileged Intents](https://support-dev.discord.com/hc/en-us/articles/6207308062871-What-are-Privileged-Intents).
 
 Never commit a real Discord bot token. Start from `.env.example`:
 
@@ -198,8 +221,10 @@ E2E_GUILD_ID=<dedicated E2E guild id>
 
 ## 🛠️ Local installation
 
+The checkout command below targets `feat/admin-role-split`, the current working/testing branch containing the latest launcher and selectable QR-expiration changes. This is a development branch, not a production release.
+
 ```bash
-git clone https://github.com/HM-Abdellah/school-discord-manager.git
+git clone --branch feat/admin-role-split --single-branch https://github.com/HM-Abdellah/school-discord-manager.git
 cd school-discord-manager
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -214,6 +239,8 @@ Linux/macOS activation can use `source .venv/bin/activate`.
 Keep `start_bot.bat` in the project's root folder beside `bot.py` and `.env.example`. On the first run, the launcher creates `.env` from the example and opens it in Notepad; replace the example value for `DISCORD_TOKEN` with the school's bot token, save the file, and run the launcher again. Never share or commit `.env`.
 
 The first configured run creates a local `.venv` and installs the runtime dependencies, so an Internet connection is required for initial setup. Python 3.12 or newer must be installed on Windows. Later runs start the bot directly using that environment.
+
+**Important: automatic Git updates are not implemented in this launcher yet.** Double-clicking `start_bot.bat` currently starts the code already present in the local folder; it does not fetch new commits or switch branches. Until a guarded updater is implemented and tested, the technical maintainer must update the Git clone separately while the bot is stopped. School staff should not run Git commands or use a ZIP copy if future Git-based updates are required.
 
 Keep the console window open while the bot should be online. Press `Ctrl+C` to stop it; if the process exits, the console pauses so the error can be read. Do not launch it twice at once. The bot only stays online while this PC is powered on, connected to the Internet, and the process is running. Back up the local `data/` folder regularly.
 
@@ -286,7 +313,7 @@ Set `DISCORD_GUILD_ID` during development and restart the bot. Guild synchroniza
 
 ### Build or teacher-thread sync fails with permissions errors
 
-The bot role needs `Manage Channels` and `Manage Roles`, and must be above School Manager managed roles. For teacher subject channels, its server/category-level permissions must also include `View Channel`, `Read Message History`, `Send Messages`, `Create Public Threads`, and `Manage Threads`; the bot's channel overwrite can only allow permissions Discord already makes available to the bot at the server or parent-category level. If Discord returns `50001 Missing Access` while the bot is trying to repair a hidden channel, a server administrator must first grant the bot member access to that channel/category. Then rerun `/sync-teacher-threads`. Do not reset or re-register the teacher; assignments are retained for retry.
+The bot role needs `Manage Channels` and `Manage Roles`, and must be above School Manager managed roles. For teacher subject channels, its effective server/category-level permissions must include `View Channel`, `Read Message History`, `Send Messages`, `Create Public Threads`, and `Send Messages in Threads`. Ordinary public-thread creation does not require `Manage Threads`; automatic repair of the bot's channel overwrite requires `Manage Channels` and `Manage Roles` at the server level. The bot cannot grant itself channel permissions that it does not already have available at the server or parent-category level. If Discord returns `50001 Missing Access` while the bot is trying to repair a hidden channel, a server administrator must first grant the bot member access to that channel/category. Then rerun `/sync-teacher-threads`. Do not reset or re-register the teacher; assignments are retained for retry.
 
 ### A managed resource was deleted manually
 
