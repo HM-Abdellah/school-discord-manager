@@ -41,7 +41,7 @@ from services.permissions import (
 )
 from services.teacher_assignment import TeacherAssignmentError, execute_teacher_assignment
 from services.teacher_threads import ensure_teacher_threads
-from services.qr_invites import DEFAULT_QR_MAX_AGE, create_role_invite, delete_invite, qr_file
+from services.qr_invites import create_role_invite, delete_invite, qr_expiration_choices, qr_expiration_label, qr_file
 from services.role_conflicts import teacher_target_conflict
 from services.storage import (
     delete_teacher_registration,
@@ -1695,18 +1695,32 @@ class TeacherQROnboarding(commands.Cog):
         name="createadminqr",
         description="Créer un QR à usage unique pour un rôle administratif choisi.",
     )
-    @app_commands.describe(role="Rôle attribué à la personne qui rejoint le serveur")
+    @app_commands.describe(
+        role="Rôle attribué à la personne qui rejoint le serveur",
+        expiration="Durée de validité du QR (30 minutes à 7 jours)",
+    )
+    @app_commands.choices(expiration=qr_expiration_choices())
     @app_commands.autocomplete(role=_admin_qr_role_autocomplete)
     @admin_qr_check(lock=False)
     async def create_admin_qr(
         self,
         interaction: discord.Interaction,
         role: str,
+        expiration: app_commands.Choice[int],
     ) -> None:
         """Create a one-use invite for one explicitly selected school-admin role."""
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
+
+        expiration_seconds = expiration.value
+        expiration_label = qr_expiration_label(expiration_seconds)
+        if expiration_label is None:
+            await interaction.response.send_message(
+                "❌ Choisis une durée de validité proposée pour le QR.",
+                ephemeral=True,
+            )
             return
 
         target_role_name = role
@@ -1770,7 +1784,7 @@ class TeacherQROnboarding(commands.Cog):
                 self.bot,
                 channel,
                 (target_role,),
-                max_age=2 * 60 * 60,
+                max_age=expiration_seconds,
                 max_uses=1,
                 reason=f"School Manager one-time {target_role_name} invite",
             )
@@ -1802,12 +1816,12 @@ class TeacherQROnboarding(commands.Cog):
             interaction.user.display_name,
             "createadminqr",
             target_role_name,
-            "expires=7200s;max_uses=1",
+            f"expires={expiration_seconds}s;max_uses=1",
         )
         await interaction.followup.send(
             f"## ✅ QR `{target_role_name}` prêt\n\n"
             f"Le lien attribue automatiquement le rôle `{target_role_name}` quand une personne rejoint le serveur.\n"
-            "**Expiration : 2 heures · Utilisation : une seule fois.**\n\n"
+            f"**Expiration : {expiration_label} · Utilisation : une seule fois.**\n\n"
             f"⚠️ Le QR est un lien secret : montre-le uniquement à la personne qui doit recevoir le rôle `{target_role_name}`. La première personne qui l'utilise recevra ce rôle.\n\n"
             f"Lien de secours : {invite_url}",
             file=qr,
@@ -1815,17 +1829,31 @@ class TeacherQROnboarding(commands.Cog):
         )
 
     @app_commands.command(name="createteacherqr", description="Créer un QR temporaire d'inscription professeur.")
-    @app_commands.describe(max_uses="Nombre de professeurs autorisés à utiliser le QR (1 à 42)")
+    @app_commands.describe(
+        max_uses="Nombre de professeurs autorisés à utiliser le QR (1 à 42)",
+        expiration="Durée de validité du QR (30 minutes à 7 jours)",
+    )
+    @app_commands.choices(expiration=qr_expiration_choices())
     @app_commands.default_permissions(manage_roles=True)
     @management_check()
     async def create_teacher_qr(
         self,
         interaction: discord.Interaction,
         max_uses: app_commands.Range[int, 1, 42],
+        expiration: app_commands.Choice[int],
     ) -> None:
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
+
+        expiration_seconds = expiration.value
+        expiration_label = qr_expiration_label(expiration_seconds)
+        if expiration_label is None:
+            await interaction.response.send_message(
+                "❌ Choisis une durée de validité proposée pour le QR.",
+                ephemeral=True,
+            )
             return
 
         bot_member = guild.me
@@ -1860,12 +1888,13 @@ class TeacherQROnboarding(commands.Cog):
                 self.bot,
                 channel,
                 (pending_role,),
+                max_age=expiration_seconds,
                 max_uses=int(max_uses),
                 reason="School Manager teacher QR onboarding",
             )
             invite_code = invite_url.rsplit("/", 1)[-1]
             now = discord.utils.utcnow()
-            expires_at = now + timedelta(seconds=DEFAULT_QR_MAX_AGE)
+            expires_at = now + timedelta(seconds=expiration_seconds)
             qr = qr_file(invite_url, "school-manager-teachers.png")
             # Keep a previous working teacher QR valid until the replacement
             # invitation and image have both been created successfully.
@@ -1909,12 +1938,12 @@ class TeacherQROnboarding(commands.Cog):
             interaction.user.display_name,
             "createteacherqr",
             "teacher-onboarding",
-            f"expires={DEFAULT_QR_MAX_AGE}s;max_uses={int(max_uses)}",
+            f"expires={expiration_seconds}s;max_uses={int(max_uses)}",
         )
         await interaction.followup.send(
             "## ✅ QR professeur prêt\n\n"
             "Rôle temporaire : Professeur - En attente\n"
-            "Expiration : 30 minutes\n"
+            f"Expiration : {expiration_label}\n"
             f"Utilisations max : {int(max_uses)}\n\n"
             "Le QR donne un accès temporaire pour compléter l'inscription avec les menus ci-dessous. "
             "Après une inscription réussie, le rôle temporaire est retiré et ce compte ne peut plus se réinscrire via QR.\n\n"

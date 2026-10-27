@@ -6,6 +6,7 @@ from io import BytesIO
 from typing import Iterable
 
 import discord
+from discord import app_commands
 import qrcode
 from discord.http import Route
 
@@ -13,6 +14,40 @@ DEFAULT_QR_MAX_AGE = 30 * 60
 DEFAULT_QR_MAX_USES = 42
 MAX_INVITE_AGE = 7 * 24 * 60 * 60
 MAX_INVITE_USES = 42
+
+# Shared expiration choices for every QR creation command. Discord invite age is
+# limited to seven days; class-transfer requests use the same choices.
+QR_EXPIRATION_OPTIONS: tuple[tuple[str, int], ...] = (
+    ("30 minutes", 30 * 60),
+    ("1 heure", 60 * 60),
+    ("1 h 30", 90 * 60),
+    ("2 heures", 2 * 60 * 60),
+    ("2 h 30", 150 * 60),
+    ("3 heures", 3 * 60 * 60),
+    ("4 heures", 4 * 60 * 60),
+    ("6 heures", 6 * 60 * 60),
+    ("12 heures", 12 * 60 * 60),
+    ("24 heures", 24 * 60 * 60),
+    ("2 jours", 2 * 24 * 60 * 60),
+    ("3 jours", 3 * 24 * 60 * 60),
+    ("7 jours", MAX_INVITE_AGE),
+)
+
+
+def qr_expiration_choices() -> list[app_commands.Choice[int]]:
+    """Return the shared expiration choices displayed by QR creation commands."""
+    return [
+        app_commands.Choice(name=label, value=seconds)
+        for label, seconds in QR_EXPIRATION_OPTIONS
+    ]
+
+
+def qr_expiration_label(seconds: int) -> str | None:
+    """Return the user-facing label for an allowed QR expiration, or None."""
+    return next(
+        (label for label, value in QR_EXPIRATION_OPTIONS if value == seconds),
+        None,
+    )
 
 
 async def create_role_invite(

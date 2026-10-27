@@ -14,7 +14,11 @@ from cogs.qr_onboarding import (
 from services.qr_invites import (
     DEFAULT_QR_MAX_AGE,
     DEFAULT_QR_MAX_USES,
+    MAX_INVITE_AGE,
+    QR_EXPIRATION_OPTIONS,
     create_role_invite,
+    qr_expiration_choices,
+    qr_expiration_label,
 )
 
 
@@ -68,6 +72,44 @@ def test_class_section_audit_reports_role_missing_from_registry_without_adopting
 
 def test_qr_capacity_policy_is_capped_at_42():
     assert DEFAULT_QR_MAX_USES == 42
+
+
+def test_qr_expiration_presets_are_shared_and_bounded():
+    choices = qr_expiration_choices()
+    values = [choice.value for choice in choices]
+
+    assert len(choices) <= 25
+    assert values == sorted(set(values))
+    assert {30 * 60, 60 * 60, 90 * 60, 2 * 60 * 60}.issubset(values)
+    assert max(values) == MAX_INVITE_AGE
+    assert all(0 < value <= MAX_INVITE_AGE for value in values)
+    assert [qr_expiration_label(value) for value in values] == [
+        choice.name for choice in choices
+    ]
+    assert qr_expiration_label(1) is None
+
+
+def test_all_qr_creation_commands_expose_the_same_expiration_choices():
+    from cogs.qr_onboarding import ClassQROnboarding
+    from cogs.teacher_qr_onboarding import TeacherQROnboarding
+
+    class_cog = ClassQROnboarding(SimpleNamespace())
+    teacher_cog = TeacherQROnboarding(SimpleNamespace())
+    commands_to_check = (
+        class_cog.create_class_qr,
+        class_cog.create_class_transfer_qr,
+        teacher_cog.create_admin_qr,
+        teacher_cog.create_teacher_qr,
+    )
+    expected_values = [seconds for _label, seconds in QR_EXPIRATION_OPTIONS]
+
+    for command in commands_to_check:
+        expiration = next(
+            parameter for parameter in command.parameters
+            if parameter.name == "expiration"
+        )
+        assert expiration.required is True
+        assert [choice.value for choice in expiration.choices] == expected_values
 
 
 @pytest.mark.asyncio

@@ -28,10 +28,11 @@ from services.permissions import (
 )
 from services.role_conflicts import student_staff_conflict, student_transfer_conflict
 from services.qr_invites import (
-    DEFAULT_QR_MAX_AGE,
     DEFAULT_QR_MAX_USES,
     create_role_invite,
     delete_invite,
+    qr_expiration_choices,
+    qr_expiration_label,
     qr_file,
 )
 from services.server_builder import CATEGORY_VOICE, _safe_name, _stream_category_name, _subject_channel_name
@@ -481,7 +482,9 @@ class ClassQROnboarding(commands.Cog):
         stream="Filière scolaire",
         section="Numéro de section (1 à 8)",
         max_uses="Nombre de personnes autorisées à entrer (1 à 42)",
+        expiration="Durée de validité du QR (30 minutes à 7 jours)",
     )
+    @app_commands.choices(expiration=qr_expiration_choices())
     @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete)
     @app_commands.default_permissions(manage_roles=True)
     @management_check()
@@ -492,10 +495,20 @@ class ClassQROnboarding(commands.Cog):
         stream: str,
         section: app_commands.Range[int, 1, 8],
         max_uses: app_commands.Range[int, 1, 42],
+        expiration: app_commands.Choice[int],
     ) -> None:
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
+
+        expiration_seconds = expiration.value
+        expiration_label = qr_expiration_label(expiration_seconds)
+        if expiration_label is None:
+            await interaction.response.send_message(
+                "❌ Choisis une durée de validité proposée pour le QR.",
+                ephemeral=True,
+            )
             return
 
         bot_member = guild.me
@@ -606,11 +619,12 @@ class ClassQROnboarding(commands.Cog):
                 self.bot,
                 source_channel,
                 (student_role, class_role),
+                max_age=expiration_seconds,
                 max_uses=int(max_uses),
             )
             invite_code = invite_url.rsplit("/", 1)[-1]
             now = discord.utils.utcnow()
-            expires_at = now + timedelta(seconds=DEFAULT_QR_MAX_AGE)
+            expires_at = now + timedelta(seconds=expiration_seconds)
             qr = qr_file(
                 invite_url,
                 "school-manager-" + code + "-" + str(int(section)) + ".png",
@@ -655,14 +669,14 @@ class ClassQROnboarding(commands.Cog):
             interaction.user.display_name,
             "createclassqr",
             class_key,
-            "expires=" + str(DEFAULT_QR_MAX_AGE) + "s;max_uses=" + str(int(max_uses)),
+            "expires=" + str(expiration_seconds) + "s;max_uses=" + str(int(max_uses)),
         )
 
         await interaction.followup.send(
             "## ✅ QR de classe prêt\n\n"
             "**Classe :** " + class_key + "\n"
             "**Rôles attribués :** " + ROLE_STUDENT + " + " + class_role.name + "\n"
-            "**Expiration :** 30 minutes\n"
+            "**Expiration :** " + expiration_label + "\n"
             "**Utilisations max :** " + str(int(max_uses)) + "\n\n"
             "Chaque élève de cette classe peut scanner **le même QR**. "
             "Le QR est temporaire et doit rester destiné uniquement à cette classe.\n\n"
@@ -681,7 +695,9 @@ class ClassQROnboarding(commands.Cog):
         level="Niveau scolaire de destination",
         stream="Filière de destination",
         section="Numéro de la nouvelle section (1 à 8)",
+        expiration="Durée de validité de la demande (30 minutes à 7 jours)",
     )
+    @app_commands.choices(expiration=qr_expiration_choices())
     @app_commands.autocomplete(level=level_autocomplete, stream=stream_autocomplete)
     @app_commands.default_permissions(manage_roles=True)
     @management_check()
@@ -692,12 +708,23 @@ class ClassQROnboarding(commands.Cog):
         level: str,
         stream: str,
         section: app_commands.Range[int, 1, 8],
+        expiration: app_commands.Choice[int],
     ) -> None:
         """Create a one-student transfer confirmation through a private DM."""
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
             return
+
+        expiration_seconds = expiration.value
+        expiration_label = qr_expiration_label(expiration_seconds)
+        if expiration_label is None:
+            await interaction.response.send_message(
+                "❌ Choisis une durée de validité proposée pour le QR.",
+                ephemeral=True,
+            )
+            return
+
         if student.bot:
             await interaction.response.send_message("❌ Un compte bot ne peut pas être transféré comme élève.", ephemeral=True)
             return
@@ -788,7 +815,7 @@ class ClassQROnboarding(commands.Cog):
         ) if isinstance(registry, dict) else []
         current_label = ", ".join(current_keys) if current_keys else "غير محدد"
         created_at = discord.utils.utcnow()
-        expires_at = created_at + timedelta(seconds=DEFAULT_QR_MAX_AGE)
+        expires_at = created_at + timedelta(seconds=expiration_seconds)
 
         try:
             request_id = create_class_transfer_request(
@@ -812,7 +839,7 @@ class ClassQROnboarding(commands.Cog):
                 "الإدارة طلبات نقلك لقسم آخر داخل المدرسة.\n"
                 "**القسم الحالي حسب أدوار السيرفر:** " + current_label + "\n"
                 "**القسم الجديد:** " + class_key + "\n"
-                "**الصلاحية:** 30 دقيقة\n\n"
+                "**الصلاحية:** " + expiration_label + "\n\n"
                 "أكد غير إلا كان هاد التغيير صحيح. الأدوار وتاريخ التسجيل الدراسي "
                 "غادي يتبدلو من بعد الضغط على الزر لتحت."
             )
@@ -860,7 +887,8 @@ class ClassQROnboarding(commands.Cog):
         record_event(
             guild.id, interaction.user.id, interaction.user.display_name,
             "createclasstransferqr", student.display_name,
-            current_label + " -> " + class_key + ";request_id=" + str(request_id),
+            current_label + " -> " + class_key + ";request_id=" + str(request_id)
+            + ";expires=" + str(expiration_seconds) + "s",
         )
         try:
             await interaction.followup.send(
@@ -868,7 +896,7 @@ class ClassQROnboarding(commands.Cog):
                 "**التلميذ:** " + student.mention + "\n"
                 "**من:** " + current_label + "\n"
                 "**إلى:** " + class_key + "\n"
-                "**الصلاحية:** 30 دقيقة، واستعمال واحد فقط\n\n"
+                "**الصلاحية:** " + expiration_label + "، واستعمال واحد فقط\n\n"
                 "هاد QR كيفتح رسالة خاصة بهاد التلميذ فـDiscord؛ خاص التلميذ يكون داخل للحساب "
                 "ويضغط على زر تأكيد تغيير القسم. الدعوة ما كتزيدوش للسيرفر من جديد، "
                 "وما كيتبدل حتى دور قبل التأكيد. ما تشاركش QR مع تلميذ آخر.",

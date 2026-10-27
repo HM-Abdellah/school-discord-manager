@@ -165,7 +165,13 @@ async def test_transfer_qr_rejects_member_without_managed_student_role(monkeypat
     cog = ClassQROnboarding(SimpleNamespace())
 
     await cog.create_class_transfer_qr.callback(
-        cog, interaction, student, "2BAC", "Sciences Physiques", 1
+        cog,
+        interaction,
+        student,
+        "2BAC",
+        "Sciences Physiques",
+        1,
+        discord.app_commands.Choice(name="30 minutes", value=30 * 60),
     )
 
     interaction.response.send_message.assert_awaited_once()
