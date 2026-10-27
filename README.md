@@ -209,6 +209,14 @@ python bot.py
 
 Linux/macOS activation can use `source .venv/bin/activate`.
 
+## 🪟 Windows one-click startup
+
+Keep `start_bot.bat` in the project's root folder beside `bot.py` and `.env.example`. On the first run, the launcher creates `.env` from the example and opens it in Notepad; replace the example value for `DISCORD_TOKEN` with the school's bot token, save the file, and run the launcher again. Never share or commit `.env`.
+
+The first configured run creates a local `.venv` and installs the runtime dependencies, so an Internet connection is required for initial setup. Python 3.12 or newer must be installed on Windows. Later runs start the bot directly using that environment.
+
+Keep the console window open while the bot should be online. Press `Ctrl+C` to stop it; if the process exits, the console pauses so the error can be read. Do not launch it twice at once. The bot only stays online while this PC is powered on, connected to the Internet, and the process is running. Back up the local `data/` folder regularly.
+
 ## 🐳 Docker
 
 The production runtime is intentionally small: it contains only the bot application and runtime dependencies, runs as a non-root `app` user, and keeps mutable SQLite/JSON state in `/app/data`. Docker Compose additionally drops Linux capabilities, disables privilege escalation, mounts the application filesystem read-only, and keeps `/app/data` as the writable persistent volume.
