@@ -8,15 +8,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config.curriculum import (
-    get_levels,
-    get_stream_abbreviation,
-    get_stream_subjects,
-    get_streams,
-)
 from services.build_guard import get_build_lock
 from services.permissions import management_check
-from services.server_builder import _stream_category_name, _subject_channel_name
 from services.storage import get_teacher_assignments
 from services.teacher_threads import all_public_threads as _all_public_threads, ensure_teacher_threads
 from services.thread_keepalive import resolve_subject_channel as _resolve_subject_channel
