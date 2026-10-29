@@ -8,35 +8,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config.curriculum import (
-    get_levels,
-    get_stream_abbreviation,
-    get_stream_subjects,
-    get_streams,
-)
 from services.build_guard import get_build_lock
 from services.permissions import management_check
-from services.server_builder import _stream_category_name, _subject_channel_name
 from services.storage import get_teacher_assignments
 from services.teacher_threads import all_public_threads as _all_public_threads, ensure_teacher_threads
+from services.thread_keepalive import resolve_subject_channel as _resolve_subject_channel
 
 MAX_SECTIONS = 20
-
-
-def _resolve_subject_channel(channel: discord.abc.GuildChannel) -> tuple[str, str, str] | None:
-    """Return (level, stream, subject) when the channel is a managed subject channel."""
-    if channel.category is None:
-        return None
-
-    for level in get_levels():
-        for stream in get_streams(level):
-            code = get_stream_abbreviation(level, stream)
-            if channel.category.name != _stream_category_name(level, stream, code):
-                continue
-            for subject in get_stream_subjects(level, stream):
-                if channel.name == _subject_channel_name(code, subject):
-                    return level, stream, subject
-    return None
 
 
 class SectionThreads(commands.Cog):
