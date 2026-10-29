@@ -199,6 +199,8 @@ Create and configure the application at the [Discord Developer Portal](https://d
 
 The thread-sync implementation requires `View Channel`, `Read Message History`, `Send Messages`, `Create Public Threads`, and `Send Messages in Threads` for the relevant channel. It does not require `Manage Threads` merely to create ordinary public threads. Repairing the bot's own channel access also requires server-level `Manage Channels` and `Manage Roles`.
 
+Managed public threads inside registered subject channels receive a silent zero-width keep-alive message when their last activity reaches five days. The check runs daily, considers both active and archived public threads, and skips locked threads and channels absent from the managed registry. Discord can still archive threads earlier when the guild approaches its active-thread limit; this maintenance does not bypass that platform limit.
+
 Discord references: [OAuth2 and scopes](https://discord.com/developers/docs/topics/oauth2), [Application commands](https://discord.com/developers/docs/interactions/slash-commands), and [Privileged Intents](https://support-dev.discord.com/hc/en-us/articles/6207308062871-What-are-Privileged-Intents).
 
 Never commit a real Discord bot token. Start from `.env.example`:

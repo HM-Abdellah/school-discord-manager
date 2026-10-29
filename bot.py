@@ -42,6 +42,7 @@ class SchoolBot(commands.Bot):
         "cogs.section_aware_exam",
         "cogs.section_aware_timetable",
         "cogs.section_threads",
+        "cogs.thread_keepalive",
         "cogs.qr_onboarding",
         "cogs.teacher_qr_onboarding",
     )
