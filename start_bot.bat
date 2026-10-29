@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title School Discord Manager
+title SCHOOL DISCORD MANAGER - BOT CONSOLE
 
 echo ============================================================
 echo   SCHOOL DISCORD MANAGER
@@ -32,7 +32,7 @@ if not exist ".venv\Scripts\python.exe" goto :setup_python
 ".venv\Scripts\python.exe" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" >nul 2>&1
 if errorlevel 1 goto :python_version_error
 
-goto :run_bot
+goto :install_dependencies
 
 :create_env
 if not exist ".env.example" (
@@ -84,7 +84,17 @@ if errorlevel 1 goto :venv_failed
 ".venv\Scripts\python.exe" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" >nul 2>&1
 if errorlevel 1 goto :python_version_error
 
-echo Installing the bot's runtime dependencies. This happens on first setup.
+:install_dependencies
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$root=(Resolve-Path -LiteralPath '.').Path; $python=Join-Path $root '.venv\Scripts\python.exe'; $p=Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -ieq $python -and $_.CommandLine -match 'bot\.py' } | Select-Object -First 1 -ExpandProperty ProcessId; if ($p) { $p }"`) do (
+    echo.
+    echo ERROR: School Discord Manager is already running ^(PID %%P^).
+    echo Close this copy and use stop_bot.bat if you need to stop the running bot.
+    echo Dependencies will not be changed while the bot is running.
+    echo.
+    pause
+    exit /b 0
+)
+echo Checking and installing required runtime dependencies if needed.
 ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -r "requirements-runtime.txt"
 if errorlevel 1 goto :dependencies_failed
 
@@ -118,12 +128,21 @@ pause
 exit /b 1
 
 :run_bot
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$root=(Resolve-Path -LiteralPath '.').Path; $python=Join-Path $root '.venv\Scripts\python.exe'; $p=Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -ieq $python -and $_.CommandLine -match 'bot\.py' } | Select-Object -First 1 -ExpandProperty ProcessId; if ($p) { $p }"`) do (
+    echo.
+    echo ERROR: School Discord Manager is already running ^(PID %%P^).
+    echo Use stop_bot.bat to stop it before starting another copy.
+    echo.
+    pause
+    exit /b 0
+)
 echo.
-echo Starting School Discord Manager...
+echo SCHOOL DISCORD MANAGER - BOT CONSOLE
 echo Keep this window open while the bot should be online.
-echo Press Ctrl+C to stop the bot safely.
-echo Do not open this launcher a second time while it is already running.
+echo Press Ctrl+C here to stop it normally.
+echo If you cannot find this window, double-click stop_bot.bat.
 echo.
+set "PYTHONUTF8=1"
 ".venv\Scripts\python.exe" bot.py
 set "BOT_EXIT_CODE=%ERRORLEVEL%"
 echo.

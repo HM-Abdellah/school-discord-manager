@@ -12,6 +12,56 @@ def test_runtime_delivery_artifacts_exist():
     assert (ROOT / ".github" / "workflows" / "publish-image.yml").is_file()
 
 
+def test_windows_launcher_reconciles_runtime_dependencies_for_existing_venv():
+    launcher = (ROOT / "start_bot.bat").read_text(encoding="utf-8")
+    lines = launcher.splitlines()
+
+    existing_venv_check = lines.index(
+        'if not exist ".venv\\Scripts\\python.exe" goto :setup_python'
+    )
+    python_version_check = lines.index(
+        '".venv\\Scripts\\python.exe" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" >nul 2>&1'
+    )
+    dependency_jump = lines.index("goto :install_dependencies", python_version_check)
+
+    assert dependency_jump > existing_venv_check
+    assert dependency_jump == python_version_check + 3
+    assert ":install_dependencies" in lines
+    assert '".venv\\Scripts\\python.exe" -m pip install --disable-pip-version-check -r "requirements-runtime.txt"' in lines
+
+
+def test_windows_launcher_enables_utf8_for_unicode_console_output():
+    launcher = (ROOT / "start_bot.bat").read_text(encoding="utf-8")
+    lines = launcher.splitlines()
+
+    utf8_mode = lines.index('set "PYTHONUTF8=1"')
+    bot_launch = lines.index('".venv\\Scripts\\python.exe" bot.py')
+
+    assert utf8_mode < bot_launch
+
+
+def test_windows_launcher_has_visible_console_and_prevents_duplicate_bot_processes():
+    launcher = (ROOT / "start_bot.bat").read_text(encoding="utf-8")
+
+    assert "title SCHOOL DISCORD MANAGER - BOT CONSOLE" in launcher
+    assert "Get-CimInstance Win32_Process" in launcher
+    assert "ExecutablePath -ieq $python" in launcher
+    assert "Use stop_bot.bat to stop it before starting another copy." in launcher
+    assert 'echo Press Ctrl+C here to stop it normally.' in launcher
+    assert launcher.index("for /f") < launcher.index('".venv\\Scripts\\python.exe" -m pip install')
+
+
+def test_windows_stop_launcher_only_targets_this_project_bot():
+    launcher = (ROOT / "stop_bot.bat").read_text(encoding="utf-8")
+
+    assert "Get-CimInstance Win32_Process" in launcher
+    assert r".venv\Scripts\python.exe" in launcher
+    assert r"bot\.py" in launcher
+    assert "/PID $target.ProcessId" in launcher
+    assert "Stop-Process -Id $target.ProcessId -Force" in launcher
+    assert "/im python.exe" not in launcher.lower()
+
+
 def test_runtime_requirements_exclude_test_only_packages():
     requirements = (ROOT / "requirements-runtime.txt").read_text(encoding="utf-8")
     assert "discord.py" in requirements
