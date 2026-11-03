@@ -410,3 +410,61 @@ def test_reset_guild_data_clears_only_target_guild_analytics(tmp_path, monkeypat
     with storage._connect() as conn:
         assert [tuple(row) for row in conn.execute("SELECT guild_id,command_name FROM command_usage_events").fetchall()] == [(202, "status")]
         assert [tuple(row) for row in conn.execute("SELECT guild_id,action FROM audited_action_events").fetchall()] == [(202, "newyear")]
+
+
+
+def _write_class_role_archive(path, guild_id, archived_at, registry):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE archive_metadata (id INTEGER PRIMARY KEY, guild_id INTEGER, archived_at TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE guild_configs (guild_id INTEGER PRIMARY KEY, config_json TEXT, is_deleted INTEGER)"
+        )
+        conn.execute(
+            "INSERT INTO archive_metadata(id,guild_id,archived_at) VALUES(1,?,?)",
+            (guild_id, archived_at),
+        )
+        conn.execute(
+            "INSERT INTO guild_configs(guild_id,config_json,is_deleted) VALUES(?,?,0)",
+            (guild_id, json.dumps({"class_roles": registry})),
+        )
+
+
+def test_latest_archived_class_roles_uses_newest_archive_for_the_same_guild(tmp_path, monkeypatch):
+    data_dir = _configure_storage(tmp_path, monkeypatch)
+    archive_dir = data_dir / "archives"
+    older_registry = {
+        "2BACPC-1": {"role_id": 101, "stream_code": "2BACPC", "section": 1}
+    }
+    latest_registry = {
+        "2BACPC-2": {"role_id": 202, "stream_code": "2BACPC", "section": 2}
+    }
+    _write_class_role_archive(archive_dir / "older.db", 123, "2026-10-01T00:00:00+00:00", older_registry)
+    _write_class_role_archive(archive_dir / "latest.db", 123, "2026-11-01T00:00:00+00:00", latest_registry)
+    _write_class_role_archive(
+        archive_dir / "other-guild.db",
+        456,
+        "2026-12-01T00:00:00+00:00",
+        {"2BACPC-3": {"role_id": 303, "stream_code": "2BACPC", "section": 3}},
+    )
+
+    assert storage.get_latest_archived_class_roles(123) == latest_registry
+
+
+def test_latest_archive_without_class_roles_does_not_fall_back_to_an_older_registry(tmp_path, monkeypatch):
+    data_dir = _configure_storage(tmp_path, monkeypatch)
+    archive_dir = data_dir / "archives"
+    older_registry = {
+        "2BACPC-1": {"role_id": 101, "stream_code": "2BACPC", "section": 1}
+    }
+    _write_class_role_archive(archive_dir / "older.db", 123, "2026-10-01T00:00:00+00:00", older_registry)
+    _write_class_role_archive(archive_dir / "latest.db", 123, "2026-11-01T00:00:00+00:00", {})
+
+    assert storage.get_latest_archived_class_roles(123) == {}
+
+
+def test_latest_archived_class_roles_returns_none_when_no_matching_archive_exists(tmp_path, monkeypatch):
+    _configure_storage(tmp_path, monkeypatch)
+    assert storage.get_latest_archived_class_roles(123) is None
