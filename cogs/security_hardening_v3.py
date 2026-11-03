@@ -138,8 +138,7 @@ class HardenedResetCommands(commands.Cog):
                         archive_name = archive_path.name
                     except (OSError, sqlite3.Error) as exc:
                         await interaction.edit_original_response(
-                            f"❌ Reset refusé : impossible de créer l'archive de l'année active (`{type(exc).__name__}: {exc}`). Aucun resource Discord n'a été supprimé.",
-                            ephemeral=True,
+                            content=f"❌ Reset refusé : impossible de créer l'archive de l'année active (`{type(exc).__name__}: {exc}`). Aucun resource Discord n'a été supprimé.",
                         )
                         return
 
@@ -172,16 +171,14 @@ class HardenedResetCommands(commands.Cog):
                 reset_guild_data(guild.id)
         except (discord.Forbidden, discord.HTTPException, discord.NotFound, OSError) as exc:
             await interaction.edit_original_response(
-                f"❌ Reset interrompu : `{type(exc).__name__}`. Aucun nom n'a été utilisé pour élargir le scope.",
-                ephemeral=True,
+                content=f"❌ Reset interrompu : `{type(exc).__name__}`. Aucun nom n'a été utilisé pour élargir le scope.",
             )
             return
 
         suffix = f" Catégories conservées car elles contiennent des ressources non gérées : **{retained_categories}**." if retained_categories else ""
         archive_suffix = f" Archive créée : `{archive_name}`." if archive_name else " Aucune année active à archiver."
         await interaction.edit_original_response(
-            f"✅ Reset terminé. Channels: **{deleted_channels}** · Catégories: **{deleted_categories}** · Rôles: **{deleted_roles}**. Seuls les IDs gérés enregistrés ont été ciblés.{suffix}{archive_suffix}",
-            ephemeral=True,
+            content=f"✅ Reset terminé. Channels: **{deleted_channels}** · Catégories: **{deleted_categories}** · Rôles: **{deleted_roles}**. Seuls les IDs gérés enregistrés ont été ciblés.{suffix}{archive_suffix}",
         )
 
 
