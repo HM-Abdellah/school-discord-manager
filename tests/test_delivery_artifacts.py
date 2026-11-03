@@ -95,7 +95,7 @@ def test_compose_persists_runtime_data_and_uses_published_image():
 def test_windows_updater_can_replace_its_own_file():
     updater = (ROOT / "update_school_bot.bat").read_text(encoding="utf-8")
 
-    assert 'if /i "%~1"=="--run-from-temp" goto :run_updater' in updater
+    assert 'if /i "%~1"=="--run-from-temp" if /i "%SCRIPT_DIR%"=="%TEMP_DIR%" goto :run_updater' in updater
     assert 'copy /y "%~f0" "%HELPER%"' in updater
     assert 'cmd /k ""%HELPER%" --run-from-temp "%PROJECT_DIR%""' in updater
 
