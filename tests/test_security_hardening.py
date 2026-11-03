@@ -207,3 +207,46 @@ def test_latency_sensitive_commands_acknowledge_before_slow_work():
     assert report.index("await interaction.followup.send") > report.index("await interaction.response.defer(ephemeral=True)")
     assert full.index("await interaction.response.defer(ephemeral=True)") < full.index("execute_teacher_assignment(")
     assert "except TeacherAssignmentError as exc" in full
+
+
+class FakeResetRole:
+    def __init__(self, name: str, role_id: int, managed: bool = False, default: bool = False):
+        self.name = name
+        self.id = role_id
+        self.managed = managed
+        self.default = default
+
+    def is_default(self):
+        return self.default
+
+
+def test_reset_scope_includes_only_registered_class_role_ids():
+    from cogs.security_hardening_v3 import _registered_class_role_ids
+
+    role = FakeResetRole("Élèves - 2BACPC-5", 505)
+    guild = SimpleNamespace(get_role=lambda role_id: role if role_id == 505 else None)
+    config = {
+        "class_roles": {
+            "2BACPC-5": {"role_id": 505, "stream_code": "2BACPC", "section": 5},
+            "2BACPC-6": {"role_id": 506, "stream_code": "2BACPC", "section": 6},
+        }
+    }
+    assert _registered_class_role_ids(guild, config) == {505}
+
+
+def test_reset_class_role_registry_fails_closed_on_identity_mismatch():
+    from cogs.security_hardening_v3 import _registered_class_role_ids
+
+    role = FakeResetRole("Élèves - 2BACPC-6", 505)
+    guild = SimpleNamespace(get_role=lambda role_id: role if role_id == 505 else None)
+    config = {"class_roles": {"2BACPC-5": {"role_id": 505, "stream_code": "2BACPC", "section": 5}}}
+    with pytest.raises(RuntimeError, match="identité attendue"):
+        _registered_class_role_ids(guild, config)
+
+
+def test_reset_edits_original_response_after_deleting_channels():
+    source = open("cogs/security_hardening_v3.py", encoding="utf-8").read()
+    assert "class_role_ids = _registered_class_role_ids(guild, config)" in source
+    assert "} | class_role_ids" in source
+    assert "interaction.edit_original_response(" in source
+    assert "interaction.followup.send(" not in source
