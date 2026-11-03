@@ -129,9 +129,10 @@ def test_windows_updater_only_reconciles_a_verified_official_self_update():
     hash_position = updater.index(
         'git hash-object --path=update_school_bot.bat "update_school_bot.bat"'
     )
-    target_position = updater.index(
-        'git rev-parse "refs/remotes/origin/%BRANCH%:update_school_bot.bat"'
+    history_position = updater.index(
+        'git log --format^=%%H "refs/remotes/origin/%BRANCH%" -- update_school_bot.bat'
     )
+    blob_check_position = updater.index(":check_official_updater_blob")
     restore_position = updater.index(
         'git restore --source=HEAD --worktree -- "update_school_bot.bat"'
     )
@@ -139,11 +140,12 @@ def test_windows_updater_only_reconciles_a_verified_official_self_update():
     merge_position = updater.index("git merge --ff-only")
 
     assert fetch_position < status_position < hash_position
-    assert hash_position < target_position < backup_position
+    assert hash_position < history_position < backup_position
     assert backup_position < restore_position < merge_position
     assert 'findstr /l /x /c:" M update_school_bot.bat"' in updater
     assert "LOCAL_UPDATER_BLOB" in updater
-    assert "TARGET_UPDATER_BLOB" in updater
+    assert "OFFICIAL_UPDATER_MATCH" in updater
+    assert "git rev-parse \"%~1:update_school_bot.bat\"" in updater
     assert "Only an updater identical to the approved GitHub copy" in updater
 
 
