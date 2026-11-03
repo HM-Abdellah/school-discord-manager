@@ -160,9 +160,12 @@ for /f "delims=" %%H in ('git hash-object --path=update_school_bot.bat "update_s
 for /f "delims=" %%H in ('git rev-parse "refs/remotes/origin/%BRANCH%:update_school_bot.bat"') do set "TARGET_UPDATER_BLOB=%%H"
 if not defined LOCAL_UPDATER_BLOB goto :local_changes_detected
 if not defined TARGET_UPDATER_BLOB goto :local_changes_detected
-if /i not "%LOCAL_UPDATER_BLOB%"=="%TARGET_UPDATER_BLOB%" goto :local_changes_detected
 
-echo The local updater is an exact copy of the approved GitHub updater.
+set "OFFICIAL_UPDATER_MATCH="
+for /f "delims=" %%C in ('git log --format^=%%H "refs/remotes/origin/%BRANCH%" -- update_school_bot.bat') do call :check_official_updater_blob "%%C"
+if not defined OFFICIAL_UPDATER_MATCH goto :local_changes_detected
+
+echo The local updater matches an official version in the approved branch history.
 set "TRUSTED_UPDATER_CHANGE=1"
 goto :local_changes_done
 
@@ -363,4 +366,10 @@ set "BACKUP_DB_SIZE="
 for %%F in ("data\school.db") do set "SOURCE_DB_SIZE=%%~zF"
 for %%F in ("%BACKUP_DIR%\data\school.db") do set "BACKUP_DB_SIZE=%%~zF"
 if not "%SOURCE_DB_SIZE%"=="%BACKUP_DB_SIZE%" exit /b 1
+exit /b 0
+
+:check_official_updater_blob
+for /f "delims=" %%H in ('git rev-parse "%~1:update_school_bot.bat" 2^>nul') do (
+    if /i "%%H"=="%LOCAL_UPDATER_BLOB%" set "OFFICIAL_UPDATER_MATCH=1"
+)
 exit /b 0
