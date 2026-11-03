@@ -139,8 +139,8 @@ def test_windows_updater_only_reconciles_a_verified_official_self_update():
     merge_position = updater.index("git merge --ff-only")
 
     assert fetch_position < status_position < hash_position
-    assert hash_position < target_position < restore_position
-    assert restore_position < backup_position < merge_position
+    assert hash_position < target_position < backup_position
+    assert backup_position < restore_position < merge_position
     assert 'findstr /l /x /c:" M update_school_bot.bat"' in updater
     assert "LOCAL_UPDATER_BLOB" in updater
     assert "TARGET_UPDATER_BLOB" in updater
