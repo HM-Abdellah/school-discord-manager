@@ -115,10 +115,38 @@ def test_windows_updater_targets_only_the_configured_school_repository_and_branc
 def test_windows_updater_refuses_local_edits_and_a_running_project_bot():
     updater = (ROOT / "update_school_bot.bat").read_text(encoding="utf-8")
 
-    assert "git status --porcelain" in updater
+    assert "git status --porcelain=v1 --untracked-files=all" in updater
     assert "Get-CimInstance Win32_Process" in updater
     assert "ExecutablePath" in updater
     assert "Stop it normally before updating." in updater
+
+
+def test_windows_updater_only_reconciles_a_verified_official_self_update():
+    updater = (ROOT / "update_school_bot.bat").read_text(encoding="utf-8")
+
+    fetch_position = updater.index('git fetch --no-tags origin')
+    status_position = updater.index("git status --porcelain=v1 --untracked-files=all")
+    hash_position = updater.index(
+        'git hash-object --path=update_school_bot.bat "update_school_bot.bat"'
+    )
+    history_position = updater.index(
+        'git log --format^=%%H "refs/remotes/origin/%BRANCH%" -- update_school_bot.bat'
+    )
+    blob_check_position = updater.index(":check_official_updater_blob")
+    restore_position = updater.index(
+        'git restore --source=HEAD --worktree -- "update_school_bot.bat"'
+    )
+    backup_position = updater.index('robocopy "data"')
+    merge_position = updater.index("git merge --ff-only")
+
+    assert fetch_position < status_position < hash_position
+    assert hash_position < history_position < backup_position
+    assert backup_position < restore_position < merge_position
+    assert 'findstr /l /x /c:" M update_school_bot.bat"' in updater
+    assert "LOCAL_UPDATER_BLOB" in updater
+    assert "OFFICIAL_UPDATER_MATCH" in updater
+    assert "git rev-parse \"%~1:update_school_bot.bat\"" in updater
+    assert "Only an updater identical to the approved GitHub copy" in updater
 
 
 def test_windows_updater_backs_up_school_state_before_fast_forwarding_code():
