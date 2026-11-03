@@ -11,6 +11,7 @@ from discord.ext import commands
 from services.build_guard import get_build_lock
 from services.discord_ownership import validate_managed_registry
 from services.permissions import direction_or_owner_check
+from services.permissions import STUDENT_STREAM_ROLE_PREFIX
 from services.storage import archive_guild_database, get_active_academic_year, get_guild_config, reset_guild_data
 
 OWNED_COMMANDS = {"resetserver"}
@@ -20,6 +21,50 @@ def _managed_mapping(config: dict, section: str) -> dict:
     managed = config.get("managed", {}) if isinstance(config, dict) else {}
     value = managed.get(section, {}) if isinstance(managed, dict) else {}
     return value if isinstance(value, dict) else {}
+
+
+def _registered_class_role_ids(guild: discord.Guild, config: dict) -> set[int]:
+    """Resolve only class roles whose persisted ID and canonical identity agree."""
+    registry = config.get("class_roles", {}) if isinstance(config, dict) else {}
+    if not isinstance(registry, dict):
+        raise RuntimeError("Le registre des rôles de classe est invalide.")
+
+    role_ids: set[int] = set()
+    for key, entry in registry.items():
+        if not isinstance(entry, dict):
+            raise RuntimeError("Une entrée du registre des rôles de classe est invalide.")
+
+        role_id = entry.get("role_id")
+        stream_code = entry.get("stream_code")
+        section = entry.get("section")
+        if (
+            type(role_id) is not int
+            or role_id <= 0
+            or not isinstance(stream_code, str)
+            or not stream_code.strip()
+            or type(section) is not int
+            or not 1 <= section <= 8
+        ):
+            raise RuntimeError("Une identité de rôle de classe enregistrée est invalide.")
+
+        expected_key = f"{stream_code}-{section}"
+        if key != expected_key:
+            raise RuntimeError(
+                f"La clé du rôle de classe `{key}` ne correspond pas à `{expected_key}`."
+            )
+
+        role = guild.get_role(role_id)
+        if role is None:
+            continue
+
+        expected_name = f"{STUDENT_STREAM_ROLE_PREFIX}{expected_key}"
+        if role.managed or role.is_default() or role.name != expected_name:
+            raise RuntimeError(
+                f"Le rôle de classe ID `{role_id}` ne correspond pas à l'identité attendue `{expected_name}`. Aucun reset ne sera exécuté."
+            )
+        role_ids.add(role_id)
+
+    return role_ids
 
 
 def _validate_reset_role_hierarchy(guild: discord.Guild, role_ids: set[int]) -> str | None:
@@ -60,6 +105,7 @@ class HardenedResetCommands(commands.Cog):
         config = get_guild_config(guild.id) or {}
         try:
             await validate_managed_registry(guild, config)
+            class_role_ids = _registered_class_role_ids(guild, config)
         except RuntimeError as exc:
             await interaction.response.send_message(
                 f"❌ Reset refusé : identité gérée incohérente (`{exc}`). Aucun resource n'a été supprimé.",
@@ -67,7 +113,7 @@ class HardenedResetCommands(commands.Cog):
             )
             return
 
-        role_ids = {value for value in _managed_mapping(config, "roles").values() if isinstance(value, int) and value > 0}
+        role_ids = {value for value in _managed_mapping(config, "roles").values() if isinstance(value, int) and value > 0} | class_role_ids
         channel_ids = {value for value in _managed_mapping(config, "channels").values() if isinstance(value, int) and value > 0}
         category_ids = {value for value in _managed_mapping(config, "categories").values() if isinstance(value, int) and value > 0}
 
@@ -88,9 +134,8 @@ class HardenedResetCommands(commands.Cog):
                         archive_path = archive_guild_database(guild.id, str(active_year["name"]))
                         archive_name = archive_path.name
                     except (OSError, sqlite3.Error) as exc:
-                        await interaction.followup.send(
-                            f"❌ Reset refusé : impossible de créer l'archive de l'année active (`{type(exc).__name__}: {exc}`). Aucun resource Discord n'a été supprimé.",
-                            ephemeral=True,
+                        await interaction.edit_original_response(
+                            content=f"❌ Reset refusé : impossible de créer l'archive de l'année active (`{type(exc).__name__}: {exc}`). Aucun resource Discord n'a été supprimé.",
                         )
                         return
 
@@ -122,17 +167,15 @@ class HardenedResetCommands(commands.Cog):
 
                 reset_guild_data(guild.id)
         except (discord.Forbidden, discord.HTTPException, discord.NotFound, OSError) as exc:
-            await interaction.followup.send(
-                f"❌ Reset interrompu : `{type(exc).__name__}`. Aucun nom n'a été utilisé pour élargir le scope.",
-                ephemeral=True,
+            await interaction.edit_original_response(
+                content=f"❌ Reset interrompu : `{type(exc).__name__}`. Aucun nom n'a été utilisé pour élargir le scope.",
             )
             return
 
         suffix = f" Catégories conservées car elles contiennent des ressources non gérées : **{retained_categories}**." if retained_categories else ""
         archive_suffix = f" Archive créée : `{archive_name}`." if archive_name else " Aucune année active à archiver."
-        await interaction.followup.send(
-            f"✅ Reset terminé. Channels: **{deleted_channels}** · Catégories: **{deleted_categories}** · Rôles: **{deleted_roles}**. Seuls les IDs gérés enregistrés ont été ciblés.{suffix}{archive_suffix}",
-            ephemeral=True,
+        await interaction.edit_original_response(
+            content=f"✅ Reset terminé. Channels: **{deleted_channels}** · Catégories: **{deleted_categories}** · Rôles: **{deleted_roles}**. Seuls les IDs gérés enregistrés ont été ciblés.{suffix}{archive_suffix}",
         )
 
 
