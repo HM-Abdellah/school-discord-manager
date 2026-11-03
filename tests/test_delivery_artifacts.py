@@ -153,5 +153,5 @@ def test_windows_updater_only_self_deletes_from_a_temporary_copy():
     updater = (ROOT / "update_school_bot.bat").read_text(encoding="utf-8")
 
     assert 'for %%I in ("%~dp0.") do set "SCRIPT_DIR=%%~fI"' in updater
-    assert 'for %%I in ("%TEMP%") do set "TEMP_DIR=%%~fI"' in updater
+    assert 'for %%I in ("%TEMP%\.") do set "TEMP_DIR=%%~fI"' in updater
     assert 'if /i "%~1"=="--run-from-temp" if /i "%SCRIPT_DIR%"=="%TEMP_DIR%" goto :run_updater' in updater
