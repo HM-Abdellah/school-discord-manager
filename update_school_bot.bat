@@ -89,17 +89,7 @@ goto :failed
 echo Official repository verified.
 
 echo.
-echo [3/7] Checking for local code changes...
-set "HAS_CHANGES="
-for /f "delims=" %%A in ('git status --porcelain') do set "HAS_CHANGES=1"
-if defined HAS_CHANGES (
-    echo ERROR: Local code changes or untracked files were found.
-    git status --short
-    echo No files will be overwritten. Ask the technical maintainer to review them.
-    goto :failed
-)
-
-echo Checking that this project's bot is stopped...
+echo [3/7] Checking that this project's bot is stopped...
 set "PROJECT_DIR=%PROJECT_DIR%"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; try { $python=[IO.Path]::GetFullPath((Join-Path $env:PROJECT_DIR '.venv\Scripts\python.exe')); $running=@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and ([IO.Path]::GetFullPath($_.ExecutablePath) -ieq $python) -and $_.CommandLine -match 'bot\.py' }); if ($running.Count -gt 0) { Write-Host 'ERROR: This project bot is still running. Stop it normally before updating.'; exit 1 }; exit 0 } catch { Write-Host 'ERROR: Could not verify whether the bot is running. Update cancelled for safety.'; exit 2 }"
 if errorlevel 1 goto :failed
@@ -148,13 +138,60 @@ if errorlevel 1 (
     goto :failed
 )
 
+echo.
+echo [5/7] Checking for local code changes...
+set "STATUS_FILE=%TEMP%\school_discord_manager_status_%RANDOM%_%RANDOM%.txt"
+git status --porcelain=v1 --untracked-files=all > "%STATUS_FILE%"
+if errorlevel 1 (
+    echo ERROR: Could not inspect the project's local changes.
+    goto :failed
+)
+set "STATUS_COUNT=0"
+for /f %%N in ('find /c /v "" ^< "%STATUS_FILE%"') do set "STATUS_COUNT=%%N"
+if "%STATUS_COUNT%"=="0" goto :local_changes_clean
+if not "%STATUS_COUNT%"=="1" goto :local_changes_detected
+
+findstr /l /x /c:" M update_school_bot.bat" "%STATUS_FILE%" >nul
+if errorlevel 1 goto :local_changes_detected
+
+set "LOCAL_UPDATER_BLOB="
+set "TARGET_UPDATER_BLOB="
+for /f "delims=" %%H in ('git hash-object --path=update_school_bot.bat "update_school_bot.bat"') do set "LOCAL_UPDATER_BLOB=%%H"
+for /f "delims=" %%H in ('git rev-parse "refs/remotes/origin/%BRANCH%:update_school_bot.bat"') do set "TARGET_UPDATER_BLOB=%%H"
+if not defined LOCAL_UPDATER_BLOB goto :local_changes_detected
+if not defined TARGET_UPDATER_BLOB goto :local_changes_detected
+if /i not "%LOCAL_UPDATER_BLOB%"=="%TARGET_UPDATER_BLOB%" goto :local_changes_detected
+
+echo The local updater is an exact copy of the approved GitHub updater.
+echo Restoring the checked-out updater so Git can apply the verified update...
+git restore --source=HEAD --worktree -- "update_school_bot.bat"
+if errorlevel 1 (
+    echo ERROR: Could not safely prepare the verified updater file.
+    goto :failed
+)
+
+:local_changes_clean
+if exist "%STATUS_FILE%" del /q "%STATUS_FILE%" >nul 2>&1
+set "HAS_CHANGES="
+for /f "delims=" %%A in ('git status --porcelain=v1 --untracked-files=all') do set "HAS_CHANGES=1"
+if defined HAS_CHANGES goto :local_changes_detected
+goto :local_changes_done
+
+:local_changes_detected
+if defined STATUS_FILE if exist "%STATUS_FILE%" del /q "%STATUS_FILE%" >nul 2>&1
+echo ERROR: Local code changes or untracked files were found.
+git status --short
+echo No project files will be overwritten. Only an updater identical to the approved GitHub copy can be reconciled automatically.
+goto :failed
+
+:local_changes_done
 if /i "%PRE_UPDATE_HEAD%"=="%TARGET_HEAD%" if /i "%ORIGINAL_BRANCH%"=="%BRANCH%" goto :switch_branch
 echo A new version is available.
 echo Installed: %PRE_UPDATE_HEAD%
 echo Available: %TARGET_HEAD%
 
 echo.
-echo [5/7] Creating a local recovery backup...
+echo [6/7] Creating a local recovery backup...
 if not defined LOCALAPPDATA (
     echo ERROR: Windows LOCALAPPDATA is unavailable; backup location cannot be secured.
     goto :failed
@@ -198,7 +235,7 @@ echo %BACKUP_DIR%
 
 :switch_branch
 echo.
-echo [6/7] Preparing the approved update branch...
+echo [7/7] Applying the approved update...
 if /i "%ORIGINAL_BRANCH%"=="%BRANCH%" goto :branch_ready
 git show-ref --verify --quiet "refs/heads/%BRANCH%"
 if not errorlevel 1 goto :switch_existing_branch
