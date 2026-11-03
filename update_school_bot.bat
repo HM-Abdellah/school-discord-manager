@@ -182,11 +182,8 @@ if %ROBOCOPY_EXIT% GEQ 8 (
     goto :backup_failed
 )
 if exist "data\school.db" if not exist "%BACKUP_DIR%\data\school.db" goto :backup_failed
-if exist "data\school.db" (
-    for %%F in ("data\school.db") do set "SOURCE_DB_SIZE=%%~zF"
-    for %%F in ("%BACKUP_DIR%\data\school.db") do set "BACKUP_DB_SIZE=%%~zF"
-    if not "%SOURCE_DB_SIZE%"=="%BACKUP_DB_SIZE%" goto :backup_failed
-)
+if exist "data\school.db" call :verify_database_backup
+if errorlevel 1 goto :backup_failed
 
 :data_backup_done
 echo Backup created:
@@ -301,4 +298,12 @@ goto :finish
 echo.
 pause
 del /q "%~f0" >nul 2>&1
+exit /b 0
+
+:verify_database_backup
+set "SOURCE_DB_SIZE="
+set "BACKUP_DB_SIZE="
+for %%F in ("data\school.db") do set "SOURCE_DB_SIZE=%%~zF"
+for %%F in ("%BACKUP_DIR%\data\school.db") do set "BACKUP_DB_SIZE=%%~zF"
+if not "%SOURCE_DB_SIZE%"=="%BACKUP_DB_SIZE%" exit /b 1
 exit /b 0
