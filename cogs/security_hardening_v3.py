@@ -12,7 +12,7 @@ from services.build_guard import get_build_lock
 from services.discord_ownership import validate_managed_registry
 from services.permissions import direction_or_owner_check
 from services.permissions import STUDENT_STREAM_ROLE_PREFIX
-from services.storage import archive_guild_database, get_active_academic_year, get_guild_config, reset_guild_data
+from services.storage import archive_guild_database, get_active_academic_year, get_guild_config, get_latest_archived_class_roles, reset_guild_data
 
 OWNED_COMMANDS = {"resetserver"}
 
@@ -102,10 +102,21 @@ class HardenedResetCommands(commands.Cog):
             await interaction.response.send_message("❌ Confirmation exacte requise : `RESET SCHOOL MANAGER`.", ephemeral=True)
             return
 
-        config = get_guild_config(guild.id) or {}
+        stored_config = get_guild_config(guild.id)
+        config = stored_config if isinstance(stored_config, dict) else {}
+        archived_class_roles = (
+            get_latest_archived_class_roles(guild.id)
+            if stored_config is None
+            else None
+        )
+        class_registry_config = (
+            {"class_roles": archived_class_roles}
+            if archived_class_roles is not None
+            else config
+        )
         try:
             await validate_managed_registry(guild, config)
-            class_role_ids = _registered_class_role_ids(guild, config)
+            class_role_ids = _registered_class_role_ids(guild, class_registry_config)
         except RuntimeError as exc:
             await interaction.response.send_message(
                 f"❌ Reset refusé : identité gérée incohérente (`{exc}`). Aucun resource n'a été supprimé.",
