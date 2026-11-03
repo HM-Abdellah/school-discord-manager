@@ -3,7 +3,7 @@ setlocal
 
 rem Only a copy launched from the Windows temporary folder may self-delete.
 for %%I in ("%~dp0.") do set "SCRIPT_DIR=%%~fI"
-for %%I in ("%TEMP%") do set "TEMP_DIR=%%~fI"
+for %%I in ("%TEMP%\.") do set "TEMP_DIR=%%~fI"
 if /i "%~1"=="--run-from-temp" if /i "%SCRIPT_DIR%"=="%TEMP_DIR%" goto :run_updater
 
 rem Run a temporary copy so this updater can safely replace itself.
