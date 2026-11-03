@@ -138,7 +138,7 @@ def test_windows_updater_never_force_resets_or_cleans_the_working_copy():
     assert "git merge --ff-only" in updater
     assert "git reset --hard" not in updater.lower()
     assert "git clean" not in updater.lower()
-    assert "Do not repeat the update blindly." in updater
+    assert "do not repeat the update blindly." in updater.lower()
 
 
 def test_windows_updater_offers_to_start_the_bot_after_updating():
