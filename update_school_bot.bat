@@ -141,7 +141,7 @@ if errorlevel 1 (
     goto :failed
 )
 
-if /i "%PRE_UPDATE_HEAD%"=="%TARGET_HEAD%" goto :switch_branch
+if /i "%PRE_UPDATE_HEAD%"=="%TARGET_HEAD%" if /i "%ORIGINAL_BRANCH%"=="%BRANCH%" goto :switch_branch
 echo A new version is available.
 echo Installed: %PRE_UPDATE_HEAD%
 echo Available: %TARGET_HEAD%
@@ -249,6 +249,7 @@ goto :ask_start
 echo.
 echo The project is already up to date.
 echo Installed version: %PRE_UPDATE_HEAD%
+if defined BACKUP_DIR echo Recovery backup: %BACKUP_DIR%
 goto :ask_start
 
 :backup_failed
