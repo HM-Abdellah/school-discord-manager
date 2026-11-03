@@ -223,10 +223,10 @@ E2E_GUILD_ID=<dedicated E2E guild id>
 
 ## 🛠️ Local installation
 
-The checkout command below targets `feat/admin-role-split`, the current working/testing branch containing the latest launcher and selectable QR-expiration changes. This is a development branch, not a production release.
+The school Windows deployment uses `fix/launcher-existing-venv-dependencies` as its configured update channel. Keep the school computer on this branch; do not switch it to `main` or an experimental development branch when applying school updates.
 
 ```bash
-git clone --branch feat/admin-role-split --single-branch https://github.com/HM-Abdellah/school-discord-manager.git
+git clone --branch fix/launcher-existing-venv-dependencies --single-branch https://github.com/HM-Abdellah/school-discord-manager.git
 cd school-discord-manager
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -238,13 +238,21 @@ Linux/macOS activation can use `source .venv/bin/activate`.
 
 ## 🪟 Windows one-click startup
 
-Keep `start_bot.bat` in the project's root folder beside `bot.py` and `.env.example`. On the first run, the launcher creates `.env` from the example and opens it in Notepad; replace the example value for `DISCORD_TOKEN` with the school's bot token, save the file, and run the launcher again. Never share or commit `.env`.
+Keep `start_bot.bat`, `stop_bot.bat`, and `update_school_bot.bat` in the project's root folder beside `bot.py` and `.env.example`. On the first run, `start_bot.bat` creates `.env` from the example and opens it in Notepad; enter the school's bot token, save the file, and run the launcher again. Never share or commit `.env`.
 
 The first configured run creates a local `.venv` and installs the runtime dependencies, so an Internet connection is required for initial setup. Python 3.12 or newer must be installed on Windows. Every launch checks the runtime requirements and installs any missing or incompatible packages before starting the bot, even when `.venv` already exists. The launcher also enables Python UTF-8 mode for Unicode console output.
 
-**Important: automatic Git updates are not implemented in this launcher yet.** Double-clicking `start_bot.bat` currently starts the code already present in the local folder; it does not fetch new commits or switch branches. Until a guarded updater is implemented and tested, the technical maintainer must update the Git clone separately while the bot is stopped. School staff should not run Git commands or use a ZIP copy if future Git-based updates are required.
+**Starting and updating are separate actions:**
 
-Keep the visible console window open while the bot should be online. Its title is **SCHOOL DISCORD MANAGER - BOT CONSOLE**, and it shows the bot's connection/error messages. Press `Ctrl+C` in that window for the normal stop path. If the window cannot be found, double-click `stop_bot.bat` beside `start_bot.bat`; it targets only a `.venv\Scripts\python.exe` process running this project's `bot.py`, checks whether it stopped, and force-stops only that matching bot process if necessary. Do not end every `python.exe` process in Task Manager, because other programs may use Python. The launcher also checks for an already-running copy before starting another one. In Task Manager, the runtime appears as `python.exe` under **Details**; the named console window is the clearer indicator for school staff. The bot only stays online while this PC is powered on, connected to the Internet, and the process is running. Back up the local `data/` folder regularly.
+- Double-click `start_bot.bat` to start the currently installed version. It does not download code.
+- To update, first let any command finish, press `Ctrl+C` in the bot console to stop it normally, then double-click `update_school_bot.bat`.
+- The updater verifies the official GitHub repository and the configured school update branch. It stops without changing code if it detects local source edits, an unexpected repository/history, or a running bot.
+- Before switching or downloading application code, it creates a local recovery copy of `.env` and the complete `data/` folder (including `school.db` and archives) under `%LOCALAPPDATA%\SchoolDiscordManager\UpdateBackups\`. It then applies only a fast-forward update; it never force-resets or cleans the working folder.
+- The updater runs from a temporary copy, so it can replace its own file during the same update. At the end, it asks whether to open `start_bot.bat` and start the updated bot. The normal launcher then checks/installs the required runtime dependencies.
+
+School staff do not need to open Git, PowerShell, or a terminal command manually. The update still requires the bot to be stopped first; do not update during a live school operation. Keep the recovery backups protected because they contain school records and the bot token. These local update backups are an extra safety net, not a replacement for regular independent backups of `data/`.
+
+Keep the visible console window open while the bot should be online. Its title is **SCHOOL DISCORD MANAGER - BOT CONSOLE**, and it shows the bot's connection/error messages. Press `Ctrl+C` in that window for the normal stop path. If the console cannot be found, use `stop_bot.bat` only after confirming no school command is still running; it targets this project's virtual-environment bot process, not every Python process. The launcher also checks for an already-running copy before starting another one. The bot only stays online while this PC is powered on, connected to the Internet, and the process is running. Back up the local `data/` folder regularly.
 
 ## 🐳 Docker
 
