@@ -163,12 +163,8 @@ if not defined TARGET_UPDATER_BLOB goto :local_changes_detected
 if /i not "%LOCAL_UPDATER_BLOB%"=="%TARGET_UPDATER_BLOB%" goto :local_changes_detected
 
 echo The local updater is an exact copy of the approved GitHub updater.
-echo Restoring the checked-out updater so Git can apply the verified update...
-git restore --source=HEAD --worktree -- "update_school_bot.bat"
-if errorlevel 1 (
-    echo ERROR: Could not safely prepare the verified updater file.
-    goto :failed
-)
+set "TRUSTED_UPDATER_CHANGE=1"
+goto :local_changes_done
 
 :local_changes_clean
 if exist "%STATUS_FILE%" del /q "%STATUS_FILE%" >nul 2>&1
@@ -185,6 +181,7 @@ echo No project files will be overwritten. Only an updater identical to the appr
 goto :failed
 
 :local_changes_done
+if defined STATUS_FILE if exist "%STATUS_FILE%" del /q "%STATUS_FILE%" >nul 2>&1
 if /i "%PRE_UPDATE_HEAD%"=="%TARGET_HEAD%" if /i "%ORIGINAL_BRANCH%"=="%BRANCH%" goto :switch_branch
 echo A new version is available.
 echo Installed: %PRE_UPDATE_HEAD%
@@ -232,6 +229,22 @@ if exist "data\school.db" if errorlevel 1 goto :backup_failed
 :data_backup_done
 echo Backup created:
 echo %BACKUP_DIR%
+
+if not defined TRUSTED_UPDATER_CHANGE goto :switch_branch
+echo.
+echo Reconciling the verified updater copy after the recovery backup...
+git restore --source=HEAD --worktree -- "update_school_bot.bat"
+if errorlevel 1 (
+    echo ERROR: Could not safely prepare the verified updater file.
+    goto :failed
+)
+set "HAS_CHANGES="
+for /f "delims=" %%A in ('git status --porcelain=v1 --untracked-files=all') do set "HAS_CHANGES=1"
+if defined HAS_CHANGES (
+    echo ERROR: Unexpected local changes remain after updater reconciliation.
+    git status --short
+    goto :failed
+)
 
 :switch_branch
 echo.
