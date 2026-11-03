@@ -1263,6 +1263,68 @@ def reset_guild_data(guild_id: int) -> None:
     _refresh_json_cache()
 
 
+
+def get_latest_archived_class_roles(guild_id: int) -> dict[str, Any] | None:
+    """Return class-role identities from this guild's newest valid reset archive.
+
+    None means no matching archive exists. An empty mapping means the newest
+    matching archive did not contain a usable class-role registry; callers must
+    not fall back to an older archive in that case.
+    """
+    archive_dir = DATA_DIR / "archives"
+    if not archive_dir.is_dir():
+        return None
+
+    candidates: list[tuple[str, str, Path]] = []
+    for archive_path in archive_dir.glob("*.db"):
+        try:
+            archive_uri = archive_path.resolve().as_uri() + "?mode=ro"
+            with sqlite3.connect(
+                archive_uri,
+                uri=True,
+                timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+            ) as conn:
+                conn.row_factory = sqlite3.Row
+                if not _table_exists(conn, "archive_metadata"):
+                    continue
+                metadata = conn.execute(
+                    "SELECT guild_id, archived_at FROM archive_metadata WHERE id=1"
+                ).fetchone()
+                if metadata is None or int(metadata["guild_id"]) != int(guild_id):
+                    continue
+                archived_at = str(metadata["archived_at"] or "")
+                candidates.append((archived_at, archive_path.name, archive_path))
+        except (OSError, sqlite3.Error, TypeError, ValueError):
+            continue
+
+    if not candidates:
+        return None
+
+    _archived_at, _name, latest_path = max(candidates, key=lambda item: (item[0], item[1]))
+    try:
+        archive_uri = latest_path.resolve().as_uri() + "?mode=ro"
+        with sqlite3.connect(
+            archive_uri,
+            uri=True,
+            timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+        ) as conn:
+            conn.row_factory = sqlite3.Row
+            if not _table_exists(conn, "guild_configs"):
+                return {}
+            row = conn.execute(
+                "SELECT config_json, is_deleted FROM guild_configs WHERE guild_id=?",
+                (int(guild_id),),
+            ).fetchone()
+            if row is None or row["is_deleted"] or not row["config_json"]:
+                return {}
+            config = json.loads(row["config_json"])
+            if not isinstance(config, dict):
+                return {}
+            registry = config.get("class_roles", {})
+            return registry if isinstance(registry, dict) else {}
+    except (OSError, sqlite3.Error, TypeError, ValueError, json.JSONDecodeError):
+        return {}
+
 def ensure_academic_year(guild_id: int, name: str, *, active: bool = False) -> int:
     initialize_database()
     today = date.today().isoformat()
