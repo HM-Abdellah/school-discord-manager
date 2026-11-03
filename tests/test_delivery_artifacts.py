@@ -125,7 +125,7 @@ def test_windows_updater_backs_up_school_state_before_fast_forwarding_code():
     update_position = updater.index('git merge --ff-only')
     assert backup_position < update_position
     assert 'copy /y ".env" "%BACKUP_DIR%\\.env"' in updater
-    assert r"%LOCALAPPDATA%\\SchoolDiscordManager\\UpdateBackups" in updater
+    assert r"%LOCALAPPDATA%\SchoolDiscordManager\UpdateBackups" in updater
     assert "previous_commit.txt" in updater
     assert "target_commit.txt" in updater
 
