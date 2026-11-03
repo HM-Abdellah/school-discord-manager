@@ -105,6 +105,9 @@ def test_windows_updater_targets_only_the_configured_school_repository_and_branc
 
     assert 'set "BRANCH=fix/launcher-existing-venv-dependencies"' in updater
     assert 'set "EXPECTED_HTTPS=https://github.com/HM-Abdellah/school-discord-manager.git"' in updater
+    assert 'set "EXPECTED_HTTPS_NO_GIT=https://github.com/HM-Abdellah/school-discord-manager"' in updater
+    assert 'set "EXPECTED_SSH_NO_GIT=git@github.com:HM-Abdellah/school-discord-manager"' in updater
+    assert 'if /i "%ORIGIN_URL%"=="%EXPECTED_HTTPS_NO_GIT%" goto :origin_verified' in updater
     assert "git remote get-url origin" in updater
     assert "git fetch --no-tags origin" in updater
 
