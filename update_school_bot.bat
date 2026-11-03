@@ -186,7 +186,7 @@ if %ROBOCOPY_EXIT% GEQ 8 (
 )
 if exist "data\school.db" if not exist "%BACKUP_DIR%\data\school.db" goto :backup_failed
 if exist "data\school.db" call :verify_database_backup
-if errorlevel 1 goto :backup_failed
+if exist "data\school.db" if errorlevel 1 goto :backup_failed
 
 :data_backup_done
 echo Backup created:
