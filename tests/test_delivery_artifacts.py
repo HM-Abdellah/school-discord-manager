@@ -89,3 +89,70 @@ def test_compose_persists_runtime_data_and_uses_published_image():
     assert "env_file:" in compose
     assert "school_manager_data:/app/data" in compose
     assert "restart: unless-stopped" in compose
+
+
+
+def test_windows_updater_can_replace_its_own_file():
+    updater = (ROOT / "update_school_bot.bat").read_text(encoding="utf-8")
+
+    assert 'if /i "%~1"=="--run-from-temp" if /i "%SCRIPT_DIR%"=="%TEMP_DIR%" goto :run_updater' in updater
+    assert 'copy /y "%~f0" "%HELPER%"' in updater
+    assert 'cmd /k ""%HELPER%" --run-from-temp "%PROJECT_DIR%""' in updater
+
+
+def test_windows_updater_targets_only_the_configured_school_repository_and_branch():
+    updater = (ROOT / "update_school_bot.bat").read_text(encoding="utf-8")
+
+    assert 'set "BRANCH=fix/launcher-existing-venv-dependencies"' in updater
+    assert 'set "EXPECTED_HTTPS=https://github.com/HM-Abdellah/school-discord-manager.git"' in updater
+    assert "git remote get-url origin" in updater
+    assert "git fetch --no-tags origin" in updater
+
+
+def test_windows_updater_refuses_local_edits_and_a_running_project_bot():
+    updater = (ROOT / "update_school_bot.bat").read_text(encoding="utf-8")
+
+    assert "git status --porcelain" in updater
+    assert "Get-CimInstance Win32_Process" in updater
+    assert "ExecutablePath" in updater
+    assert "Stop it normally before updating." in updater
+
+
+def test_windows_updater_backs_up_school_state_before_fast_forwarding_code():
+    updater = (ROOT / "update_school_bot.bat").read_text(encoding="utf-8")
+
+    backup_position = updater.index('robocopy "data"')
+    update_position = updater.index('git merge --ff-only')
+    assert backup_position < update_position
+    assert 'copy /y ".env" "%BACKUP_DIR%\\.env"' in updater
+    assert r"%LOCALAPPDATA%\SchoolDiscordManager\UpdateBackups" in updater
+    assert 'call :verify_database_backup' in updater
+    assert 'if exist "data\\school.db" if errorlevel 1 goto :backup_failed' in updater
+    assert ":verify_database_backup" in updater
+    assert "previous_commit.txt" in updater
+    assert "target_commit.txt" in updater
+
+
+def test_windows_updater_never_force_resets_or_cleans_the_working_copy():
+    updater = (ROOT / "update_school_bot.bat").read_text(encoding="utf-8")
+
+    assert "git merge --ff-only" in updater
+    assert "git reset --hard" not in updater.lower()
+    assert "git clean" not in updater.lower()
+    assert "do not repeat the update blindly." in updater.lower()
+
+
+def test_windows_updater_offers_to_start_the_bot_after_updating():
+    updater = (ROOT / "update_school_bot.bat").read_text(encoding="utf-8")
+
+    assert "Do you want to start the bot now?" in updater
+    assert 'start "" "%PROJECT_DIR%\\start_bot.bat"' in updater
+
+
+
+def test_windows_updater_only_self_deletes_from_a_temporary_copy():
+    updater = (ROOT / "update_school_bot.bat").read_text(encoding="utf-8")
+
+    assert 'for %%I in ("%~dp0.") do set "SCRIPT_DIR=%%~fI"' in updater
+    assert 'for %%I in ("%TEMP%\.") do set "TEMP_DIR=%%~fI"' in updater
+    assert 'if /i "%~1"=="--run-from-temp" if /i "%SCRIPT_DIR%"=="%TEMP_DIR%" goto :run_updater' in updater
