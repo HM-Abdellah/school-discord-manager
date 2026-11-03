@@ -34,7 +34,9 @@ if errorlevel 1 (
 title SCHOOL DISCORD MANAGER - UPDATE
 set "BRANCH=fix/launcher-existing-venv-dependencies"
 set "EXPECTED_HTTPS=https://github.com/HM-Abdellah/school-discord-manager.git"
+set "EXPECTED_HTTPS_NO_GIT=https://github.com/HM-Abdellah/school-discord-manager"
 set "EXPECTED_SSH=git@github.com:HM-Abdellah/school-discord-manager.git"
+set "EXPECTED_SSH_NO_GIT=git@github.com:HM-Abdellah/school-discord-manager"
 
 echo ============================================================
 echo   SCHOOL DISCORD MANAGER - SAFE ONE-CLICK UPDATE
@@ -76,7 +78,9 @@ echo [2/7] Verifying the project source...
 set "ORIGIN_URL="
 for /f "delims=" %%U in ('git remote get-url origin 2^>nul') do set "ORIGIN_URL=%%U"
 if /i "%ORIGIN_URL%"=="%EXPECTED_HTTPS%" goto :origin_verified
+if /i "%ORIGIN_URL%"=="%EXPECTED_HTTPS_NO_GIT%" goto :origin_verified
 if /i "%ORIGIN_URL%"=="%EXPECTED_SSH%" goto :origin_verified
+if /i "%ORIGIN_URL%"=="%EXPECTED_SSH_NO_GIT%" goto :origin_verified
 echo ERROR: The Git origin does not match the official School Discord Manager repository.
 echo Found origin: %ORIGIN_URL%
 goto :failed
