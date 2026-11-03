@@ -250,3 +250,11 @@ def test_reset_edits_original_response_after_deleting_channels():
     assert "} | class_role_ids" in source
     assert "interaction.edit_original_response(" in source
     assert "interaction.followup.send(" not in source
+
+
+
+def test_reset_uses_latest_archived_class_roles_only_when_live_config_is_missing():
+    source = open("cogs/security_hardening_v3.py", encoding="utf-8").read()
+    assert "get_latest_archived_class_roles(guild.id)" in source
+    assert "if stored_config is None" in source
+    assert '{"class_roles": archived_class_roles}' in source
