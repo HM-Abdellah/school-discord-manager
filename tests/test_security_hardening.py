@@ -246,7 +246,7 @@ def test_reset_class_role_registry_fails_closed_on_identity_mismatch():
 
 def test_reset_edits_original_response_after_deleting_channels():
     source = open("cogs/security_hardening_v3.py", encoding="utf-8").read()
-    assert "class_role_ids = _registered_class_role_ids(guild, config)" in source
+    assert "class_role_ids = _registered_class_role_ids(guild, class_registry_config)" in source
     assert "} | class_role_ids" in source
     assert "interaction.edit_original_response(" in source
     assert "interaction.followup.send(" not in source
