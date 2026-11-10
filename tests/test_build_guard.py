@@ -72,3 +72,67 @@ def test_management_authorized_uses_owner_or_configured_role(monkeypatch):
 
     user.id = 100
     assert permissions.management_authorized(interaction) is True
+
+
+
+def test_admin_role_registry_sync_allows_direction_and_surveillance_roles_without_db_registry():
+    from services.permissions import (
+        ROLE_DIRECTION,
+        ROLE_SURVEILLANT_GENERAL,
+        admin_role_registry_sync_authorized,
+    )
+
+    class Role:
+        def __init__(self, role_id, name, *, managed=False, default=False):
+            self.id = role_id
+            self.name = name
+            self.managed = managed
+            self._default = default
+
+        def is_default(self):
+            return self._default
+
+    for role_name in (ROLE_DIRECTION, ROLE_SURVEILLANT_GENERAL):
+        role = Role(501, role_name)
+        guild = type("Guild", (), {"owner_id": 100, "roles": [role]})()
+        user = type("User", (), {"id": 200, "roles": [role]})()
+        interaction = type("Interaction", (), {"guild": guild, "user": user})()
+        assert admin_role_registry_sync_authorized(interaction) is True
+
+
+def test_admin_role_registry_sync_rejects_untrusted_or_ambiguous_roles():
+    from services.permissions import ROLE_DIRECTION, admin_role_registry_sync_authorized
+
+    class Role:
+        def __init__(self, role_id, name, *, managed=False):
+            self.id = role_id
+            self.name = name
+            self.managed = managed
+
+        def is_default(self):
+            return False
+
+    assigned = Role(501, ROLE_DIRECTION)
+    guild = type("Guild", (), {"owner_id": 100, "roles": [assigned]})()
+    unrelated = Role(700, "Teacher")
+    user = type("User", (), {"id": 200, "roles": [unrelated]})()
+    interaction = type("Interaction", (), {"guild": guild, "user": user})()
+    assert admin_role_registry_sync_authorized(interaction) is False
+
+    user.roles = [assigned]
+    guild.roles = [assigned, Role(502, ROLE_DIRECTION)]
+    assert admin_role_registry_sync_authorized(interaction) is False
+
+    managed = Role(503, ROLE_DIRECTION, managed=True)
+    guild.roles = [managed]
+    user.roles = [managed]
+    assert admin_role_registry_sync_authorized(interaction) is False
+
+
+def test_admin_role_registry_sync_always_allows_server_owner():
+    from services.permissions import admin_role_registry_sync_authorized
+
+    guild = type("Guild", (), {"owner_id": 100, "roles": []})()
+    user = type("User", (), {"id": 100, "roles": []})()
+    interaction = type("Interaction", (), {"guild": guild, "user": user})()
+    assert admin_role_registry_sync_authorized(interaction) is True
