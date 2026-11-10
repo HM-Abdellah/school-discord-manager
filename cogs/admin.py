@@ -1,4 +1,4 @@
-"""Administrative dashboard, server health, and owner-only role-registry recovery."""
+"""Administrative dashboard, server health, and staff-authorized role-registry recovery."""
 
 from __future__ import annotations
 
@@ -15,14 +15,14 @@ from services.permissions import (
     ROLE_PROFESSOR_FEMALE,
     _preflight_message,
     get_managed_role,
+    admin_role_registry_check,
     management_check,
-    owner_only_check,
 )
 from services.storage import get_guild_config, list_academic_years
 
 
 class AdminCommands(commands.Cog):
-    """Administrative diagnostics and owner-only registry recovery."""
+    """Administrative diagnostics and authorized registry recovery."""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -109,9 +109,9 @@ class AdminCommands(commands.Cog):
 
     @app_commands.command(
         name="syncadminroles",
-        description="Réparer le registre des rôles administratifs existants (propriétaire uniquement).",
+        description="Réparer le registre des rôles administratifs (propriétaire, Direction ou Surveillant Général).",
     )
-    @owner_only_check(preflight=False)
+    @admin_role_registry_check()
     async def sync_admin_roles(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
         if guild is None:

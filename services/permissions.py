@@ -567,6 +567,86 @@ def admin_qr_check(*, lock: bool = True) -> app_commands.check:
     return decorator
 
 
+def admin_role_registry_sync_authorized(interaction: discord.Interaction) -> bool:
+    """Allow the owner or holders of one unique canonical Direction/Surveillant role.
+
+    This intentionally resolves the roles from Discord itself, not from the
+    persisted managed-role registry that this command is meant to repair.
+    """
+    guild = interaction.guild
+    if guild is None:
+        return False
+    if getattr(interaction.user, "id", None) == getattr(guild, "owner_id", None):
+        return True
+
+    member_role_ids = {
+        role_id
+        for role in (getattr(interaction.user, "roles", None) or [])
+        if type(role_id := getattr(role, "id", None)) is int and role_id > 0
+    }
+    if not member_role_ids:
+        return False
+
+    for role_name in (ROLE_DIRECTION, ROLE_SURVEILLANT_GENERAL):
+        matches = []
+        for role in getattr(guild, "roles", []) or []:
+            is_default = getattr(role, "is_default", None)
+            if (
+                getattr(role, "name", None) == role_name
+                and not getattr(role, "managed", False)
+                and not (callable(is_default) and is_default())
+            ):
+                matches.append(role)
+        # A duplicate canonical name is ambiguous. Fail closed; the service
+        # will also refuse to write any registry changes in that situation.
+        if len(matches) == 1 and getattr(matches[0], "id", None) in member_role_ids:
+            return True
+
+    return False
+
+
+def admin_role_registry_check(*, lock: bool = True) -> app_commands.check:
+    """Authorize owner or the existing Direction/Surveillant roles for bootstrap sync."""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        guild = interaction.guild
+        if guild is None:
+            if not interaction.response.is_done():
+                await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return False
+
+        if not admin_role_registry_sync_authorized(interaction):
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Cette commande est réservée au propriétaire, à `Direction` "
+                    "ou au `Surveillant Général`.",
+                    ephemeral=True,
+                )
+            return False
+
+        command_name = getattr(getattr(interaction, "command", None), "name", "")
+        pending_message = _pending_removal_message(guild, command_name)
+        if pending_message:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(pending_message, ephemeral=True)
+            return False
+        pending_reset = _pending_reset_message(guild, command_name)
+        if pending_reset:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(pending_reset, ephemeral=True)
+            return False
+        return True
+
+    check_decorator = app_commands.check(predicate)
+
+    def decorator(function):
+        # No Discord default-permission gate here: the bootstrap roles may not
+        # have MANAGE_ROLES at guild level. Runtime authorization above is strict.
+        function = check_decorator(function)
+        return _wrap_with_mutation_lock(function) if lock else function
+
+    return decorator
+
+
 def owner_only_check(*, lock: bool = True, preflight: bool = True) -> app_commands.check:
     async def predicate(interaction: discord.Interaction) -> bool:
         guild = interaction.guild

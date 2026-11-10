@@ -1,4 +1,4 @@
-"""Owner-authorized repair for the persisted school-administration role registry."""
+"""Authorized staff repair for the persisted school-administration role registry."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def sync_admin_role_registry(
     actor_id: int,
     actor_name: str,
 ) -> tuple[str, ...]:
-    """Register existing canonical admin roles after an explicit server-owner action.
+    """Register existing canonical admin roles after an explicit authorized staff action.
 
     This updates only the managed role ID registry in the persisted guild config.
     It does not create, rename, reorder, delete, or change permissions on Discord
@@ -129,7 +129,7 @@ def sync_admin_role_registry(
         "sync_admin_role_registry",
         target=", ".join(synced_names),
         details=(
-            "Server owner registered existing canonical school-administration role IDs. "
+            "Authorized owner or school staff registered existing canonical school-administration role IDs. "
             "No Discord roles, members, permissions, or channel overwrites were changed."
         ),
     )

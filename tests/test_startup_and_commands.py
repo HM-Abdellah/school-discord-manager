@@ -175,8 +175,8 @@ async def test_admin_commands_register_only_admin_dashboard_commands():
     assert bot.tree.get_command("syncadminroles") is not None
     assert bot.tree.get_command("setexam") is None
     sync_command = bot.tree.get_command("syncadminroles")
-    assert sync_command.default_permissions is not None
-    assert sync_command.default_permissions.administrator is True
+    # Role-based bootstrap access is enforced at runtime, not by Discord's Administrator default.
+    assert sync_command.default_permissions is None
     assert len(sync_command.checks) == 1
     await bot.close()
 
