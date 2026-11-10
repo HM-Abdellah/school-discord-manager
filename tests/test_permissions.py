@@ -279,6 +279,33 @@ async def test_owner_mutations_are_blocked_while_removal_recovery_is_pending(mon
 
 
 @pytest.mark.asyncio
+async def test_owner_registry_repair_can_skip_unrelated_discord_permission_preflight(monkeypatch):
+    guild = SimpleNamespace(id=123, owner_id=999)
+    response = SimpleNamespace(is_done=lambda: False, send_message=noop)
+    monkeypatch.setattr("services.permissions.get_guild_config", lambda _guild_id: {})
+
+    @owner_only_check(lock=False, preflight=False)
+    async def dummy(_interaction):
+        return True
+
+    predicate = dummy.__discord_app_commands_checks__[0]
+    owner_interaction = SimpleNamespace(
+        guild=guild,
+        user=SimpleNamespace(id=999, roles=[]),
+        response=response,
+        command=SimpleNamespace(name="syncadminroles"),
+    )
+    non_owner_interaction = SimpleNamespace(
+        guild=guild,
+        user=SimpleNamespace(id=1000, roles=[]),
+        response=response,
+        command=SimpleNamespace(name="syncadminroles"),
+    )
+    assert await predicate(owner_interaction) is True
+    assert await predicate(non_owner_interaction) is False
+
+
+@pytest.mark.asyncio
 async def test_read_only_status_remains_available_during_removal_recovery(monkeypatch):
     everyone = role("@everyone", 0, 1)
     admin = role(ROLE_ADMIN, 5, 42)

@@ -567,7 +567,7 @@ def admin_qr_check(*, lock: bool = True) -> app_commands.check:
     return decorator
 
 
-def owner_only_check(*, lock: bool = True) -> app_commands.check:
+def owner_only_check(*, lock: bool = True, preflight: bool = True) -> app_commands.check:
     async def predicate(interaction: discord.Interaction) -> bool:
         guild = interaction.guild
         if guild is None or interaction.user.id != guild.owner_id:
@@ -585,11 +585,12 @@ def owner_only_check(*, lock: bool = True) -> app_commands.check:
             if not interaction.response.is_done():
                 await interaction.response.send_message(pending_reset, ephemeral=True)
             return False
-        message = _preflight_message(interaction, needs_channels=True, needs_roles=True)
-        if message:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(message, ephemeral=True)
-            return False
+        if preflight:
+            message = _preflight_message(interaction, needs_channels=True, needs_roles=True)
+            if message:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(message, ephemeral=True)
+                return False
         return True
 
     check_decorator = app_commands.check(predicate)
