@@ -16,7 +16,7 @@ from services.permissions import (
     _preflight_message,
     get_managed_role,
     management_check,
-    owner_only_check,
+    admin_role_registry_check,
 )
 from services.storage import get_guild_config, list_academic_years
 
@@ -109,9 +109,9 @@ class AdminCommands(commands.Cog):
 
     @app_commands.command(
         name="syncadminroles",
-        description="Réparer le registre des rôles administratifs existants (propriétaire uniquement).",
+        description="Réparer le registre des rôles administratifs (propriétaire, Direction ou Surveillant Général).",
     )
-    @owner_only_check(preflight=False)
+    @admin_role_registry_check()
     async def sync_admin_roles(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
         if guild is None:
