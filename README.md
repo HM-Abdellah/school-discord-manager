@@ -34,6 +34,8 @@ The three school-administration roles and `Support Engineer` preserve the curren
 
 During the transition, the previously configured `Administration` role remains recognized and tracked only while its exact recorded ID still exists. `/build` creates/reuses the four replacement roles and copies the old role's explicit overwrites to replacement roles only on registered, managed channels/categories. It does not delete the old role or automatically change its members. Move existing staff to the appropriate replacement roles and verify their access before manually deleting `Administration`; the next successful build will then remove that stale role ID from the managed registry. Never use `/resetserver` as a role-migration shortcut.
 
+If the canonical school roles already exist in Discord but their IDs are missing or stale in the local registry, the server owner can run `/syncadminroles`. It accepts only one ordinary Discord role for each exact school-role name, rejects duplicate names and conflicting live IDs, and updates only the persisted `managed.roles` registry plus an audit event. It does not alter Discord roles, member assignments, permissions, or channel overwrites. Because SQLite is local to each bot installation, run this repair on the machine that will host the bot.
+
 Managed stream roles are persisted by Discord ID. Destructive operations resolve targets from the persisted managed-resource registry instead of discovering resources by name.
 
 ## 📅 Academic years and student history
@@ -65,6 +67,7 @@ Previous academic years remain available for history and controlled rollback.
 ```text
 /setup
 /build
+/syncadminroles
 /addstream
 /removestream
 /status

@@ -36,6 +36,9 @@ EXPECTED_RUNTIME_OWNERS = {
     "listclassqr": "cogs.qr_onboarding",
     "createteacherqr": "cogs.teacher_qr_onboarding",
     "createadminqr": "cogs.teacher_qr_onboarding",
+    "syncadminroles": "cogs.admin",
+    "build": "cogs.server_v3",
+    "setup": "cogs.setup",
     "revoketeacherqr": "cogs.teacher_qr_onboarding",
     "listteacherqr": "cogs.teacher_qr_onboarding",
 }
@@ -78,6 +81,8 @@ def test_runtime_loader_declares_final_command_owners():
 
 def test_critical_commands_have_one_source_definition_and_expected_owner():
     modules = {
+        "cogs.setup": "cogs/setup.py",
+        "cogs.admin": "cogs/admin.py",
         "cogs.server_v3": "cogs/server_v3.py",
         "cogs.students": "cogs/students.py",
         "cogs.teachers": "cogs/teachers.py",
@@ -167,7 +172,23 @@ async def test_admin_commands_register_only_admin_dashboard_commands():
     await bot.add_cog(AdminCommands(bot))
     assert bot.tree.get_command("adminpanel") is not None
     assert bot.tree.get_command("serverhealth") is not None
+    assert bot.tree.get_command("syncadminroles") is not None
     assert bot.tree.get_command("setexam") is None
+    sync_command = bot.tree.get_command("syncadminroles")
+    assert sync_command.default_permissions is not None
+    assert sync_command.default_permissions.administrator is True
+    assert len(sync_command.checks) == 1
+    await bot.close()
+
+
+@pytest.mark.asyncio
+async def test_setup_cog_registers_setup_command_only():
+    from cogs.setup import Setup
+
+    bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
+    await bot.add_cog(Setup(bot))
+    assert bot.tree.get_command("setup") is not None
+    assert bot.tree.get_command("build") is None
     await bot.close()
 
 

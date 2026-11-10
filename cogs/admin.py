@@ -1,18 +1,28 @@
-"""Administrative dashboard and server health commands."""
+"""Administrative dashboard, server health, and owner-only role-registry recovery."""
 
 from __future__ import annotations
+
+import sqlite3
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
+from services.admin_role_registry import sync_admin_role_registry
 from services.audit import recent_events
-from services.permissions import ROLE_PROFESSOR, ROLE_PROFESSOR_FEMALE, _preflight_message, get_managed_role, management_check
+from services.permissions import (
+    ROLE_PROFESSOR,
+    ROLE_PROFESSOR_FEMALE,
+    _preflight_message,
+    get_managed_role,
+    management_check,
+    owner_only_check,
+)
 from services.storage import get_guild_config, list_academic_years
 
 
 class AdminCommands(commands.Cog):
-    """Read-only administrative diagnostics."""
+    """Administrative diagnostics and owner-only registry recovery."""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -96,6 +106,44 @@ class AdminCommands(commands.Cog):
         colour = discord.Colour.green() if all(item.startswith("✅") or item.startswith("⚠️") for item in checks) else discord.Colour.orange()
         embed = discord.Embed(title="🩺 SERVER HEALTH", description="\n".join(checks), colour=colour)
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="syncadminroles",
+        description="Réparer le registre des rôles administratifs existants (propriétaire uniquement).",
+    )
+    @owner_only_check(preflight=False)
+    async def sync_admin_roles(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("❌ Serveur requis.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            synced_names = sync_admin_role_registry(
+                guild,
+                actor_id=interaction.user.id,
+                actor_name=getattr(interaction.user, "display_name", None) or str(interaction.user),
+            )
+        except ValueError as exc:
+            await interaction.followup.send(f"❌ Synchronisation annulée : {exc}", ephemeral=True)
+            return
+        except (OSError, sqlite3.Error) as exc:
+            await interaction.followup.send(
+                f"❌ Impossible d'enregistrer le registre des rôles : {type(exc).__name__}. "
+                "Aucun changement Discord n'a été effectué.",
+                ephemeral=True,
+            )
+            return
+
+        roles_text = ", ".join(f"`{name}`" for name in synced_names)
+        await interaction.followup.send(
+            "✅ **Registre administratif synchronisé.**\n"
+            f"Rôles enregistrés : {roles_text}.\n\n"
+            "Les titulaires de ces rôles peuvent maintenant utiliser les commandes qui leur sont autorisées. "
+            "Aucun rôle, membre, permission Discord ou salon n'a été modifié.",
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot) -> None:
