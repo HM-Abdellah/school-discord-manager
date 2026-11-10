@@ -1,4 +1,4 @@
-"""Administrative dashboard, server health, and owner-only role-registry recovery."""
+"""Administrative dashboard, server health, and staff-authorized role-registry recovery."""
 
 from __future__ import annotations
 
@@ -15,14 +15,14 @@ from services.permissions import (
     ROLE_PROFESSOR_FEMALE,
     _preflight_message,
     get_managed_role,
-    management_check,
     admin_role_registry_check,
+    management_check,
 )
 from services.storage import get_guild_config, list_academic_years
 
 
 class AdminCommands(commands.Cog):
-    """Administrative diagnostics and owner-only registry recovery."""
+    """Administrative diagnostics and authorized registry recovery."""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
