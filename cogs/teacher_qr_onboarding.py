@@ -1805,7 +1805,7 @@ class TeacherQROnboarding(commands.Cog):
         if target_role is None or target_role.managed or target_role.is_default():
             await interaction.response.send_message(
                 f"❌ Le rôle `{target_role_name}` est absent du registre School Manager. "
-                "Le propriétaire doit lancer /syncadminroles pour enregistrer les rôles existants. "
+                "Le propriétaire, Direction ou Surveillant Général doit lancer /syncadminroles pour enregistrer les rôles existants. "
                 "Si aucune configuration scolaire n'est enregistrée, lancez d'abord /setup puis /build.",
                 ephemeral=True,
             )
@@ -1830,7 +1830,7 @@ class TeacherQROnboarding(commands.Cog):
             if channel is None:
                 raise RuntimeError("Le salon d'actualités institutionnelles est introuvable dans le registre.")
 
-            # One use limits exposure; two hours allows time to travel to the school and present it.
+            # One use limits exposure; the selected expiration controls the invite's validity.
             invite_url = await create_role_invite(
                 self.bot,
                 channel,
