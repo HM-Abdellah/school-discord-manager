@@ -234,6 +234,115 @@ def test_only_one_active_teacher_qr_exists_per_guild(tmp_path, monkeypatch):
     assert [row["invite_code"] for row in storage.get_teacher_qr_invites(1)] == ["BBB222"]
 
 
+@pytest.mark.asyncio
+async def test_pending_teacher_role_recovers_from_exact_persisted_qr_role_id(monkeypatch):
+    from cogs.teacher_qr_onboarding import _get_or_create_pending_role
+    from services.permissions import ROLE_TEACHER_PENDING
+
+    pending = SimpleNamespace(id=501, name=ROLE_TEACHER_PENDING, managed=False)
+    guild = SimpleNamespace(
+        id=1,
+        roles=[pending],
+        get_role=lambda role_id: pending if role_id == pending.id else None,
+    )
+    rows = [{"pending_role_id": pending.id, "revoked_at": None}]
+    saved = Mock()
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_qr_invites", lambda *_args, **_kwargs: rows)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.save_guild_config", saved)
+
+    config = {}
+    role, created = await _get_or_create_pending_role(guild, config)
+
+    assert role is pending
+    assert created is False
+    assert config["managed"]["roles"][ROLE_TEACHER_PENDING] == pending.id
+    saved.assert_called_once_with(1, config)
+
+
+@pytest.mark.asyncio
+async def test_pending_teacher_role_rejects_conflicting_active_qr_role_ids(monkeypatch):
+    from cogs.teacher_qr_onboarding import _get_or_create_pending_role
+    from services.permissions import ROLE_TEACHER_PENDING
+
+    first = SimpleNamespace(id=501, name=ROLE_TEACHER_PENDING, managed=False)
+    second = SimpleNamespace(id=502, name=ROLE_TEACHER_PENDING, managed=False)
+    guild = SimpleNamespace(
+        id=1,
+        roles=[first, second],
+        get_role=lambda role_id: {501: first, 502: second}.get(role_id),
+        create_role=AsyncMock(),
+    )
+    rows = [
+        {"pending_role_id": first.id, "revoked_at": None},
+        {"pending_role_id": second.id, "revoked_at": None},
+    ]
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_qr_invites", lambda *_args, **_kwargs: rows)
+
+    with pytest.raises(RuntimeError, match="ambiguë"):
+        await _get_or_create_pending_role(guild, {})
+
+    guild.create_role.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_pending_teacher_role_does_not_adopt_name_collision_without_qr_identity(monkeypatch):
+    from cogs.teacher_qr_onboarding import _get_or_create_pending_role
+    from services.permissions import ROLE_TEACHER_PENDING
+
+    pending = SimpleNamespace(id=501, name=ROLE_TEACHER_PENDING, managed=False)
+    guild = SimpleNamespace(
+        id=1,
+        roles=[pending],
+        get_role=lambda role_id: pending if role_id == pending.id else None,
+        create_role=AsyncMock(),
+    )
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_qr_invites", lambda *_args, **_kwargs: [])
+
+    with pytest.raises(RuntimeError, match="Un rôle non géré"):
+        await _get_or_create_pending_role(guild, {})
+
+    guild.create_role.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_teacher_qr_join_recovers_pending_role_registry_and_sends_form(monkeypatch):
+    from cogs.teacher_qr_onboarding import TeacherQROnboarding
+    from services.permissions import ROLE_TEACHER_PENDING
+
+    pending = SimpleNamespace(id=501, name=ROLE_TEACHER_PENDING, managed=False)
+    guild = SimpleNamespace(
+        id=1,
+        roles=[pending],
+        get_role=lambda role_id: pending if role_id == pending.id else None,
+    )
+    member = SimpleNamespace(
+        bot=False,
+        id=101,
+        display_name="Teacher using legacy QR",
+        guild=guild,
+        roles=[pending],
+        send=AsyncMock(),
+    )
+    rows = [{"pending_role_id": pending.id, "revoked_at": None}]
+    prompt = AsyncMock(return_value=True)
+    save_config = Mock()
+
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_guild_config", lambda *_args: {})
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_managed_role", lambda *_args: None)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_qr_invites", lambda *_args, **_kwargs: rows)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.save_guild_config", save_config)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.get_teacher_registration", lambda *_args: None)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding.teacher_target_conflict", lambda *_args: None)
+    monkeypatch.setattr("cogs.teacher_qr_onboarding._send_teacher_onboarding_prompt", prompt)
+
+    bot = SimpleNamespace()
+    await TeacherQROnboarding(bot).on_member_join(member)
+
+    prompt.assert_awaited_once_with(bot, member)
+    save_config.assert_called_once()
+    assert save_config.call_args.args[1]["managed"]["roles"][ROLE_TEACHER_PENDING] == pending.id
+
+
 def test_reset_guild_data_clears_teacher_onboarding_state(tmp_path, monkeypatch):
     _configure_storage(tmp_path, monkeypatch)
     storage.initialize_database()

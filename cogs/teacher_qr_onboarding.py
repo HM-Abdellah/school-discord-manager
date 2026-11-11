@@ -68,6 +68,48 @@ async def _admin_qr_role_autocomplete(
     ][:25]
 
 
+def _recover_pending_teacher_role_from_qr_history(
+    guild: discord.Guild,
+    config: dict,
+) -> discord.Role | None:
+    """Recover the pending role only from the exact ID stored with a prior teacher QR."""
+    rows = get_teacher_qr_invites(guild.id, include_revoked=True)
+    if not rows:
+        return None
+
+    active_rows = [row for row in rows if row["revoked_at"] is None]
+    candidates = active_rows if active_rows else rows[:1]
+    role_ids = {
+        int(row["pending_role_id"])
+        for row in candidates
+        if isinstance(row["pending_role_id"], int) and int(row["pending_role_id"]) > 0
+    }
+    if len(role_ids) != 1 or any(
+        not isinstance(row["pending_role_id"], int) or int(row["pending_role_id"]) <= 0
+        for row in candidates
+    ):
+        raise RuntimeError("L'identité du rôle d'attente est ambiguë dans l'historique des QR professeur.")
+
+    role_id = next(iter(role_ids))
+    role = guild.get_role(role_id)
+    if role is None:
+        raise RuntimeError("Le rôle d'attente enregistré avec le QR professeur est absent de Discord.")
+    if role.managed or role.name != ROLE_TEACHER_PENDING:
+        raise RuntimeError("Le rôle enregistré avec le QR ne correspond plus au rôle d'attente professeur.")
+
+    duplicate_ids = {
+        candidate.id
+        for candidate in guild.roles
+        if candidate.name == ROLE_TEACHER_PENDING and not candidate.managed
+    }
+    if duplicate_ids != {role_id}:
+        raise RuntimeError("Plusieurs rôles utilisent le nom du rôle d'attente professeur; récupération refusée.")
+
+    managed = config.setdefault("managed", {}).setdefault("roles", {})
+    managed[ROLE_TEACHER_PENDING] = role_id
+    return role
+
+
 async def _get_or_create_pending_role(guild: discord.Guild, config: dict) -> tuple[discord.Role, bool]:
     managed = config.setdefault("managed", {}).setdefault("roles", {})
     recorded_id = managed.get(ROLE_TEACHER_PENDING)
@@ -78,6 +120,13 @@ async def _get_or_create_pending_role(guild: discord.Guild, config: dict) -> tup
         if role.managed or role.name != ROLE_TEACHER_PENDING:
             raise RuntimeError("L'identité du rôle d'attente professeur est incohérente.")
         return role, False
+
+    recovered_role = _recover_pending_teacher_role_from_qr_history(guild, config)
+    if recovered_role is not None:
+        # Persist the exact ID recovered from our own invite history. Never adopt
+        # an unrelated Discord role merely because its name looks familiar.
+        save_guild_config(guild.id, config)
+        return recovered_role, False
 
     collision = discord.utils.get(guild.roles, name=ROLE_TEACHER_PENDING)
     if collision is not None:
@@ -2029,6 +2078,28 @@ class TeacherQROnboarding(commands.Cog):
             )
             return
         pending_role = get_managed_role(member.guild, ROLE_TEACHER_PENDING)
+        if pending_role is None:
+            recovery_config = deepcopy(current_config) if isinstance(current_config, dict) else {}
+            try:
+                pending_role = _recover_pending_teacher_role_from_qr_history(
+                    member.guild,
+                    recovery_config,
+                )
+                if pending_role is not None:
+                    save_guild_config(member.guild.id, recovery_config)
+                    logger.warning(
+                        "Recovered pending teacher role registry from persisted QR history "
+                        "(guild=%s role=%s)",
+                        member.guild.id,
+                        pending_role.id,
+                    )
+            except (OSError, sqlite3.Error, RuntimeError, TypeError, ValueError):
+                logger.exception(
+                    "Unable to recover pending teacher role from QR history (guild=%s member=%s)",
+                    member.guild.id,
+                    member.id,
+                )
+                return
 
         # A teacher who leaves and rejoins must register again even if the
         # temporary role was not present in the join event. Never silently restore
@@ -2107,7 +2178,14 @@ class TeacherQROnboarding(commands.Cog):
             except discord.HTTPException:
                 pass
             return
-        await _send_teacher_onboarding_prompt(self.bot, member)
+        dm_sent = await _send_teacher_onboarding_prompt(self.bot, member)
+        if not dm_sent:
+            logger.warning(
+                "Teacher onboarding form DM failed after member join; check the member's server DM privacy settings "
+                "(guild=%s member=%s)",
+                member.guild.id,
+                member.id,
+            )
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member) -> None:
